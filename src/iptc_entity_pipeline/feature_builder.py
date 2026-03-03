@@ -61,7 +61,8 @@ class FeatureBuilder:
                 entity_embedding = self._entity_embedding_store.get_entity_embedding(wdid=wdid)
                 if entity_embedding is not None:
                     entity_embeddings.append(entity_embedding)
-
+                else:
+                    raise ValueError(f'Entity embedding not found for wdid: {wdid}')
             pooled_entity = self._pooling_strategy.pool(entity_embeddings=entity_embeddings, embedding_dim=entity_dim)
             row = np.concatenate([article_embedding, pooled_entity]).astype(np.float32)
             rows.append(row)
