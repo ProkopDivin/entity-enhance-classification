@@ -73,7 +73,7 @@ def _legacy_eval_cfg(evaluation_config: Mapping[str, Any]) -> dict[str, Any]:
 
 @PipelineDecorator.component(
     return_values=['corpora', 'articleToWdids'],
-    execution_queue='iptc_tasks',
+    execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
 def load_data(paths_config: Mapping[str, Any]):
@@ -90,7 +90,7 @@ def load_data(paths_config: Mapping[str, Any]):
 
 @PipelineDecorator.component(
     return_values=['trainData', 'devData', 'testData', 'featureDim'],
-    execution_queue='iptc_tasks',
+    execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
 def build_datasets(
@@ -132,14 +132,14 @@ def build_datasets(
 
 @PipelineDecorator.pipeline(
     name='iptc-entity-enhanced-v1',
-    project='IPTC/EntityEnhanced',
+    project='iptc/EntityEnhanced',
     version='0.1',
+    pipeline_execution_queue='iptc_entity_tasks',
 )
 def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     """Execute full v1 training and evaluation pipeline."""
     task = Task.current_task()
     task.connect(config_mapping, name='pipelineConfig')
-    PipelineDecorator.set_default_execution_queue('iptc_tasks')
 
     paths_config = config_mapping['paths']
     embedding_config = config_mapping['embeddings']

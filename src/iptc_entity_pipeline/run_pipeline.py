@@ -6,14 +6,23 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
+from pathlib import Path
 
 from clearml import Task
+
+# Allow direct script execution:
+# python src/iptc_entity_pipeline/run_pipeline.py
+if __package__ is None or __package__ == '':
+    src_root = Path(__file__).resolve().parents[1]
+    if str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
 
 from iptc_entity_pipeline.clearml_pipeline import run_local_pipeline
 from iptc_entity_pipeline.config import PipelineConfig
 
 LOGGER = logging.getLogger(__name__)
-PROJECT_NAME = 'IPTC/EntityEnhanced'
+PROJECT_NAME = 'iptc/EntityEnhanced'
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """
