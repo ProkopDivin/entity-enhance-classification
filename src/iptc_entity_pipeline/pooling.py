@@ -41,4 +41,3 @@ class NoEntityPooling(EntityPoolingStrategy):
         if not entity_embeddings:
             return np.zeros(embedding_dim, dtype=np.float32)
         return np.vstack(entity_embeddings)
-    
