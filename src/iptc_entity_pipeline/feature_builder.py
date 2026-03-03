@@ -47,6 +47,7 @@ class FeatureBuilder:
         :param article_to_wdids: Mapping ``article_id -> wdIds``.
         :return: Feature matrix of shape ``[docs, article_dim + entity_dim]``.
         """
+        self._article_embedding_provider.prepare_missing_embeddings_for_corpus(corpus=corpus)
         entity_dim = self._entity_embedding_store.infer_embedding_dim()
         rows: list[np.ndarray] = []
 
@@ -54,6 +55,7 @@ class FeatureBuilder:
             article_embedding = self._article_embedding_provider.get_embedding(
                 article_id=doc.id,
                 article_text=get_article_text(doc),
+                article_doc=doc,
             )
             wdids = article_to_wdids.get(doc.id, [])
             entity_embeddings = []
@@ -62,7 +64,8 @@ class FeatureBuilder:
                 if entity_embedding is not None:
                     entity_embeddings.append(entity_embedding)
                 else:
-                    raise ValueError(f'Entity embedding not found for wdid: {wdid}')
+                    LOGGER.warning(f'Entity embedding not found for wdid: {wdid}')
+                    continue
             pooled_entity = self._pooling_strategy.pool(entity_embeddings=entity_embeddings, embedding_dim=entity_dim)
             row = np.concatenate([article_embedding, pooled_entity]).astype(np.float32)
             rows.append(row)
