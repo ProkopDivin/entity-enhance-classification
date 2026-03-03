@@ -101,3 +101,10 @@ New components added in this repository:
 - entity pooling strategy interface (`SumEntityPooling` in v1)
 - feature builder for concatenated article+entity vectors
 - ClearML orchestration for the entity-enhanced input path
+
+
+Run new worker
+
+```sh
+    env CLEARML_AGENT_SKIP_PIP_VENV_INSTALL=/home/prokop/Git/entity-enhance-classification/venv/bin/python  clearml-agent daemon --queue iptc_entity_tasks --detached
+```
