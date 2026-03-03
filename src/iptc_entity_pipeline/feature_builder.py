@@ -47,7 +47,7 @@ class FeatureBuilder:
         :param article_to_wdids: Mapping ``article_id -> wdIds``.
         :return: Feature matrix of shape ``[docs, article_dim + entity_dim]``.
         """
-        self._article_embedding_provider.prepare_missing_embeddings_for_corpus(corpus=corpus)
+        self._article_embedding_provider.recompute_embeddings(corpus=corpus)
         entity_dim = self._entity_embedding_store.infer_embedding_dim()
         rows: list[np.ndarray] = []
 
