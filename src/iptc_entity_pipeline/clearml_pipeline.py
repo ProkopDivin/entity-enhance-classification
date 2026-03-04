@@ -69,6 +69,18 @@ def _legacy_eval_cfg(evaluation_config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _report_eval_scalars(*, logger: Any, title: str, row: Mapping[str, Any], iteration: int = 0) -> None:
+    logger.report_scalar(title=title, series='Precision', value=row['Precision'], iteration=iteration)
+    logger.report_scalar(title=title, series='Recall', value=row['Recall'], iteration=iteration)
+    logger.report_scalar(title=title, series='F04', value=row['F04'], iteration=iteration)
+    logger.report_scalar(title=title, series='F1', value=row['F1'], iteration=iteration)
+
+
+def _report_stage_message(*, task: Task, message: str, logging_config: Mapping[str, Any]) -> None:
+    LOGGER.info(message)
+    task.get_logger().report_text(message, print_console=bool(logging_config['print_logs']))
+
+
 @PipelineDecorator.component(
     return_values=['corpora', 'articleToWdids'],
     execution_queue='iptc_entity_tasks',
@@ -147,7 +159,17 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     logging_config = config_mapping['logging']
     objective_corpora = config_mapping['objective_corpora']
 
+    _report_stage_message(
+        task=task,
+        message='Stage 1/4: Loading corpora and article-to-entity mapping',
+        logging_config=logging_config,
+    )
     corpora, article_to_wdids = load_data(paths_config=paths_config)
+    _report_stage_message(
+        task=task,
+        message='Stage 2/4: Building article+entity feature datasets (train/dev/test)',
+        logging_config=logging_config,
+    )
     train_data, dev_data, test_data, feature_dim = build_datasets(
         corpora=corpora,
         articleToWdids=article_to_wdids,
@@ -155,6 +177,11 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         embedding_config=embedding_config,
     )
 
+    _report_stage_message(
+        task=task,
+        message=f'Stage 3/4: Creating and training model (feature_dim={feature_dim})',
+        logging_config=logging_config,
+    )
     model = createClassificationModel(
         embDim=feature_dim,
         outDim=corpora.train.catCnt,
@@ -170,6 +197,11 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         logConfig=_log_cfg(logging_config=logging_config),
     )
 
+    _report_stage_message(
+        task=task,
+        message='Stage 4/4: Evaluating model on dev and test',
+        logging_config=logging_config,
+    )
     df_corpora_dev, _ = evaluateModel(
         model=model,
         evalData=dev_data,
@@ -184,43 +216,50 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
 
     logger = task.get_logger()
-    row_all = df_corpora_dev.loc[f"All-{evaluation_config['averaging_type']}"].to_dict()
-    logger.report_scalar(title='Dev Evaluation Results', series='Precision', value=row_all['Precision'], iteration=0)
-    logger.report_scalar(title='Dev Evaluation Results', series='Recall', value=row_all['Recall'], iteration=0)
-    logger.report_scalar(title='Dev Evaluation Results', series='F04', value=row_all['F04'], iteration=0)
-    logger.report_scalar(title='Dev Evaluation Results', series='F1', value=row_all['F1'], iteration=0)
+    objective_row_name = f'All-{evaluation_config["averaging_type"]}'
+    row_all = df_corpora_dev.loc[objective_row_name].to_dict()
+    _report_eval_scalars(logger=logger, title='Dev Evaluation Results', row=row_all, iteration=0)
 
     if objective_corpora in df_corpora_dev.index:
         row_objective = df_corpora_dev.loc[objective_corpora].to_dict()
-        logger.report_scalar(
+        _report_eval_scalars(
+            logger=logger,
             title='Objective Evaluation Results',
-            series='Precision',
-            value=row_objective['Precision'],
+            row=row_objective,
             iteration=0,
         )
-        logger.report_scalar(
-            title='Objective Evaluation Results',
-            series='Recall',
-            value=row_objective['Recall'],
-            iteration=0,
-        )
-        logger.report_scalar(
-            title='Objective Evaluation Results',
-            series='F04',
-            value=row_objective['F04'],
-            iteration=0,
-        )
-        logger.report_scalar(
-            title='Objective Evaluation Results',
-            series='F1',
-            value=row_objective['F1'],
-            iteration=0,
+    else:
+        LOGGER.warning(
+            'Requested objective_corpora "%s" not found in dev corpus index; available=%s',
+            objective_corpora,
+            list(df_corpora_dev.index),
         )
 
-    task.upload_artifact('Corpora Dataframe', artifact_object=df_corpora_test)
-    task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
+    logger.report_table(title='Dev Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_dev)
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
+
+    task.upload_artifact('pipeline_config', artifact_object=dict(config_mapping))
+    task.upload_artifact(
+        'evaluation_thresholds',
+        artifact_object={
+            'threshold_predict': evaluation_config['threshold_predict'],
+            'threshold_eval': evaluation_config['threshold_eval'],
+            'objective_corpora': objective_corpora,
+            'objective_row_name': objective_row_name,
+        },
+    )
+    task.upload_artifact('dev_corpora_dataframe', artifact_object=df_corpora_dev)
+    task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
+    task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
+    # Compatibility aliases kept to match naming from baseline runs.
+    task.upload_artifact('Corpora Dataframe', artifact_object=df_corpora_test)
+    task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
+    _report_stage_message(
+        task=task,
+        message='Pipeline finished: metrics, tables, and artifacts uploaded',
+        logging_config=logging_config,
+    )
 
 
 def run_local_pipeline(config: Optional[PipelineConfig] = None) -> Tuple[PipelineConfig, Mapping[str, Any]]:

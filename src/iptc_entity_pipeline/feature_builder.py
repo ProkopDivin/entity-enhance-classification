@@ -58,19 +58,21 @@ class FeatureBuilder:
                 article_doc=doc,
             )
             wdids = article_to_wdids.get(doc.id, [])
+            if not wdids:
+                LOGGER.warning('No linked entities for article_id=%s (article missing in article_to_wdids mapping)', doc.id)
             entity_embeddings = []
             for wdid in wdids:
                 entity_embedding = self._entity_embedding_store.get_entity_embedding(wdid=wdid)
                 if entity_embedding is not None:
                     entity_embeddings.append(entity_embedding)
                 else:
-                    LOGGER.warning(f'Entity embedding not found for wdid: {wdid}')
+                    LOGGER.warning('Entity embedding not found: article_id=%s wdid=%s', doc.id, wdid)
                     continue
             pooled_entity = self._pooling_strategy.pool(entity_embeddings=entity_embeddings, embedding_dim=entity_dim)
             row = np.concatenate([article_embedding, pooled_entity]).astype(np.float32)
             rows.append(row)
 
-            if (idx + 1) % 5000 == 0:
+            if (idx + 1) % 1000 == 0:
                 LOGGER.info('Prepared features for %s documents', idx + 1)
 
         return np.vstack(rows)
