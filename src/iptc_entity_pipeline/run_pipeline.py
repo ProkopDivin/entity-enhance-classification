@@ -2,8 +2,6 @@
 CLI entrypoint for running the IPTC entity-enhanced ClearML pipeline (v1).
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import sys
