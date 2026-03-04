@@ -7,8 +7,6 @@ import logging
 import sys
 from pathlib import Path
 
-from clearml import Task
-
 # Allow direct script execution:
 # python src/iptc_entity_pipeline/run_pipeline.py
 if __package__ is None or __package__ == '':
@@ -20,7 +18,6 @@ from iptc_entity_pipeline.clearml_pipeline import run_local_pipeline
 from iptc_entity_pipeline.config import PipelineConfig
 
 LOGGER = logging.getLogger(__name__)
-PROJECT_NAME = 'iptc/EntityEnhanced'
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """
@@ -52,13 +49,6 @@ def main() -> None:
     """
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     args = build_arg_parser().parse_args()
-
-    task = Task.init(
-        project_name=PROJECT_NAME,
-        task_name=args.task_name,
-        task_type=Task.TaskTypes.controller,
-    )
-    task.connect({'local': args.local})
 
     config = PipelineConfig()
     run_local_pipeline(config=config)
