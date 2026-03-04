@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,16 @@ def load_article_wdids(*, article_entities_tsv: str) -> dict[str, list[str]]:
     """
     mapping: dict[str, list[str]] = {}
     path = Path(article_entities_tsv)
+
+    # The entities JSON field can be very large; raise CSV parser field limit.
+    field_limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(field_limit)
+            break
+        except OverflowError:
+            field_limit = field_limit // 10
+
     with path.open(mode='r', encoding='utf-8', newline='') as in_file:
         reader = csv.DictReader(in_file, delimiter='\t')
         for row in reader:
