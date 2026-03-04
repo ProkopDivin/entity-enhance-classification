@@ -39,17 +39,21 @@ class FeatureBuilder:
         *,
         corpus: Any,
         article_to_wdids: Mapping[str, list[str]],
+        ensure_article_embeddings: bool = False,
     ) -> np.ndarray:
         """
         Build feature matrix for all docs in a corpus.
 
         :param corpus: ``geneea.catlib.data.Corpus`` object.
         :param article_to_wdids: Mapping ``article_id -> wdIds``.
+        :param ensure_article_embeddings: If ``True``, precompute missing article embeddings for the corpus.
         :return: Feature matrix of shape ``[docs, article_dim + entity_dim]``.
         """
-        self._article_embedding_provider.recompute_embeddings(corpus=corpus)
+        if ensure_article_embeddings:
+            self._article_embedding_provider.recompute_embeddings(corpus=corpus)
         entity_dim = self._entity_embedding_store.infer_embedding_dim()
         rows: list[np.ndarray] = []
+        total_docs = len(corpus)
 
         for idx, doc in enumerate(corpus):
             article_embedding = self._article_embedding_provider.get_embedding(
@@ -61,19 +65,28 @@ class FeatureBuilder:
             if not wdids:
                 LOGGER.warning('No linked entities for article_id=%s (article missing in article_to_wdids mapping)', doc.id)
             entity_embeddings = []
+            missing_wdids: list[str] = []
             for wdid in wdids:
                 entity_embedding = self._entity_embedding_store.get_entity_embedding(wdid=wdid)
                 if entity_embedding is not None:
                     entity_embeddings.append(entity_embedding)
                 else:
-                    LOGGER.warning('Entity embedding not found: article_id=%s wdid=%s', doc.id, wdid)
+                    missing_wdids.append(wdid)
                     continue
+            if missing_wdids:
+                unique_missing_wdids = sorted(set(missing_wdids))
+                LOGGER.warning(
+                    'Missing entity embeddings for article_id=%s: %s',
+                    doc.id,
+                    ', '.join(unique_missing_wdids),
+                )
             pooled_entity = self._pooling_strategy.pool(entity_embeddings=entity_embeddings, embedding_dim=entity_dim)
             row = np.concatenate([article_embedding, pooled_entity]).astype(np.float32)
             rows.append(row)
 
-            if (idx + 1) % 1000 == 0:
-                LOGGER.info('Prepared features for %s documents', idx + 1)
+            processed_docs = idx + 1
+            if processed_docs % 1000 == 0 or processed_docs == total_docs:
+                LOGGER.info('Linked article/entity embeddings for %s/%s articles', processed_docs, total_docs)
 
         return np.vstack(rows)
 
