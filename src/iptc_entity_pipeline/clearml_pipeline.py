@@ -99,17 +99,101 @@ def load_data(paths_config: Mapping[str, Any]):
 
 
 @PipelineDecorator.component(
-    return_values=['trainData', 'devData', 'testData', 'featureDim'],
+    return_values=['articleEmbeddingStats'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
-def build_datasets(
+def prepare_article_embeddings(
+    corpora,
+    paths_config: Mapping[str, Any],
+    embedding_config: Mapping[str, Any],
+):
+    """Precompute and cache missing article embeddings for all corpora."""
+    article_provider = ArticleEmbeddingProvider(
+        embeddings_dir=paths_config['article_embeddings_dir'],
+        model_name=embedding_config['article_model_name'],
+        backend=embedding_config['article_embedding_backend'],
+        embed_svc_url=embedding_config['embed_svc_url'],
+        embedding_dim=embedding_config['article_embedding_dim'],
+    )
+
+    # Keep explicit per-corpus calls for visibility in logs and progress reporting.
+    train_stats = article_provider.recompute_embeddings(corpus=corpora.train)
+    dev_stats = article_provider.recompute_embeddings(corpus=corpora.dev)
+    test_stats = article_provider.recompute_embeddings(corpus=corpora.test)
+    total_docs = int(train_stats['total_docs'] + dev_stats['total_docs'] + test_stats['total_docs'])
+    total_computed = int(
+        train_stats['computed_docs'] + dev_stats['computed_docs'] + test_stats['computed_docs']
+    )
+    LOGGER.info(
+        'Article embedding preparation progress: %s/%s articles (computed_missing=%s, cached_or_present=%s)',
+        total_docs,
+        total_docs,
+        total_computed,
+        total_docs - total_computed,
+    )
+    return {
+        'train': dict(train_stats),
+        'dev': dict(dev_stats),
+        'test': dict(test_stats),
+        'total_docs': total_docs,
+        'total_computed': total_computed,
+        'total_cached_or_present': int(total_docs - total_computed),
+    }
+
+
+@PipelineDecorator.component(
+    return_values=['entityEmbeddingStats'],
+    execution_queue='iptc_entity_tasks',
+    task_type=TaskTypes.data_processing,
+)
+def prepare_entity_embeddings(
     corpora,
     articleToWdids,
     paths_config: Mapping[str, Any],
     embedding_config: Mapping[str, Any],
 ):
-    """Build entity-enhanced EmbeddingDataset objects for train/dev/test."""
+    """Resolve linked entity embeddings and report coverage before dataset linking."""
+    entity_store = EntityEmbeddingStore(
+        root_dir=paths_config['entity_embeddings_dir'],
+        lang=embedding_config['entity_lang'],
+    )
+
+    unique_wdids: set[str] = set()
+    for corpus in [corpora.train, corpora.dev, corpora.test]:
+        for doc in corpus:
+            unique_wdids.update(articleToWdids.get(doc.id, []))
+
+    found_cnt = 0
+    missing_cnt = 0
+    for wdid in sorted(unique_wdids):
+        if entity_store.get_entity_embedding(wdid=wdid) is None:
+            missing_cnt += 1
+        else:
+            found_cnt += 1
+
+    entity_dim = int(entity_store.infer_embedding_dim())
+    return {
+        'entity_dim': entity_dim,
+        'linked_unique_wdids': int(len(unique_wdids)),
+        'found_embeddings': int(found_cnt),
+        'missing_embeddings': int(missing_cnt),
+    }
+
+
+@PipelineDecorator.component(
+    return_values=['trainData', 'devData', 'testData', 'featureDim'],
+    execution_queue='iptc_entity_tasks',
+    task_type=TaskTypes.data_processing,
+)
+def link_embeddings_and_build_datasets(
+    corpora,
+    articleToWdids,
+    paths_config: Mapping[str, Any],
+    embedding_config: Mapping[str, Any],
+    entityEmbeddingStats: Mapping[str, Any],
+):
+    """Link article/entity embeddings and build EmbeddingDataset objects for train/dev/test."""
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths_config['article_embeddings_dir'],
         model_name=embedding_config['article_model_name'],
@@ -129,14 +213,33 @@ def build_datasets(
         combine_method=embedding_config['combine_method'],
     )
 
-    x_train = builder.build_features_for_corpus(corpus=corpora.train, article_to_wdids=articleToWdids)
-    x_dev = builder.build_features_for_corpus(corpus=corpora.dev, article_to_wdids=articleToWdids)
-    x_test = builder.build_features_for_corpus(corpus=corpora.test, article_to_wdids=articleToWdids)
+    x_train = builder.build_features_for_corpus(
+        corpus=corpora.train,
+        article_to_wdids=articleToWdids,
+        ensure_article_embeddings=False,
+    )
+    x_dev = builder.build_features_for_corpus(
+        corpus=corpora.dev,
+        article_to_wdids=articleToWdids,
+        ensure_article_embeddings=False,
+    )
+    x_test = builder.build_features_for_corpus(
+        corpus=corpora.test,
+        article_to_wdids=articleToWdids,
+        ensure_article_embeddings=False,
+    )
 
     train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
     dev_data = build_embedding_dataset(corpus=corpora.dev, x_matrix=x_dev)
     test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
+    expected_dim = entityEmbeddingStats.get('entity_dim')
+    if expected_dim is not None:
+        actual_entity_dim = int(entity_store.infer_embedding_dim())
+        if int(expected_dim) != actual_entity_dim:
+            raise ValueError(
+                f'Entity embedding dimension mismatch: expected={expected_dim}, actual={actual_entity_dim}'
+            )
     return train_data, dev_data, test_data, feature_dim
 
 
@@ -161,25 +264,51 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
 
     _report_stage_message(
         task=task,
-        message='Stage 1/4: Loading corpora and article-to-entity mapping',
+        message='Stage 1/6: Loading corpora and article-to-entity mapping',
         logging_config=logging_config,
     )
     corpora, article_to_wdids = load_data(paths_config=paths_config)
     _report_stage_message(
         task=task,
-        message='Stage 2/4: Building article+entity feature datasets (train/dev/test)',
+        message='Stage 2/6: Preparing article embeddings (train/dev/test)',
         logging_config=logging_config,
     )
-    train_data, dev_data, test_data, feature_dim = build_datasets(
+    article_embedding_stats = prepare_article_embeddings(
+        corpora=corpora,
+        paths_config=paths_config,
+        embedding_config=embedding_config,
+    )
+    task.upload_artifact('article_embedding_stats', artifact_object=dict(article_embedding_stats))
+
+    _report_stage_message(
+        task=task,
+        message='Stage 3/6: Preparing entity embeddings and checking linked wdId coverage',
+        logging_config=logging_config,
+    )
+    entity_embedding_stats = prepare_entity_embeddings(
         corpora=corpora,
         articleToWdids=article_to_wdids,
         paths_config=paths_config,
         embedding_config=embedding_config,
     )
+    task.upload_artifact('entity_embedding_stats', artifact_object=dict(entity_embedding_stats))
 
     _report_stage_message(
         task=task,
-        message=f'Stage 3/4: Creating and training model (feature_dim={feature_dim})',
+        message='Stage 4/6: Linking article+entity embeddings and building datasets',
+        logging_config=logging_config,
+    )
+    train_data, dev_data, test_data, feature_dim = link_embeddings_and_build_datasets(
+        corpora=corpora,
+        articleToWdids=article_to_wdids,
+        paths_config=paths_config,
+        embedding_config=embedding_config,
+        entityEmbeddingStats=entity_embedding_stats,
+    )
+
+    _report_stage_message(
+        task=task,
+        message=f'Stage 5/6: Creating and training model (feature_dim={feature_dim})',
         logging_config=logging_config,
     )
     model = createClassificationModel(
@@ -199,7 +328,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
 
     _report_stage_message(
         task=task,
-        message='Stage 4/4: Evaluating model on dev and test',
+        message='Stage 6/6: Evaluating model on dev and test',
         logging_config=logging_config,
     )
     df_corpora_dev, _ = evaluateModel(
