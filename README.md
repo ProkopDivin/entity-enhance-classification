@@ -30,6 +30,10 @@ v1 settings:
 - `src/iptc_entity_pipeline/dataset_builder.py` - converts vectors to `EmbeddingDataset`.
 - `src/iptc_entity_pipeline/legacy_reuse.py` - reused original model/train/eval functions.
 - `src/iptc_entity_pipeline/clearml_pipeline.py` - ClearML components and orchestration.
+  - `load_data`
+  - `prepare_article_embeddings`
+  - `prepare_entity_embeddings`
+  - `link_embeddings_and_build_datasets`
 - `src/iptc_entity_pipeline/run_pipeline.py` - CLI entrypoint.
 - `notes.md` - architecture and implementation decisions.
 
