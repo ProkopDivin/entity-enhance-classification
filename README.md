@@ -35,14 +35,14 @@ v1 settings:
 
 ## Data Layout
 
-Default paths are configured for:
+Default paths are hardcoded (origin-style) to:
 
-- `data/origin-corpora/all-corpora-train.csv`
-- `data/origin-corpora/all-corpora-dev.csv`
-- `data/origin-corpora/all-corpora-test.csv`
-- `data/article_2_entities.tsv`
-- `data/entity_embeddings/WikidataProject/`
-- `data/article_embeddings/` (created automatically)
+- `/home/prokop/Git/entity-enhance-classification/data/origin-corpora/all-corpora-train.csv`
+- `/home/prokop/Git/entity-enhance-classification/data/origin-corpora/all-corpora-dev.csv`
+- `/home/prokop/Git/entity-enhance-classification/data/origin-corpora/all-corpora-test.csv`
+- `/home/prokop/Git/entity-enhance-classification/data/article_2_entities.tsv`
+- `/home/prokop/Git/entity-enhance-classification/data/entity_embeddings/WikidataProject/`
+- `/home/prokop/Git/entity-enhance-classification/data/article_embeddings/` (created automatically)
 
 Article embedding computation defaults:
 
