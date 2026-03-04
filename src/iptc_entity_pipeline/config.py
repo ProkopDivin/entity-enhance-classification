@@ -4,17 +4,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
+
 
 @dataclass(frozen=True)
 class PathsConfig:
     """Filesystem paths for data and artifacts."""
 
-    train_csv: str = 'data/origin-corpora/all-corpora-train.csv'
-    dev_csv: str = 'data/origin-corpora/all-corpora-dev.csv'
-    test_csv: str = 'data/origin-corpora/all-corpora-test.csv'
-    article_entities_tsv: str = 'data/article_2_entities.tsv'
-    article_embeddings_dir: str = 'data/article_embeddings'
-    entity_embeddings_dir: str = 'data/entity_embeddings/WikidataProject'
+    train_csv: str = f'{DATA_ROOT}/origin-corpora/all-corpora-train.csv'
+    dev_csv: str = f'{DATA_ROOT}/origin-corpora/all-corpora-dev.csv'
+    test_csv: str = f'{DATA_ROOT}/origin-corpora/all-corpora-test.csv'
+    article_entities_tsv: str = f'{DATA_ROOT}/article_2_entities.tsv'
+    article_embeddings_dir: str = f'{DATA_ROOT}/article_embeddings'
+    entity_embeddings_dir: str = f'{DATA_ROOT}/entity_embeddings/WikidataProject'
     removed_cat_ids: list[str] = field(default_factory=lambda: ['20000419'])
 
 
