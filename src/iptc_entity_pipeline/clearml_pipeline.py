@@ -109,6 +109,7 @@ def prepare_article_embeddings(
     embedding_config: Mapping[str, Any],
 ):
     """Precompute and cache missing article embeddings for all corpora."""
+    logger = logging.getLogger(__name__)
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths_config['article_embeddings_dir'],
         model_name=embedding_config['article_model_name'],
