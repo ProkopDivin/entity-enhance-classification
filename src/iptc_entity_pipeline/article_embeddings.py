@@ -76,13 +76,17 @@ class ArticleEmbeddingProvider:
         from geneea.catlib.vec.dataset import EmbeddingDataset
 
         corpus = Corpus(doc for doc in docs)
+        LOGGER.info('Computing and caching %s missing article embeddings', len(docs))
         embedding_dataset = EmbeddingDataset.fromCorpus(corpus, vectorizer=self._get_doc_vectorizer())
         vectors = self._to_numpy(matrix=embedding_dataset.X)
 
-        for doc, vector in zip(corpus, vectors):
+        for idx, (doc, vector) in enumerate(zip(corpus, vectors), start=1):
             emb_path = self._path_for_article(article_id=doc.id)
             np.save(emb_path, np.asarray(vector, dtype=np.float32))
-            LOGGER.info('Computed and cached missing article embedding: %s', emb_path.name)
+            if idx % 1000 == 0:
+                LOGGER.info('Computed and cached %s missing article embeddings', idx)
+
+        LOGGER.info('Computed and cached %s missing article embeddings', len(docs))
 
     def recompute_embeddings(self, *, corpus: Any) -> None:
         """
@@ -91,10 +95,13 @@ class ArticleEmbeddingProvider:
         :param corpus: Corpus of documents with ``id``.
         :return: None
         """
+        LOGGER.info('Checking article embedding cache for corpus_size=%s', len(corpus))
         missing_docs = [doc for doc in corpus if not self._path_for_article(article_id=doc.id).is_file()]
         if not missing_docs:
+            LOGGER.info('All article embeddings present in cache, nothing to compute')
             return
 
+        LOGGER.info('Found %s missing article embeddings', len(missing_docs))
         if self._backend == 'origin_service':
             self._compute_cache_embeddings(docs=missing_docs)
             return
@@ -102,8 +109,10 @@ class ArticleEmbeddingProvider:
         if self._backend == 'local_sentence_transformers':
             from iptc_entity_pipeline.data_loading import get_article_text
 
-            for doc in missing_docs:
+            for idx, doc in enumerate(missing_docs, start=1):
                 _ = self.get_embedding(article_id=doc.id, article_text=get_article_text(doc), article_doc=doc)
+                if idx % 1000 == 0:
+                    LOGGER.info('Computed and cached %s missing article embeddings', idx)
             return
 
         raise ValueError(f'Unsupported article embedding backend: {self._backend}')
@@ -132,7 +141,7 @@ class ArticleEmbeddingProvider:
             embedding = model.encode(sentences=[article_text], show_progress_bar=False, normalize_embeddings=False)[0]
             embedding = np.asarray(embedding, dtype=np.float32)
             np.save(emb_path, embedding)
-            LOGGER.info('Computed and cached missing article embedding: %s', emb_path.name)
+            LOGGER.debug('Computed and cached missing article embedding: %s', emb_path.name)
             return embedding
 
         raise ValueError(f'Unsupported article embedding backend: {self._backend}')
