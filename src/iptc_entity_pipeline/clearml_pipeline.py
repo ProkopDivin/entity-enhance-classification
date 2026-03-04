@@ -1,7 +1,5 @@
 """ClearML pipeline orchestration for entity-enhanced IPTC training."""
 
-from __future__ import annotations
-
 import logging
 from dataclasses import asdict
 from pathlib import Path
