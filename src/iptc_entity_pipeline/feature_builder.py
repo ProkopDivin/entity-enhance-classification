@@ -54,6 +54,11 @@ class FeatureBuilder:
         entity_dim = self._entity_embedding_store.infer_embedding_dim()
         rows: list[np.ndarray] = []
         total_docs = len(corpus)
+        progress_interval = max(1, total_docs // 20) if total_docs else 1
+        unique_requested_wdids: set[str] = set()
+        unique_missing_wdids_all: set[str] = set()
+        total_found_embeddings = 0
+        total_missing_embeddings = 0
 
         for idx, doc in enumerate(corpus):
             article_embedding = self._article_embedding_provider.get_embedding(
@@ -64,6 +69,7 @@ class FeatureBuilder:
             wdids = article_to_wdids.get(doc.id, [])
             if not wdids:
                 LOGGER.warning('No linked entities for article_id=%s (article missing in article_to_wdids mapping)', doc.id)
+            unique_requested_wdids.update(wdids)
             entity_embeddings = []
             missing_wdids: list[str] = []
             for wdid in wdids:
@@ -73,6 +79,9 @@ class FeatureBuilder:
                 else:
                     missing_wdids.append(wdid)
                     continue
+            total_found_embeddings += len(entity_embeddings)
+            total_missing_embeddings += len(missing_wdids)
+            unique_missing_wdids_all.update(missing_wdids)
             if missing_wdids:
                 unique_missing_wdids = sorted(set(missing_wdids))
                 LOGGER.warning(
@@ -85,8 +94,24 @@ class FeatureBuilder:
             rows.append(row)
 
             processed_docs = idx + 1
-            if processed_docs % 1000 == 0 or processed_docs == total_docs:
+            if processed_docs % progress_interval == 0 or processed_docs == total_docs:
                 LOGGER.info('Linked article/entity embeddings for %s/%s articles', processed_docs, total_docs)
+
+        unique_total_entities = len(unique_requested_wdids)
+        unique_missing_entities = len(unique_missing_wdids_all)
+        avg_missing_per_article = (total_missing_embeddings / total_docs) if total_docs else 0.0
+        avg_found_per_article = (total_found_embeddings / total_docs) if total_docs else 0.0
+        LOGGER.info(
+            (
+                'Entity embedding final stats: unique_missing=%s unique_total=%s missing_ratio=%.4f '
+                'avg_missing_per_article=%.4f avg_found_per_article=%.4f'
+            ),
+            unique_missing_entities,
+            unique_total_entities,
+            (unique_missing_entities / unique_total_entities) if unique_total_entities else 0.0,
+            avg_missing_per_article,
+            avg_found_per_article,
+        )
 
         return np.vstack(rows)
 

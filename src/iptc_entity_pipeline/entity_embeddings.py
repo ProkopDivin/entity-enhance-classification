@@ -35,9 +35,14 @@ class EntityEmbeddingStore:
             return
 
         pattern = f'*_{self._lang}_*.npy'
+        LOGGER.info('Scanning entity embedding files in %s with pattern "%s"', self._root_dir, pattern)
         wdid_to_paths: dict[str, list[Path]] = defaultdict(list)
         sample_path: Path | None = None
-        for path in sorted(self._root_dir.glob(pattern)):
+        file_count = 0
+        for path in self._root_dir.glob(pattern):
+            file_count += 1
+            if file_count % 10000 == 0:
+                LOGGER.info('Indexed %s entity embedding files so far', file_count)
             if sample_path is None:
                 sample_path = path
             stem = path.stem
@@ -48,6 +53,9 @@ class EntityEmbeddingStore:
             if not wdid:
                 continue
             wdid_to_paths[wdid].append(path)
+
+        for paths in wdid_to_paths.values():
+            paths.sort()
 
         self._wdid_to_paths = dict(wdid_to_paths)
         self._sample_path = sample_path

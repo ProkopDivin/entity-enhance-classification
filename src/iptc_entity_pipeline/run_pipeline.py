@@ -15,7 +15,7 @@ if __package__ is None or __package__ == '':
         sys.path.insert(0, str(src_root))
 
 from iptc_entity_pipeline.clearml_pipeline import run_local_pipeline
-from iptc_entity_pipeline.config import PipelineConfig
+from iptc_entity_pipeline.config import get_config, list_config_names
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +38,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='Run in local mode with default config resolved from current working directory.',
     )
+    parser.add_argument(
+        '--article-only',
+        action='store_true',
+        help='Run using only article embeddings (entity embeddings disabled).',
+    )
+    parser.add_argument(
+        '--config-name',
+        default='base',
+        choices=list_config_names(),
+        help='Config variant to run (e.g. "base", "article_only").',
+    )
     return parser
 
 
@@ -50,8 +61,12 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     args = build_arg_parser().parse_args()
 
-    config = PipelineConfig()
-    run_local_pipeline(config=config)
+    if args.article_only:
+        LOGGER.warning('--article-only is deprecated, use --config-name article_only instead.')
+    config_name = 'article_only' if args.article_only else args.config_name
+    config = get_config(config_name=config_name)
+    LOGGER.info('Using config: %s', config_name)
+    run_local_pipeline(config=config, config_name=config_name)
     LOGGER.info('Pipeline execution finished.')
 
 
