@@ -1,6 +1,6 @@
 """Configuration dataclasses for the IPTC entity-enhanced pipeline."""
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ class EmbeddingConfig:
     article_embedding_dim: int = 384
     embed_svc_url: str = 'http://tau.g:5533'
     entity_lang: str = 'en'
+    use_entity_embeddings: bool = True
     combine_method: str = 'concat'
     entity_pooling: str = 'sum'
 
@@ -38,21 +39,21 @@ class ModelConfig:
     """Model architecture parameters."""
 
     hidden_dim: int = 1024
-    dropouts1: float = 0.2
-    dropouts2: float = 0.2
+    dropouts1: float = 0
+    dropouts2: float = 0.3
 
 
 @dataclass(frozen=True)
 class TrainingConfig:
     """Training loop parameters."""
 
-    epochs: int = 10
+    epochs: int = 25
     batch_size: int = 64
     optimizer_name: str = 'adam'
-    learning_rate: float = 1e-3
+    learning_rate: float = 0.00037
     lr_scheduler_name: str = 'stepLR'
     step_size: int = 1
-    gamma: float = 0.95
+    gamma: float = 1
     loss_name: str = 'bceWithLogitsLoss'
 
 
@@ -75,7 +76,7 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
-class PipelineConfig:
+class BaseConfig:
     """Top-level pipeline config grouped by concern."""
 
     paths: PathsConfig = field(default_factory=PathsConfig)
@@ -91,7 +92,7 @@ class PipelineConfig:
         return asdict(self)
 
 
-def resolve_paths(config: PipelineConfig, root_dir: str | Path) -> PipelineConfig:
+def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
     """Return a config with absolute paths resolved from ``root_dir``."""
     root_path = Path(root_dir)
     paths = config.paths
@@ -104,7 +105,7 @@ def resolve_paths(config: PipelineConfig, root_dir: str | Path) -> PipelineConfi
         entity_embeddings_dir=str(root_path / paths.entity_embeddings_dir),
         removed_cat_ids=paths.removed_cat_ids,
     )
-    return PipelineConfig(
+    return BaseConfig(
         paths=resolved_paths,
         embeddings=config.embeddings,
         model=config.model,
@@ -113,4 +114,53 @@ def resolve_paths(config: PipelineConfig, root_dir: str | Path) -> PipelineConfi
         logging=config.logging,
         objective_corpora=config.objective_corpora,
     )
+
+
+def to_article_only_config(config: BaseConfig) -> BaseConfig:
+    """
+    Return a config variant that uses only article embeddings.
+
+    :param config: Base config to adapt.
+    :return: Config with entity embeddings disabled.
+    """
+    return replace(
+        config,
+        embeddings=replace(
+            config.embeddings,
+            use_entity_embeddings=False,
+        ),
+    )
+
+
+def get_config(config_name: str) -> BaseConfig:
+    """
+    Return config variant by name.
+
+    Supported names:
+    - ``base``: entity-enhanced default setup.
+    - ``article_only``: article embeddings only (entity embeddings disabled).
+
+    :param config_name: Config variant name.
+    :return: Selected config object.
+    :raises ValueError: If ``config_name`` is unknown.
+    """
+    name = config_name.strip().lower()
+    if name == 'base':
+        return BaseConfig()
+    if name == 'article_only':
+        return to_article_only_config(config=BaseConfig())
+    raise ValueError(f'Unsupported config_name: {config_name}')
+
+
+def list_config_names() -> tuple[str, ...]:
+    """
+    Return names of supported config variants.
+
+    :return: Tuple of supported config names.
+    """
+    return ('base', 'article_only')
+
+
+# Backward compatibility alias for older imports.
+PipelineConfig = BaseConfig
 
