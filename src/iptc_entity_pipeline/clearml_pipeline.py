@@ -37,27 +37,6 @@ def _report_stage_message(*, task: Task, message: str, logging_config: Mapping[s
     task.get_logger().report_text(message, print_console=bool(logging_config['print_logs']))
 
 
-def _build_article_only_matrix(*, corpus: Any, article_provider: ArticleEmbeddingProvider, split_name: str) -> np.ndarray:
-    rows: list[np.ndarray] = []
-    total_docs = len(corpus)
-    LOGGER.info('Building article-only features for %s corpus (%s articles)', split_name, total_docs)
-    for idx, doc in enumerate(corpus, start=1):
-        article_embedding = article_provider.get_embedding(
-            article_id=doc.id,
-            article_text=get_article_text(doc),
-            article_doc=doc,
-        )
-        rows.append(np.asarray(article_embedding, dtype=np.float32))
-        if idx % 1000 == 0 or idx == total_docs:
-            LOGGER.info(
-                'Built article-only features for %s/%s articles in %s corpus',
-                idx,
-                total_docs,
-                split_name,
-            )
-    return np.vstack(rows)
-
-
 @PipelineDecorator.component(
     return_values=['corpora', 'articleToWdids'],
     execution_queue='iptc_entity_tasks',
@@ -155,10 +134,30 @@ def link_embeddings_and_build_datasets(
     use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
 
     if not use_entity_embeddings:
+        def build_article_only_matrix(*, split_corpus, split_name: str) -> np.ndarray:
+            rows: list[np.ndarray] = []
+            total_docs = len(split_corpus)
+            logger.info('Building article-only features for %s corpus (%s articles)', split_name, total_docs)
+            for idx, doc in enumerate(split_corpus, start=1):
+                article_embedding = article_provider.get_embedding(
+                    article_id=doc.id,
+                    article_text=get_article_text(doc),
+                    article_doc=doc,
+                )
+                rows.append(np.asarray(article_embedding, dtype=np.float32))
+                if idx % 1000 == 0 or idx == total_docs:
+                    logger.info(
+                        'Built article-only features for %s/%s articles in %s corpus',
+                        idx,
+                        total_docs,
+                        split_name,
+                    )
+            return np.vstack(rows)
+
         logger.info('Entity embeddings disabled by config; running article-only feature pipeline')
-        x_train = _build_article_only_matrix(corpus=corpora.train, article_provider=article_provider, split_name='train')
-        x_dev = _build_article_only_matrix(corpus=corpora.dev, article_provider=article_provider, split_name='dev')
-        x_test = _build_article_only_matrix(corpus=corpora.test, article_provider=article_provider, split_name='test')
+        x_train = build_article_only_matrix(split_corpus=corpora.train, split_name='train')
+        x_dev = build_article_only_matrix(split_corpus=corpora.dev, split_name='dev')
+        x_test = build_article_only_matrix(split_corpus=corpora.test, split_name='test')
         train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
         dev_data = build_embedding_dataset(corpus=corpora.dev, x_matrix=x_dev)
         test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
@@ -292,6 +291,7 @@ def evaluate_classification_model(
     testData,
     evaluation_config: Mapping[str, Any],
     objective_corpora: str,
+    config_name: str,
 ):
     """Evaluate trained model and save per-article predictions plus metric artifacts."""
     import pandas as pd
@@ -307,7 +307,7 @@ def evaluate_classification_model(
         'averagingType': str(evaluation_config['averaging_type']),
     }
 
-    df_corpora_dev, _ = evaluateModel(
+    df_corpora_dev, df_classes_dev = evaluateModel(
         model=trainedModel,
         evalData=devData,
         evaluationConfig=eval_cfg,
@@ -373,12 +373,26 @@ def evaluate_classification_model(
     test_predictions_df = build_predictions_dataframe(dataset=testData)
 
     logger.report_table(title='Dev Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_dev)
+    logger.report_table(title='Dev Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_dev)
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
+    sanitized_config_name = ''.join(ch if ch.isalnum() or ch in ['-', '_'] else '_' for ch in config_name)
+    results_dir = Path('results')
+    results_dir.mkdir(parents=True, exist_ok=True)
+    excel_path = results_dir / f'final_evaluation_tables_{sanitized_config_name}.xlsx'
+    with pd.ExcelWriter(excel_path) as writer:
+        df_corpora_dev.to_excel(excel_writer=writer, sheet_name='dev_corpora')
+        df_classes_dev.to_excel(excel_writer=writer, sheet_name='dev_classes')
+        df_corpora_test.to_excel(excel_writer=writer, sheet_name='test_corpora')
+        df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
+    logger.report_text(f'Saved final evaluation tables to {excel_path}')
+
     task.upload_artifact('dev_corpora_dataframe', artifact_object=df_corpora_dev)
+    task.upload_artifact('dev_classes_dataframe', artifact_object=df_classes_dev)
     task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
     task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
+    task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
     task.upload_artifact('dev_article_predictions', artifact_object=dev_predictions_df)
     task.upload_artifact('test_article_predictions', artifact_object=test_predictions_df)
     task.upload_artifact(
@@ -484,6 +498,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         testData=test_data,
         evaluation_config=evaluation_config,
         objective_corpora=objective_corpora,
+        config_name=config_name,
     )
 
     logger = task.get_logger()

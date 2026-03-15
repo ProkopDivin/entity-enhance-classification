@@ -43,19 +43,32 @@ def load_and_normalize_corpora(
     Corpus, CorpusGroup, iptc = _require_geneea()
     iptc_cats = iptc.IptcTopics.load()
     removed_cat_ids_set = frozenset(removed_cat_ids)
+    unknown_cat_ids_seen: set[str] = set()
 
     def norm_corpus(corpus: Any, remove_empty_cats: bool = True) -> Any:
         def new_docs():
             for doc in corpus:
                 if doc.cats:
-                    norm_cats = iptc_cats.normalizeCategories([iptc_cats.getCategory(cat) for cat in doc.cats])
+                    valid_topics = []
+                    for cat in doc.cats:
+                        try:
+                            valid_topics.append(iptc_cats.getCategory(cat))
+                        except KeyError:
+                            if cat not in unknown_cat_ids_seen:
+                                unknown_cat_ids_seen.add(cat)
+                                LOGGER.warning(
+                                    'Unknown IPTC category id encountered and skipped: cat_id=%s doc_id=%s',
+                                    cat,
+                                    getattr(doc, 'id', ''),
+                                )
+                    norm_cats = iptc_cats.normalizeCategories(valid_topics)
                     doc.cats.clear()
                     doc.cats.extend(sorted(cat.id for cat in norm_cats if cat.id and cat.id not in removed_cat_ids_set))
                     if 'catScores' in doc.metadata:
                         doc.metadata['catScores'] = {
                             cat: score
                             for cat, score in doc.metadata['catScores'].items()
-                            if cat not in removed_cat_ids_set
+                            if cat not in removed_cat_ids_set and cat not in unknown_cat_ids_seen
                         }
                 elif remove_empty_cats:
                     continue

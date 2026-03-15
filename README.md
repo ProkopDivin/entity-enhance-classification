@@ -33,6 +33,8 @@ v1 settings:
   - `load_data`
   - `prepare_article_embeddings`
   - `link_embeddings_and_build_datasets`
+  - `train_classification_model`
+  - `evaluate_classification_model`
 - `src/iptc_entity_pipeline/run_pipeline.py` - CLI entrypoint.
 - `notes.md` - architecture and implementation decisions.
 
@@ -88,6 +90,13 @@ python3 -m iptc_entity_pipeline.run_pipeline --local
 Useful arguments:
 
 - `--task-name`: ClearML task name (default: `iptc-entity-enhanced-v1`)
+- `--config-name`: config variant to run:
+  - `base`
+  - `article_only`
+  - `entities_origin_filtred`
+  - `entities_chrono_global`
+  - `entities_chrono_per_dataset`
+- `--article-only`: deprecated alias for `--config-name article_only`
 
 ## What Is Reused vs New
 
