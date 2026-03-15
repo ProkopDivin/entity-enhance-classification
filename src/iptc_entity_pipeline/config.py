@@ -132,6 +132,25 @@ def to_article_only_config(config: BaseConfig) -> BaseConfig:
     )
 
 
+def _with_corpora_dir(config: BaseConfig, corpora_dir_name: str) -> BaseConfig:
+    """
+    Return a config variant with train/dev/test CSVs from selected corpora directory.
+
+    :param config: Base config to adapt.
+    :param corpora_dir_name: Subdirectory under ``DATA_ROOT`` containing corpora CSV files.
+    :return: Config with updated corpora CSV paths.
+    """
+    return replace(
+        config,
+        paths=replace(
+            config.paths,
+            train_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-train.csv',
+            dev_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-dev.csv',
+            test_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-test.csv',
+        ),
+    )
+
+
 def get_config(config_name: str) -> BaseConfig:
     """
     Return config variant by name.
@@ -139,6 +158,9 @@ def get_config(config_name: str) -> BaseConfig:
     Supported names:
     - ``base``: entity-enhanced default setup.
     - ``article_only``: article embeddings only (entity embeddings disabled).
+    - ``entities_origin_filtred``: entity-enhanced with ``origin-corpora-filtred`` inputs.
+    - ``entities_chrono_global``: entity-enhanced with ``chrono-corpora-global`` inputs.
+    - ``entities_chrono_per_dataset``: entity-enhanced with ``chrono-corpora-per-dataset`` inputs.
 
     :param config_name: Config variant name.
     :return: Selected config object.
@@ -149,6 +171,12 @@ def get_config(config_name: str) -> BaseConfig:
         return BaseConfig()
     if name == 'article_only':
         return to_article_only_config(config=BaseConfig())
+    if name == 'entities_origin_filtred':
+        return _with_corpora_dir(config=BaseConfig(), corpora_dir_name='origin-corpora-filtred')
+    if name == 'entities_chrono_global':
+        return _with_corpora_dir(config=BaseConfig(), corpora_dir_name='chrono-corpora-global')
+    if name == 'entities_chrono_per_dataset':
+        return _with_corpora_dir(config=BaseConfig(), corpora_dir_name='chrono-corpora-per-dataset')
     raise ValueError(f'Unsupported config_name: {config_name}')
 
 
@@ -158,7 +186,13 @@ def list_config_names() -> tuple[str, ...]:
 
     :return: Tuple of supported config names.
     """
-    return ('base', 'article_only')
+    return (
+        'base',
+        'article_only',
+        'entities_origin_filtred',
+        'entities_chrono_global',
+        'entities_chrono_per_dataset',
+    )
 
 
 # Backward compatibility alias for older imports.
