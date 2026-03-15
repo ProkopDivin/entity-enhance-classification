@@ -83,17 +83,8 @@ def load_and_normalize_corpora(
     return CorpusGroup(train=train, dev=dev, test=test)
 
 
-def load_article_wdids(*, article_entities_tsv: str) -> dict[str, list[str]]:
-    """
-    Parse article to entity mapping and keep only entities with ``wdId``.
-
-    :param article_entities_tsv: Path to ``article_2_entities.tsv``.
-    :return: Mapping ``article_id -> list[wdId]``.
-    """
-    mapping: dict[str, list[str]] = {}
-    path = Path(article_entities_tsv)
-
-    # The entities JSON field can be very large; raise CSV parser field limit.
+def _ensure_csv_field_limit() -> None:
+    """Raise CSV parser field-size limit to handle large JSON entity columns."""
     field_limit = sys.maxsize
     while True:
         try:
@@ -101,6 +92,18 @@ def load_article_wdids(*, article_entities_tsv: str) -> dict[str, list[str]]:
             break
         except OverflowError:
             field_limit = field_limit // 10
+
+
+def load_article_entities(*, article_entities_tsv: str) -> dict[str, list[dict]]:
+    """
+    Parse article-to-entity mapping and return all entities per article.
+
+    :param article_entities_tsv: Path to ``article_2_entities.tsv``.
+    :return: Mapping ``article_id -> list[entity_dict]``.
+    """
+    mapping: dict[str, list[dict]] = {}
+    path = Path(article_entities_tsv)
+    _ensure_csv_field_limit()
 
     with path.open(mode='r', encoding='utf-8', newline='') as in_file:
         reader = csv.DictReader(in_file, delimiter='\t')
@@ -114,10 +117,24 @@ def load_article_wdids(*, article_entities_tsv: str) -> dict[str, list[str]]:
             except json.JSONDecodeError:
                 LOGGER.warning('Skipping malformed entities JSON for article_id=%s', article_id)
                 continue
-            wdids = [entity['wdId'] for entity in entities if isinstance(entity, Mapping) and entity.get('wdId')]
-            mapping[article_id] = wdids
-    LOGGER.info('Loaded wdId mapping for %s articles', len(mapping))
+            if isinstance(entities, list):
+                mapping[article_id] = entities
+    LOGGER.info('Loaded entity mapping for %s articles', len(mapping))
     return mapping
+
+
+def load_article_wdids(*, article_entities_tsv: str) -> dict[str, list[str]]:
+    """
+    Parse article to entity mapping and keep only entities with ``wdId``.
+
+    :param article_entities_tsv: Path to ``article_2_entities.tsv``.
+    :return: Mapping ``article_id -> list[wdId]``.
+    """
+    all_entities = load_article_entities(article_entities_tsv=article_entities_tsv)
+    return {
+        article_id: [ent['wdId'] for ent in entities if isinstance(ent, Mapping) and ent.get('wdId')]
+        for article_id, entities in all_entities.items()
+    }
 
 
 def get_article_text(doc: Any) -> str:
