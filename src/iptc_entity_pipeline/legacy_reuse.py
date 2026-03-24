@@ -289,6 +289,22 @@ def trainClassificationModel(
 
     train_stats = [[], [], []]
     dev_stats = [[], [], []]
+    es_patience = int(trainingConfig.get('earlyStoppingPatience', 0))
+    es_min_delta = float(trainingConfig.get('earlyStoppingMinDelta', 0.0))
+
+    def _is_better_loss(*, current_loss: float, best_loss: float) -> bool:
+        return current_loss < best_loss - es_min_delta
+
+    def _clone_state_dict_cpu() -> Dict[str, Any]:
+        return {k: v.detach().cpu().clone() for k, v in model._nn.state_dict().items()}
+
+    def _load_state_dict_from_cpu(state: Dict[str, Any]) -> None:
+        model._nn.load_state_dict({k: v.to(model._device) for k, v in state.items()})
+
+    best_state_cpu: Optional[Dict[str, Any]] = None
+    best_dev_loss: Optional[float] = None
+    epochs_without_improvement = 0
+
     start_training_time = time.time()
     for t in range(trainingConfig['epochs']):
         last_time = time.time()
@@ -317,6 +333,25 @@ def trainClassificationModel(
         logger.report_scalar(title='Dev Training Stats', series='Precision', value=dev_precision, iteration=t)
         logger.report_scalar(title='Dev Training Stats', series='Recall', value=dev_recall, iteration=t)
         logger.report_scalar(title='Dev Training Stats', series='Loss', value=dev_loss, iteration=t)
+
+        if es_patience > 0:
+            if best_dev_loss is None or _is_better_loss(current_loss=dev_loss, best_loss=best_dev_loss):
+                best_dev_loss = dev_loss
+                best_state_cpu = _clone_state_dict_cpu()
+                epochs_without_improvement = 0
+                logger.report_text(
+                    f'Early stopping: new best dev loss={dev_loss:.6f} at epoch {t + 1}',
+                    level=logging.INFO,
+                    print_console=logConfig['PRINT_LOGS'],
+                )
+            else:
+                epochs_without_improvement += 1
+                logger.report_text(
+                    f'Early stopping: epochs without improvement: {epochs_without_improvement}',
+                    level=logging.INFO,
+                    print_console=logConfig['PRINT_LOGS'],
+                )
+
         logger.report_text(
             f'time done: {time.time() - last_time}',
             level=logging.INFO,
@@ -336,6 +371,23 @@ def trainClassificationModel(
         logger.report_scalar(title='Train Training Stats', series='Precision', value=train_precision, iteration=t)
         logger.report_scalar(title='Train Training Stats', series='Recall', value=train_recall, iteration=t)
         logger.report_scalar(title='Train Training Stats', series='Loss', value=train_loss, iteration=t)
+
+        if es_patience > 0 and epochs_without_improvement >= es_patience:
+            logger.report_text(
+                f'Early stopping: no improvement in dev loss for {es_patience} epoch(s); '
+                f'stopping after epoch {t + 1} (best loss={best_dev_loss:.6f})',
+                level=logging.INFO,
+                print_console=logConfig['PRINT_LOGS'],
+            )
+            break
+
+    if es_patience > 0 and best_state_cpu is not None:
+        _load_state_dict_from_cpu(best_state_cpu)
+        logger.report_text(
+            'Early stopping: restored weights from best dev epoch',
+            level=logging.INFO,
+            print_console=logConfig['PRINT_LOGS'],
+        )
 
     logger.report_text(
         f'time: {time.time() - start_training_time}',
