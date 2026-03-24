@@ -39,9 +39,9 @@ class EmbeddingConfig:
 class ModelConfig:
     """Model architecture parameters."""
 
-    hidden_dim: int = 1024
-    dropouts1: float = 0
-    dropouts2: float = 0.3
+    hidden_dim: list[int] = field(default_factory=lambda: [1024])
+    dropouts1: list[float] = field(default_factory=lambda: [0.0])
+    dropouts2: list[float] = field(default_factory=lambda: [0.3])
 
 
 @dataclass(frozen=True)
@@ -49,17 +49,17 @@ class TrainingConfig:
     """Training loop parameters."""
 
     epochs: int = 100
-    batch_size: int = 64
+    batch_size: list[int] = field(default_factory=lambda: [64])
     optimizer_name: str = 'adam'
-    learning_rate: float = 0.00037
+    learning_rate: list[float] = field(default_factory=lambda: [0.00037])
     lr_scheduler_name: str = 'stepLR'
     step_size: int = 1
     gamma: float = 1
     loss_name: str = 'bceWithLogitsLoss'
     # 0 = disabled. When > 0, monitors dev loss, stops after this many epochs
     # without improvement, and restores the best weights.
-    early_stopping_patience: int = 5
-    early_stopping_min_delta: float = 0.00001
+    early_stopping_patience: int = 6
+    early_stopping_min_delta: float = 0.000001
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,14 @@ class EvaluationConfig:
     per_corpus: bool = True
     per_class: bool = True
     averaging_type: str = 'datapoint'
+
+
+@dataclass(frozen=True)
+class CvConfig:
+    """Cross-validation setup."""
+
+    folds: int = 5
+    random_seed: int = 43
 
 
 @dataclass(frozen=True)
@@ -89,6 +97,7 @@ class BaseConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    cv: CvConfig = field(default_factory=CvConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
@@ -118,6 +127,7 @@ def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
         model=config.model,
         training=config.training,
         evaluation=config.evaluation,
+        cv=config.cv,
         logging=config.logging,
         objective_corpora=config.objective_corpora,
         downsample_corpora=config.downsample_corpora,
