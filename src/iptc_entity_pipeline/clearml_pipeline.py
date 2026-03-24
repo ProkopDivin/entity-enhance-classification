@@ -42,13 +42,18 @@ def _report_stage_message(*, task: Task, message: str, logging_config: Mapping[s
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
-def load_data(paths_config: Mapping[str, Any]):
+def load_data(
+    paths_config: Mapping[str, Any],
+    downsample_corpora: Mapping[str, float] | None = None,
+):
     """Load normalized corpora and article-to-wdIds mapping."""
     corpora = load_and_normalize_corpora(
         train_csv=paths_config['train_csv'],
         dev_csv=paths_config['dev_csv'],
         test_csv=paths_config['test_csv'],
         removed_cat_ids=paths_config['removed_cat_ids'],
+        downsample_corpora=downsample_corpora or {},
+        downsampling_order_cache_json=paths_config.get('downsampling_order_cache_json'),
     )
     article_to_wdids = load_article_wdids(article_entities_tsv=paths_config['article_entities_tsv'])
     return corpora, article_to_wdids
@@ -259,6 +264,8 @@ def train_classification_model(
         trainingConfig={
             'epochs': int(training_config['epochs']),
             'batchSize': int(training_config['batch_size']),
+            'earlyStoppingPatience': int(training_config.get('early_stopping_patience', 0)),
+            'earlyStoppingMinDelta': float(training_config.get('early_stopping_min_delta', 0.0)),
             'optimizerConfig': {
                 'name': training_config['optimizer_name'],
                 'adamConfig': {'lr': float(training_config['learning_rate'])},
@@ -436,6 +443,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     evaluation_config = config_mapping['evaluation']
     logging_config = config_mapping['logging']
     objective_corpora = config_mapping['objective_corpora']
+    downsample_corpora = config_mapping.get('downsample_corpora', {})
     use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
 
     _report_stage_message(
@@ -443,7 +451,10 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         message='Stage 1/5: Loading corpora and article-to-entity mapping',
         logging_config=logging_config,
     )
-    corpora, article_to_wdids = load_data(paths_config=paths_config)
+    corpora, article_to_wdids = load_data(
+        paths_config=paths_config,
+        downsample_corpora=downsample_corpora,
+    )
     _report_stage_message(
         task=task,
         message='Stage 2/5: Preparing article embeddings (train/dev/test)',
