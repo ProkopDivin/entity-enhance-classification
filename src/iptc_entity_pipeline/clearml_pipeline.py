@@ -19,7 +19,7 @@ from iptc_entity_pipeline.feature_builder import FeatureBuilder
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.pooling import SumEntityPooling
 
-LOGGER = logging.getLogger(__name__)
+
 
 
 @PipelineDecorator.component(
@@ -242,7 +242,7 @@ def train_classification_model(
             'learning_rate': float(training_config['learning_rate'][0]),
         }
     )
-    return train_model(
+    return utils.train_model(
         train_data=trainData,
         dev_data=devData,
         feature_dim=featureDim,
@@ -288,11 +288,11 @@ def run_cv(
         model_config=model_config,
         training_config=training_config,
     )
-    LOGGER.info(
-        'Running mandatory %s-fold cross-validation on train+dev with %s hyperparameter combinations',
-        cv_folds,
-        len(combinations),
+    msg = (
+        f'Running mandatory {cv_folds}-fold cross-validation on train+dev with '
+        f'{len(combinations)} hyperparameter combinations'
     )
+    logger.report_text(msg)
     fold_rows: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
     best_trial: dict[str, Any] | None = None
@@ -415,6 +415,27 @@ def run_cv(
     }
     return cv_dev_df, best_model_config, best_training_config, objective_metrics
 
+@PipelineDecorator.component(
+    return_values=['devCorporaDf', 'testCorporaDf', 'testClassesDf', 'objectiveMetrics'],
+    execution_queue='iptc_entity_tasks',
+    task_type=TaskTypes.testing,
+)
+def train_best(
+    train_data,
+    test_data,
+    feature_dim: int,
+    best_model_config: Mapping[str, Any],
+    training_config: Mapping[str, Any],
+    logging_config: Mapping[str, Any],
+):
+    return utils.train_model(
+        train_data=train_data,
+        dev_data=test_data,
+        feature_dim=feature_dim,
+        model_config=best_model_config,
+        training_config=training_config,
+        logging_config=logging_config,
+    )
 
 @PipelineDecorator.component(
     return_values=['devCorporaDf', 'testCorporaDf', 'testClassesDf', 'objectiveMetrics'],
@@ -484,7 +505,7 @@ def eval_final(
 
     test_predictions_df = build_predictions_dataframe(dataset=testData)
 
-    logger.report_table(title='Dev Evaluation', series='Cross Validation Mean+Std', iteration=0, table_plot=cvDevDf)
+    logger.report_table(title='Cross Validation Summary', series='Mean+Std', iteration=0, table_plot=cvDevDf)
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
@@ -606,16 +627,20 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
 
     utils.log_stage(
         task=task,
-        message='Stage 5/6: Retraining final model on full train+dev with selected hyperparameters',
+        message='Stage 5/6: Retraining final model on full train+dev (validation=test)',
         logging_config=logging_config,
     )
     train_dev_data = utils.merge_datasets(left_data=train_data, right_data=dev_data)
-    trained_model = utils.train_model(
+    final_training_config = dict(best_training_config)
+    final_training_config['validation_split_name'] = 'test'
+    
+    
+    trained_model = train_best(
         train_data=train_dev_data,
-        dev_data=train_dev_data,
+        test_data=test_data,
         feature_dim=feature_dim,
-        model_config=best_model_config,
-        training_config=best_training_config,
+        best_model_config=best_model_config,
+        training_config=final_training_config,
         logging_config=logging_config,
     )
 
@@ -638,14 +663,14 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     if objective_row_name in df_corpora_dev.index:
         utils.report_eval_scalars(
             logger=logger,
-            title='Dev Evaluation Results',
+            title='Cross Validation Results',
             row=df_corpora_dev.loc[objective_row_name].to_dict(),
             iteration=0,
         )
     else:
         utils.report_eval_scalars(
             logger=logger,
-            title='Dev Evaluation Results',
+            title='Cross Validation Results',
             row=df_corpora_dev.iloc[0].to_dict(),
             iteration=0,
         )
