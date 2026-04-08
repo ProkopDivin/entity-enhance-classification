@@ -32,7 +32,15 @@ except ImportError:
 RE_WIKIDATA_ID_PATTERN = re.compile(r"^Q[0-9]+$")
 
 
-def wdId_from_item(item: dict) -> list[str]:
+def _ensure_large_csv_fields() -> None:
+    """Raise csv field size limit for TSV rows with large JSON (e.g. ``entities`` column)."""
+    try:
+        csv.field_size_limit(sys.maxsize)
+    except OverflowError:
+        csv.field_size_limit(2**31 - 1)
+
+
+def wdId_from_item(item: dict, gkb_id: str) -> list[str]:
     """
     Extract Wikidata IDs from source values in a GKB item.
     Extracts Q numbers from URLs like "http://www.wikidata.org/entity/Q98918715".
@@ -55,6 +63,10 @@ def wdId_from_item(item: dict) -> list[str]:
             candidate = source
         if candidate.startswith("Q") and candidate[1:].isdigit():
             wikidata_ids.append(candidate)
+        else:
+            print(
+                f"Skipping source {source} because it is not a valid Wikidata ID for GKB item {gkb_id}, other sources: {sources}"
+            )
     return wikidata_ids
 
 
@@ -65,6 +77,7 @@ def gkbId_from_map(path: Path) -> list[str]:
     :param path: TSV path with header including ``article_id`` and ``entities``
     :return: Unique non-empty gkbId strings (order not guaranteed)
     """
+    _ensure_large_csv_fields()
     gkb_ids: set[str] = set()
     with open(path, encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter="\t")
@@ -96,6 +109,7 @@ class FetchStats:
     processed: int
     failed: int
     items_without_source: int
+    items_with_multiple_valid_sources: int
 
 
 def parse_args() -> argparse.Namespace:
@@ -190,6 +204,7 @@ def maping_no_url(gkb_ids: list[str]) -> FetchStats:
         processed=processed,
         failed=0,
         items_without_source=items_without_source,
+        items_with_multiple_valid_sources=0,
     )
 
 
@@ -215,6 +230,7 @@ def fetch_mapping(gkb_ids: list[str], url: str) -> FetchStats:
     processed = 0
     failed = 0
     items_without_source = 0
+    items_with_multiple_valid_sources = 0
 
     session = Session()
     try:
@@ -224,8 +240,10 @@ def fetch_mapping(gkb_ids: list[str], url: str) -> FetchStats:
                 continue
 
             item_dict = get_item_def(gkb_item=gkb_item)
-            item_wikidata_ids = wdId_from_item(item=item_dict)
+            item_wikidata_ids = sorted(set(wdId_from_item(item=item_dict, gkb_id=gid)))
             if item_wikidata_ids:
+                if len(item_wikidata_ids) > 1:
+                    items_with_multiple_valid_sources += 1
                 wikidata_ids.update(item_wikidata_ids)
                 gid_to_wdid_mapping[gid] = item_wikidata_ids
                 processed += 1
@@ -244,6 +262,7 @@ def fetch_mapping(gkb_ids: list[str], url: str) -> FetchStats:
         processed=processed,
         failed=failed,
         items_without_source=items_without_source,
+        items_with_multiple_valid_sources=items_with_multiple_valid_sources,
     )
 
 
@@ -298,6 +317,8 @@ def main() -> None:
     print(f"\nProcessed {stats.processed} items successfully")
     if stats.items_without_source > 0:
         print(f"Found {stats.items_without_source} items without source attribute")
+    if stats.items_with_multiple_valid_sources > 0:
+        print(f"Found {stats.items_with_multiple_valid_sources} items with >1 valid Wikidata source")
     if stats.failed > 0:
         print(f"Failed to process {stats.failed} items", file=sys.stderr)
 
