@@ -8,10 +8,39 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from collections import defaultdict
 from typing import Optional, Sequence, Tuple
 
 # Since this is a CLI script, print is acceptable for output
 # For general-purpose tools, logging should be used instead
+
+
+def extract_dataset_name(filename: str, *, no_group: bool = False) -> str:
+    """
+    Extract dataset name from filename (e.g. cs_mafra_iptc from
+    cs_mafra_iptc.dev_all.analysis.jsonl.gz).
+
+    :param filename: Name of the .jsonl.gz file
+    :return: Dataset name
+    """
+    name = filename
+    if name.endswith('.gz'):
+        name = name[:-3]
+    if name.endswith('.jsonl'):
+        name = name[:-6]
+    name = name.replace('.analysis', '')
+    if no_group:
+        return name
+
+    for suffix in (
+        '.train_all', '.dev_all', '.test_all',
+        '.train_smallpp', '.dev_smallpp', '.test_smallpp',
+        '.train_medium', '.dev_medium', '.test_medium',
+        '.train', '.dev', '.test',
+    ):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return name
 
 
 def parse_date(date_str: Optional[str]) -> Optional[datetime]:
@@ -152,6 +181,14 @@ def main() -> None:
             '(default: current directory)'
         )
     )
+    argparser.add_argument(
+        '--no-group',
+        action='store_true',
+        help=(
+            'Do not merge train/dev/test variants into one dataset row. '
+            'Keep split suffixes (train/dev/test) as separate rows.'
+        )
+    )
     args = argparser.parse_args()
 
     directory = Path(args.directory)
@@ -178,27 +215,50 @@ def main() -> None:
         # Write date list file
         write_date_list_file(filepath=filepath, date_id_list=date_id_list)
 
-    # Write markdown table to stats.md file
+    # Aggregate results by dataset (one row per dataset)
+    # dataset -> (total_items, missing, min_date, max_date)
+    by_dataset: dict[str, Tuple[int, int, Optional[str], Optional[str]]] = defaultdict(
+        lambda: (0, 0, None, None)
+    )
+
+    for filename, total, missing, min_date, max_date in results:
+        dataset = extract_dataset_name(filename, no_group=args.no_group)
+        prev_total, prev_missing, prev_min, prev_max = by_dataset[dataset]
+        new_total = prev_total + total
+        new_missing = prev_missing + missing
+
+        # Min date: earliest non-None date
+        dates_min = [d for d in (prev_min, min_date) if d]
+        new_min = min(dates_min) if dates_min else None
+
+        # Max date: latest non-None date
+        dates_max = [d for d in (prev_max, max_date) if d]
+        new_max = max(dates_max) if dates_max else None
+
+        by_dataset[dataset] = (new_total, new_missing, new_min, new_max)
+
+    # Write markdown table to stats.md file (one row per dataset)
     stats_file = directory / 'stats.md'
     try:
         with open(stats_file, mode='w', encoding='utf-8') as f:
             f.write('## Statistics Summary\n\n')
             header = (
-                '| Name | Total Items | Missing/None Date | '
+                '| Dataset | Total Items | Missing/None Date | '
                 'Min Date | Max Date |\n'
             )
             f.write(header)
             separator = (
-                '|------|-------------|-------------------|'
+                '|--------|-------------|-------------------|'
                 '----------|----------|\n'
             )
             f.write(separator)
 
-            for filename, total, missing, min_date, max_date in results:
+            for dataset in sorted(by_dataset.keys()):
+                total, missing, min_date, max_date = by_dataset[dataset]
                 min_date_display = min_date if min_date else 'N/A'
                 max_date_display = max_date if max_date else 'N/A'
                 f.write(
-                    f'| {filename} | {total:,} | {missing:,} | '
+                    f'| {dataset} | {total:,} | {missing:,} | '
                     f'{min_date_display} | {max_date_display} |\n'
                 )
 

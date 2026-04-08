@@ -5,10 +5,9 @@ Computes dataset distribution, category distribution, missing categories,
 article statistics, and entity statistics.
 """
 import argparse
-import csv
 import json
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -45,12 +44,14 @@ def extract_dataset_name(filename: str) -> Optional[str]:
 def load_csv_files(directory: Path) -> dict[str, dict[str, pd.DataFrame]]:
     """
     Load all CSV files from directory, organized by split type and dataset.
+    Prefers files starting with 'entities_' for entity analysis, but loads all CSV files.
 
     :param directory: Directory containing CSV files
     :return: Dictionary mapping split_type -> dataset_name -> DataFrame
     """
     data: dict[str, dict[str, pd.DataFrame]] = {"train": {}, "dev": {}, "test": {}}
 
+    # Load all CSV files, but prefer entities_* files when available
     csv_files = sorted(directory.glob("*.csv"))
 
     for csv_file in csv_files:
@@ -66,8 +67,18 @@ def load_csv_files(directory: Path) -> dict[str, dict[str, pd.DataFrame]]:
         else:
             continue  # Skip files that don't match expected pattern
 
-        dataset_name = extract_dataset_name(csv_file.name)
+        # Extract dataset name (remove entities_ prefix if present)
+        base_name = csv_file.name
+        if base_name.startswith("entities_"):
+            base_name = base_name[9:]  # Remove "entities_" prefix
+
+        dataset_name = extract_dataset_name(base_name)
         if not dataset_name:
+            continue
+
+        # If we already have data for this split/dataset and current file is not entities_*,
+        # skip it (prefer entities_* files)
+        if dataset_name in data[split_type] and not csv_file.name.startswith("entities_"):
             continue
 
         try:
@@ -83,21 +94,15 @@ def load_csv_files(directory: Path) -> dict[str, dict[str, pd.DataFrame]]:
 
 def parse_categories(cats_str: str) -> list[str]:
     """
-    Parse categories from CSV column (can be JSON array or comma-separated).
+    Parse categories from CSV column (pipe-separated format).
 
-    :param cats_str: Categories string
+    :param cats_str: Categories string (e.g., "01000000|04000000|20000002")
     :return: List of category strings
     """
     if not cats_str or pd.isna(cats_str):
         return []
-    try:
-        # Try JSON first
-        if cats_str.strip().startswith("["):
-            return json.loads(cats_str)
-        # Otherwise, try comma-separated
-        return [cat.strip() for cat in str(cats_str).split(",") if cat.strip()]
-    except (json.JSONDecodeError, ValueError):
-        return []
+    # Categories are pipe-separated: "01000000|04000000|20000002"
+    return [cat.strip() for cat in str(cats_str).split("|") if cat.strip()]
 
 
 def parse_entities(entities_str: str) -> list[dict]:
@@ -192,9 +197,7 @@ def compute_category_statistics(data: dict[str, dict[str, pd.DataFrame]]) -> dic
     return stats
 
 
-def compute_missing_categories(
-    category_stats: dict,
-) -> dict[str, dict[str, list[str]]]:
+def compute_missing_categories(category_stats: dict) -> dict[str, list[str]]:
     """
     Compute missing categories between splits.
 
@@ -242,14 +245,15 @@ def compute_article_statistics(data: dict[str, dict[str, pd.DataFrame]]) -> dict
                     categories = parse_categories(cats_str)
                     num_categories_list.append(len(categories))
 
-            # Number of entities
+            # Number of entities (only in files starting with 'entities_')
             if "entities" in df.columns:
                 for entities_str in df["entities"]:
                     entities = parse_entities(entities_str)
                     num_entities_list.append(len(entities))
 
-                    # Count entities with and without gkbID
-                    with_gkbid = sum(1 for e in entities if e.get("gkbID"))
+                    # Count entities with and without gkbId (note: lowercase 'd')
+                    # Check both 'gkbId' and 'gkbID' for compatibility
+                    with_gkbid = sum(1 for e in entities if e.get("gkbId") or e.get("gkbID"))
                     num_entities_with_gkbid.append(with_gkbid)
                     num_entities_without_gkbid.append(len(entities) - with_gkbid)
 
@@ -284,50 +288,166 @@ def compute_article_statistics(data: dict[str, dict[str, pd.DataFrame]]) -> dict
     return stats
 
 
-def plot_dataset_distribution(dataset_stats: dict, output_dir: Path) -> None:
+def plot_dataset_distribution_comparison(
+    dataset_stats1: dict, dataset_stats2: dict, name1: str, name2: str, output_dir: Path
+) -> None:
     """
-    Create plots for dataset distribution.
+    Create comparison plots for dataset distribution between two splits.
 
-    :param dataset_stats: Dataset statistics dictionary
+    :param dataset_stats1: Dataset statistics for first split
+    :param dataset_stats2: Dataset statistics for second split
+    :param name1: Name of first split
+    :param name2: Name of second split
     :param output_dir: Output directory for plots
     """
-    # Plot 1: Dataset distribution by split
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    fig.suptitle("Dataset Distribution by Split", fontsize=16, fontweight="bold")
+    # Plot 1: Compare train splits from both datasets
+    for split_type in ["train", "dev", "test"]:
+        stats1 = dataset_stats1[split_type]
+        stats2 = dataset_stats2[split_type]
 
-    for idx, split_type in enumerate(["train", "dev", "test"]):
-        stats = dataset_stats[split_type]
-        datasets = sorted(stats["dataset_counts"].keys())
-        counts = [stats["dataset_counts"][d] for d in datasets]
-        percentages = [stats["dataset_percentages"][d] for d in datasets]
+        # Get all unique datasets from both
+        all_datasets = sorted(set(list(stats1["dataset_counts"].keys()) + list(stats2["dataset_counts"].keys())))
 
-        ax = axes[idx]
-        bars = ax.bar(range(len(datasets)), percentages, color=f"C{idx}", edgecolor="black", linewidth=1.5)
+        percentages1 = [stats1["dataset_percentages"].get(d, 0.0) for d in all_datasets]
+        percentages2 = [stats2["dataset_percentages"].get(d, 0.0) for d in all_datasets]
+
+        fig, ax = plt.subplots(figsize=(14, 6))
+        fig.suptitle(
+            f"Dataset Distribution Comparison: {split_type.capitalize()} Split", fontsize=16, fontweight="bold"
+        )
+
+        x = range(len(all_datasets))
+        width = 0.35
+
+        bars1 = ax.bar(
+            [i - width / 2 for i in x],
+            percentages1,
+            width,
+            label=name1,
+            color="steelblue",
+            edgecolor="black",
+            linewidth=1.5,
+        )
+        bars2 = ax.bar(
+            [i + width / 2 for i in x],
+            percentages2,
+            width,
+            label=name2,
+            color="coral",
+            edgecolor="black",
+            linewidth=1.5,
+        )
+
         ax.set_xlabel("Dataset", fontsize=11)
         ax.set_ylabel("Percentage of Articles", fontsize=11)
         ax.set_title(
-            f"{split_type.capitalize()} Split\n({stats['total_articles']:,} articles)", fontsize=12, fontweight="bold"
+            f"{name1}: {stats1['total_articles']:,} articles | {name2}: {stats2['total_articles']:,} articles",
+            fontsize=12,
+            fontweight="bold",
         )
-        ax.set_xticks(range(len(datasets)))
-        ax.set_xticklabels(datasets, rotation=45, ha="right", fontsize=9)
+        ax.set_xticks(x)
+        ax.set_xticklabels(all_datasets, rotation=45, ha="right", fontsize=9)
+        ax.legend(fontsize=10)
         ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.set_axisbelow(True)
 
-        # Add value labels
-        for bar, pct, count in zip(bars, percentages, counts):
+        # Add value labels (percentages only)
+        for bars, percentages in [(bars1, percentages1), (bars2, percentages2)]:
+            for bar, pct in zip(bars, percentages):
+                if pct > 0:
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        bar.get_height(),
+                        f"{pct:.1f}%",
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                    )
+
+        plt.tight_layout()
+        output_file = output_dir / f"dataset_distribution_comparison_{split_type}.png"
+        plt.savefig(output_file, dpi=300, bbox_inches="tight")
+        plt.close()
+        print(f"  -> Saved dataset distribution comparison ({split_type}): {output_file}")
+
+
+def plot_dataset_distribution_within_split(dataset_stats: dict, name: str, output_dir: Path) -> None:
+    """
+    Create plots showing train/dev/test distribution within each dataset for one split.
+
+    :param dataset_stats: Dataset statistics dictionary
+    :param name: Name of the split
+    :param output_dir: Output directory for plots
+    """
+    # Get all datasets
+    all_datasets_set = set()
+    for split_type in ["train", "dev", "test"]:
+        all_datasets_set.update(dataset_stats[split_type]["dataset_counts"].keys())
+    all_datasets = sorted(list(all_datasets_set))
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    fig.suptitle(f"Train/Dev/Test Distribution by Dataset: {name}", fontsize=16, fontweight="bold")
+
+    x = range(len(all_datasets))
+    width = 0.25
+
+    train_pcts = [dataset_stats["train"]["dataset_percentages"].get(d, 0.0) for d in all_datasets]
+    dev_pcts = [dataset_stats["dev"]["dataset_percentages"].get(d, 0.0) for d in all_datasets]
+    test_pcts = [dataset_stats["test"]["dataset_percentages"].get(d, 0.0) for d in all_datasets]
+
+    bars1 = ax.bar(
+        [i - width for i in x],
+        train_pcts,
+        width,
+        label="Train",
+        color="steelblue",
+        edgecolor="black",
+        linewidth=1.5,
+    )
+    bars2 = ax.bar(x, dev_pcts, width, label="Dev", color="orange", edgecolor="black", linewidth=1.5)
+    bars3 = ax.bar(
+        [i + width for i in x],
+        test_pcts,
+        width,
+        label="Test",
+        color="green",
+        edgecolor="black",
+        linewidth=1.5,
+    )
+
+    ax.set_xlabel("Dataset", fontsize=11)
+    ax.set_ylabel("Percentage of Articles", fontsize=11)
+    ax.set_title(
+        f"Train: {dataset_stats['train']['total_articles']:,} | "
+        f"Dev: {dataset_stats['dev']['total_articles']:,} | "
+        f"Test: {dataset_stats['test']['total_articles']:,}",
+        fontsize=12,
+        fontweight="bold",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(all_datasets, rotation=45, ha="right", fontsize=9)
+    ax.legend(fontsize=10)
+    ax.grid(axis="y", alpha=0.3, linestyle="--")
+    ax.set_axisbelow(True)
+
+    # Add value labels (percentages only)
+    for bars, percentages in [(bars1, train_pcts), (bars2, dev_pcts), (bars3, test_pcts)]:
+        for bar, pct in zip(bars, percentages):
             if pct > 0:
                 ax.text(
                     bar.get_x() + bar.get_width() / 2,
                     bar.get_height(),
-                    f"{pct:.1f}%\n({count:,})",
+                    f"{pct:.1f}%",
                     ha="center",
                     va="bottom",
-                    fontsize=8,
+                    fontsize=7,
                 )
 
     plt.tight_layout()
-    plt.savefig(output_dir / "dataset_distribution.png", dpi=300, bbox_inches="tight")
+    output_file = output_dir / f"dataset_distribution_within_split_{name}.png"
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"  -> Saved dataset distribution plot: {output_dir / 'dataset_distribution.png'}")
+    print(f"  -> Saved dataset distribution within split: {output_file}")
 
 
 def plot_category_distribution(category_stats: dict, output_dir: Path) -> None:
@@ -380,6 +500,135 @@ def plot_category_distribution(category_stats: dict, output_dir: Path) -> None:
     print(f"  -> Saved category distribution plot: {output_dir / 'category_distribution_top20.png'}")
 
 
+def plot_categories_entities_comparison(
+    article_stats1: dict, article_stats2: dict, name1: str, name2: str, output_dir: Path
+) -> None:
+    """
+    Create comparison plots for categories and entities statistics.
+
+    :param article_stats1: Article statistics for first split
+    :param article_stats2: Article statistics for second split
+    :param name1: Name of first split
+    :param name2: Name of second split
+    :param output_dir: Output directory for plots
+    """
+    # Plot 1: Categories comparison
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle("Categories Statistics Comparison", fontsize=16, fontweight="bold")
+
+    for idx, split_type in enumerate(["train", "dev", "test"]):
+        stats1 = article_stats1[split_type]["num_categories"]
+        stats2 = article_stats2[split_type]["num_categories"]
+
+        ax = axes[idx]
+        x = [0, 1]
+        width = 0.35
+
+        bars1 = ax.bar(
+            [i - width / 2 for i in x],
+            [stats1["mean"], stats1["std"]],
+            width,
+            label=name1,
+            color="steelblue",
+            edgecolor="black",
+            linewidth=1.5,
+        )
+        bars2 = ax.bar(
+            [i + width / 2 for i in x],
+            [stats2["mean"], stats2["std"]],
+            width,
+            label=name2,
+            color="coral",
+            edgecolor="black",
+            linewidth=1.5,
+        )
+
+        ax.set_ylabel("Number of Categories", fontsize=11)
+        ax.set_title(f"{split_type.capitalize()} Split", fontsize=12, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(["Mean", "Std"])
+        ax.legend(fontsize=10)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.set_axisbelow(True)
+
+        # Add value labels
+        for bars, stats in [(bars1, stats1), (bars2, stats2)]:
+            for bar, value in zip(bars, [stats["mean"], stats["std"]]):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height(),
+                    f"{value:.2f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                    fontweight="bold",
+                )
+
+    plt.tight_layout()
+    output_file = output_dir / "categories_statistics_comparison.png"
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  -> Saved categories statistics comparison: {output_file}")
+
+    # Plot 2: Entities comparison
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle("Entities Statistics Comparison", fontsize=16, fontweight="bold")
+
+    for idx, split_type in enumerate(["train", "dev", "test"]):
+        stats1 = article_stats1[split_type]["num_entities"]
+        stats2 = article_stats2[split_type]["num_entities"]
+
+        ax = axes[idx]
+        x = [0, 1]
+        width = 0.35
+
+        bars1 = ax.bar(
+            [i - width / 2 for i in x],
+            [stats1["mean"], stats1["std"]],
+            width,
+            label=name1,
+            color="steelblue",
+            edgecolor="black",
+            linewidth=1.5,
+        )
+        bars2 = ax.bar(
+            [i + width / 2 for i in x],
+            [stats2["mean"], stats2["std"]],
+            width,
+            label=name2,
+            color="coral",
+            edgecolor="black",
+            linewidth=1.5,
+        )
+
+        ax.set_ylabel("Number of Entities", fontsize=11)
+        ax.set_title(f"{split_type.capitalize()} Split", fontsize=12, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(["Mean", "Std"])
+        ax.legend(fontsize=10)
+        ax.grid(axis="y", alpha=0.3, linestyle="--")
+        ax.set_axisbelow(True)
+
+        # Add value labels
+        for bars, stats in [(bars1, stats1), (bars2, stats2)]:
+            for bar, value in zip(bars, [stats["mean"], stats["std"]]):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height(),
+                    f"{value:.2f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                    fontweight="bold",
+                )
+
+    plt.tight_layout()
+    output_file = output_dir / "entities_statistics_comparison.png"
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  -> Saved entities statistics comparison: {output_file}")
+
+
 def plot_article_statistics(article_stats: dict, output_dir: Path) -> None:
     """
     Create plots for article statistics.
@@ -413,58 +662,6 @@ def plot_article_statistics(article_stats: dict, output_dir: Path) -> None:
     plt.savefig(output_dir / "article_length_statistics.png", dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  -> Saved article length statistics: {output_dir / 'article_length_statistics.png'}")
-
-    # Plot 2: Number of categories and entities
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle("Article Statistics: Categories and Entities", fontsize=16, fontweight="bold")
-
-    for idx, split_type in enumerate(["train", "dev", "test"]):
-        stats = article_stats[split_type]
-
-        # Categories
-        ax = axes[0, idx]
-        cat_stats = stats["num_categories"]
-        ax.bar(
-            ["Mean", "Std"],
-            [cat_stats["mean"], cat_stats["std"]],
-            color=f"C{idx}",
-            edgecolor="black",
-            linewidth=1.5,
-        )
-        ax.set_ylabel("Number of Categories", fontsize=11)
-        ax.set_title(f"{split_type.capitalize()} Split", fontsize=12, fontweight="bold")
-        ax.grid(axis="y", alpha=0.3, linestyle="--")
-        ax.text(
-            0, cat_stats["mean"], f"{cat_stats['mean']:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold"
-        )
-        ax.text(
-            1, cat_stats["std"], f"{cat_stats['std']:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold"
-        )
-
-        # Entities
-        ax = axes[1, idx]
-        ent_stats = stats["num_entities"]
-        ax.bar(
-            ["Mean", "Std"],
-            [ent_stats["mean"], ent_stats["std"]],
-            color=f"C{idx}",
-            edgecolor="black",
-            linewidth=1.5,
-        )
-        ax.set_ylabel("Number of Entities", fontsize=11)
-        ax.set_title(f"{split_type.capitalize()} Split", fontsize=12, fontweight="bold")
-        ax.grid(axis="y", alpha=0.3, linestyle="--")
-        ax.text(
-            0, ent_stats["mean"], f"{ent_stats['mean']:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold"
-        )
-        ax.text(
-            1, ent_stats["std"], f"{ent_stats['std']:.2f}", ha="center", va="bottom", fontsize=10, fontweight="bold"
-        )
-
-    plt.tight_layout()
-    plt.savefig(output_dir / "categories_entities_statistics.png", dpi=300, bbox_inches="tight")
-    plt.close()
-    print(f"  -> Saved categories and entities statistics: {output_dir / 'categories_entities_statistics.png'}")
 
     # Plot 3: Entities with/without gkbID
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
@@ -507,10 +704,70 @@ def plot_article_statistics(article_stats: dict, output_dir: Path) -> None:
     print(f"  -> Saved entity gkbID statistics: {output_dir / 'entity_gkbid_statistics.png'}")
 
 
+def create_missing_categories_comparison_table(
+    category_stats1: dict,
+    category_stats2: dict,
+    missing_cats1: dict[str, list[str]],
+    missing_cats2: dict[str, list[str]],
+    name1: str,
+    name2: str,
+    output_dir: Path,
+) -> None:
+    """
+    Create comparison table for missing categories between splits.
+
+    :param category_stats1: Category statistics for first split
+    :param category_stats2: Category statistics for second split
+    :param missing_cats1: Missing categories for first split
+    :param missing_cats2: Missing categories for second split
+    :param name1: Name of first split
+    :param name2: Name of second split
+    :param output_dir: Output directory
+    """
+    rows = []
+
+    # Overall categories in each split
+    for split_type in ["train", "dev", "test"]:
+        total_cats1 = category_stats1[split_type]["total_categories"]
+        total_cats2 = category_stats2[split_type]["total_categories"]
+        rows.append(
+            {
+                "Split": split_type.capitalize(),
+                "Comparison": "Total Categories",
+                f"{name1}": total_cats1,
+                f"{name2}": total_cats2,
+            }
+        )
+
+    # Missing categories comparisons
+    comparisons = [
+        ("test_vs_train", "Test vs Train"),
+        ("dev_vs_train", "Dev vs Train"),
+        ("train_vs_test", "Train vs Test"),
+        ("train_vs_dev", "Train vs Dev"),
+    ]
+
+    for comp_key, comp_name in comparisons:
+        missing1 = len(missing_cats1.get(comp_key, []))
+        missing2 = len(missing_cats2.get(comp_key, []))
+        rows.append(
+            {
+                "Split": "-",
+                "Comparison": comp_name,
+                f"{name1}": missing1,
+                f"{name2}": missing2,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    df.to_csv(output_dir / "missing_categories_comparison.csv", index=False)
+    print(f"  -> Saved missing categories comparison table: {output_dir / 'missing_categories_comparison.csv'}")
+
+
 def create_statistics_tables(
     dataset_stats: dict,
     category_stats: dict,
-    missing_cats: dict[str, dict[str, list[str]]],
+    missing_cats: dict[str, list[str]],
     article_stats: dict,
     output_dir: Path,
 ) -> None:
@@ -604,8 +861,8 @@ def main() -> None:
     )
     argparser.add_argument(
         "directories",
-        nargs="+",
-        help="One or more directories containing CSV files to analyze",
+        nargs=2,
+        help="Exactly two directories containing CSV files to compare",
     )
     argparser.add_argument(
         "-o",
@@ -630,11 +887,12 @@ def main() -> None:
         output_dir = directories[0] / "analysis_results"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Analyzing splits from {len(directories)} directory(ies)...")
+    print("Comparing two data splits...")
     print(f"Output directory: {output_dir}\n")
 
-    # Process each directory
+    # Process both directories
     all_results = {}
+    all_data = {}
 
     for directory in directories:
         print(f"Processing directory: {directory}")
@@ -642,7 +900,7 @@ def main() -> None:
 
         if not any(data.values()):
             print(f"  Warning: No data found in {directory}", file=sys.stderr)
-            continue
+            sys.exit(1)
 
         # Compute statistics
         print("\nComputing statistics...")
@@ -659,14 +917,14 @@ def main() -> None:
             "missing_cats": missing_cats,
             "article_stats": article_stats,
         }
+        all_data[dir_name] = data
 
         # Create output subdirectory for this dataset
         dataset_output_dir = output_dir / dir_name
         dataset_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate visualizations
-        print("\nGenerating visualizations...")
-        plot_dataset_distribution(dataset_stats, dataset_output_dir)
+        # Generate individual visualizations
+        print("\nGenerating individual visualizations...")
         plot_category_distribution(category_stats, dataset_output_dir)
         plot_article_statistics(article_stats, dataset_output_dir)
 
@@ -676,11 +934,44 @@ def main() -> None:
 
         print(f"\nAnalysis complete for {dir_name}!\n")
 
-    # Create comparison summary if multiple directories
-    if len(all_results) > 1:
-        print("Creating comparison summary...")
-        # TODO: Add comparison visualizations if needed
-        print("  -> Comparison summary can be created from individual results")
+    # Create comparison visualizations
+    if len(all_results) == 2:
+        print("Creating comparison visualizations...")
+        names = list(all_results.keys())
+        name1, name2 = names[0], names[1]
+
+        # Comparison plots for dataset distribution
+        plot_dataset_distribution_comparison(
+            all_results[name1]["dataset_stats"],
+            all_results[name2]["dataset_stats"],
+            name1,
+            name2,
+            output_dir,
+        )
+
+        # Within-split distribution plots for each dataset
+        plot_dataset_distribution_within_split(all_results[name1]["dataset_stats"], name1, output_dir)
+        plot_dataset_distribution_within_split(all_results[name2]["dataset_stats"], name2, output_dir)
+
+        # Categories and entities comparison plots
+        plot_categories_entities_comparison(
+            all_results[name1]["article_stats"],
+            all_results[name2]["article_stats"],
+            name1,
+            name2,
+            output_dir,
+        )
+
+        # Missing categories comparison table
+        create_missing_categories_comparison_table(
+            all_results[name1]["category_stats"],
+            all_results[name2]["category_stats"],
+            all_results[name1]["missing_cats"],
+            all_results[name2]["missing_cats"],
+            name1,
+            name2,
+            output_dir,
+        )
 
     print(f"\nAll analyses saved to: {output_dir}")
     print("Done!")
