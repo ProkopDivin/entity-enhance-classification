@@ -17,6 +17,7 @@ class PathsConfig:
     article_entities_tsv: str = f'{DATA_ROOT}/article_2_entities.tsv'
     article_embeddings_dir: str = f'{DATA_ROOT}/article_embeddings'
     entity_embeddings_dir: str = f'{DATA_ROOT}/entity_embeddings/WikidataProject'
+    downsampling_order_cache_json: str = f'{DATA_ROOT}/downsampling_order_cache.json'
     removed_cat_ids: list[str] = field(default_factory=lambda: ['20000419'])
 
 
@@ -38,23 +39,27 @@ class EmbeddingConfig:
 class ModelConfig:
     """Model architecture parameters."""
 
-    hidden_dim: int = 1024
-    dropouts1: float = 0
-    dropouts2: float = 0.3
+    hidden_dim: list[int] = field(default_factory=lambda: [1024])
+    dropouts1: list[float] = field(default_factory=lambda: [0.0])
+    dropouts2: list[float] = field(default_factory=lambda: [0.3])
 
 
 @dataclass(frozen=True)
 class TrainingConfig:
     """Training loop parameters."""
 
-    epochs: int = 25
-    batch_size: int = 64
+    epochs: int = 100
+    batch_size: list[int] = field(default_factory=lambda: [64])
     optimizer_name: str = 'adam'
-    learning_rate: float = 0.00037
+    learning_rate: list[float] = field(default_factory=lambda: [0.00037])
     lr_scheduler_name: str = 'stepLR'
     step_size: int = 1
     gamma: float = 1
     loss_name: str = 'bceWithLogitsLoss'
+    # 0 = disabled. When > 0, monitors dev loss, stops after this many epochs
+    # without improvement, and restores the best weights.
+    early_stopping_patience: int = 6
+    early_stopping_min_delta: float = 0.000001
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,14 @@ class EvaluationConfig:
     per_corpus: bool = True
     per_class: bool = True
     averaging_type: str = 'datapoint'
+
+
+@dataclass(frozen=True)
+class CvConfig:
+    """Cross-validation setup."""
+
+    folds: int = 5
+    random_seed: int = 43
 
 
 @dataclass(frozen=True)
@@ -84,8 +97,10 @@ class BaseConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    cv: CvConfig = field(default_factory=CvConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     objective_corpora: str = 'All-datapoint'
+    downsample_corpora: dict[str, float] = field(default_factory=dict)
 
     def to_clearml_mapping(self) -> dict[str, Any]:
         """Convert dataclasses to serializable mapping."""
@@ -103,6 +118,7 @@ def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
         article_entities_tsv=str(root_path / paths.article_entities_tsv),
         article_embeddings_dir=str(root_path / paths.article_embeddings_dir),
         entity_embeddings_dir=str(root_path / paths.entity_embeddings_dir),
+        downsampling_order_cache_json=str(root_path / paths.downsampling_order_cache_json),
         removed_cat_ids=paths.removed_cat_ids,
     )
     return BaseConfig(
@@ -111,9 +127,12 @@ def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
         model=config.model,
         training=config.training,
         evaluation=config.evaluation,
+        cv=config.cv,
         logging=config.logging,
         objective_corpora=config.objective_corpora,
+        downsample_corpora=config.downsample_corpora,
     )
+
 
 
 def to_article_only_config(config: BaseConfig) -> BaseConfig:
@@ -130,6 +149,8 @@ def to_article_only_config(config: BaseConfig) -> BaseConfig:
             use_entity_embeddings=False,
         ),
     )
+
+
 
 
 def _with_corpora_dir(config: BaseConfig, corpora_dir_name: str) -> BaseConfig:
@@ -151,6 +172,30 @@ def _with_corpora_dir(config: BaseConfig, corpora_dir_name: str) -> BaseConfig:
     )
 
 
+def to_article_config_filtred_dataset(config: BaseConfig, corpora_dir: str) -> BaseConfig:
+    config = replace(
+        config,
+        embeddings=replace(
+            config.embeddings,
+            use_entity_embeddings=False,
+        )
+    )
+    return _with_corpora_dir(config=config, corpora_dir_name=corpora_dir)
+
+
+def to_downsample_nl_noordhollandsdagblad_033(config: BaseConfig) -> BaseConfig:
+    """
+    Return config variant with train/dev downsampling for ``nl_noordhollandsdagblad``.
+
+    :param config: Base config to adapt.
+    :return: Config with deterministic per-corpus downsampling enabled.
+    """
+    return replace(
+        config,
+        downsample_corpora={'nl_noordhollandsdagblad': 0.33},
+    )
+
+
 def get_config(config_name: str) -> BaseConfig:
     """
     Return config variant by name.
@@ -161,6 +206,7 @@ def get_config(config_name: str) -> BaseConfig:
     - ``entities_origin_filtred``: entity-enhanced with ``origin-corpora-filtred`` inputs.
     - ``entities_chrono_global``: entity-enhanced with ``chrono-corpora-global`` inputs.
     - ``entities_chrono_per_dataset``: entity-enhanced with ``chrono-corpora-per-dataset`` inputs.
+    - ``downsample_nl_noordhollandsdagblad_033``: downsample ``nl_noordhollandsdagblad`` train/dev to 33%.
 
     :param config_name: Config variant name.
     :return: Selected config object.
@@ -177,6 +223,10 @@ def get_config(config_name: str) -> BaseConfig:
         return _with_corpora_dir(config=BaseConfig(), corpora_dir_name='chrono-corpora-global')
     if name == 'entities_chrono_per_dataset':
         return _with_corpora_dir(config=BaseConfig(), corpora_dir_name='chrono-corpora-per-dataset')
+    if name == 'article_only_filtred':
+        return to_article_config_filtred_dataset(config=BaseConfig(), corpora_dir='origin-corpora-filtred')
+    if name == 'downsample_nl_noordhollandsdagblad_033':
+        return to_downsample_nl_noordhollandsdagblad_033(config=BaseConfig())
     raise ValueError(f'Unsupported config_name: {config_name}')
 
 
@@ -192,6 +242,8 @@ def list_config_names() -> tuple[str, ...]:
         'entities_origin_filtred',
         'entities_chrono_global',
         'entities_chrono_per_dataset',
+        'article_only_filtred',
+        'downsample_nl_noordhollandsdagblad_033',
     )
 
 

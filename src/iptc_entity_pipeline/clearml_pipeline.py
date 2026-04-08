@@ -9,32 +9,17 @@ import numpy as np
 from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
+import iptc_entity_pipeline.utils as utils
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
 from iptc_entity_pipeline.config import BaseConfig, resolve_paths
 from iptc_entity_pipeline.data_loading import get_article_text, load_and_normalize_corpora, load_article_wdids
-from iptc_entity_pipeline.dataset_builder import build_embedding_dataset
+from iptc_entity_pipeline.dataset_builder import build_embedding_dataset, build_multilabel_targets
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.feature_builder import FeatureBuilder
-from iptc_entity_pipeline.legacy_reuse import (
-    createClassificationModel,
-    evaluateModel,
-    trainClassificationModel,
-)
+from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.pooling import SumEntityPooling
 
-LOGGER = logging.getLogger(__name__)
 
-
-def _report_eval_scalars(*, logger: Any, title: str, row: Mapping[str, Any], iteration: int = 0) -> None:
-    logger.report_scalar(title=title, series='Precision', value=row['Precision'], iteration=iteration)
-    logger.report_scalar(title=title, series='Recall', value=row['Recall'], iteration=iteration)
-    logger.report_scalar(title=title, series='F04', value=row['F04'], iteration=iteration)
-    logger.report_scalar(title=title, series='F1', value=row['F1'], iteration=iteration)
-
-
-def _report_stage_message(*, task: Task, message: str, logging_config: Mapping[str, Any]) -> None:
-    LOGGER.info(message)
-    task.get_logger().report_text(message, print_console=bool(logging_config['print_logs']))
 
 
 @PipelineDecorator.component(
@@ -42,13 +27,18 @@ def _report_stage_message(*, task: Task, message: str, logging_config: Mapping[s
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
-def load_data(paths_config: Mapping[str, Any]):
+def load_data(
+    paths_config: Mapping[str, Any],
+    downsample_corpora: Mapping[str, float] | None = None,
+):
     """Load normalized corpora and article-to-wdIds mapping."""
     corpora = load_and_normalize_corpora(
         train_csv=paths_config['train_csv'],
         dev_csv=paths_config['dev_csv'],
         test_csv=paths_config['test_csv'],
         removed_cat_ids=paths_config['removed_cat_ids'],
+        downsample_corpora=downsample_corpora or {},
+        downsampling_order_cache_json=paths_config.get('downsampling_order_cache_json'),
     )
     article_to_wdids = load_article_wdids(article_entities_tsv=paths_config['article_entities_tsv'])
     return corpora, article_to_wdids
@@ -240,79 +230,233 @@ def train_classification_model(
     logging_config: Mapping[str, Any],
 ):
     """Create and train classification model as a dedicated pipeline step."""
-    out_dim = int(trainData.corpus.catCnt)
-    model = createClassificationModel(
-        embDim=int(featureDim),
-        outDim=out_dim,
-        modelConfig={
-            'hiddenDim': int(model_config['hidden_dim']),
-            'dropouts1': float(model_config['dropouts1']),
-            'dropouts2': float(model_config['dropouts2']),
-        },
-        textVectorizer='not None',
-        logConfig={'PRINT_LOGS': bool(logging_config['print_logs'])},
+    scalar_model_config = {
+        'hidden_dim': int(model_config['hidden_dim'][0]),
+        'dropouts1': float(model_config['dropouts1'][0]),
+        'dropouts2': float(model_config['dropouts2'][0]),
+    }
+    scalar_training_config = dict(training_config)
+    scalar_training_config.update(
+        {
+            'batch_size': int(training_config['batch_size'][0]),
+            'learning_rate': float(training_config['learning_rate'][0]),
+        }
     )
-    return trainClassificationModel(
-        model=model,
-        trainData=trainData,
-        devData=devData,
-        trainingConfig={
-            'epochs': int(training_config['epochs']),
-            'batchSize': int(training_config['batch_size']),
-            'optimizerConfig': {
-                'name': training_config['optimizer_name'],
-                'adamConfig': {'lr': float(training_config['learning_rate'])},
-            },
-            'lrSchedulerConfig': {
-                'name': training_config['lr_scheduler_name'],
-                'stepLRConfig': {
-                    'stepSize': int(training_config['step_size']),
-                    'gamma': float(training_config['gamma']),
-                },
-                'cosineAnnealingLRConfig': {'T_max': max(int(training_config['epochs']), 1)},
-            },
-            'lossConfig': {
-                'name': training_config['loss_name'],
-                'focalLossConfig': {'alpha': 0.25, 'gamma': 2.0},
-            },
-        },
-        logConfig={'PRINT_LOGS': bool(logging_config['print_logs'])},
+    return utils.train_model(
+        train_data=trainData,
+        dev_data=devData,
+        feature_dim=featureDim,
+        model_config=scalar_model_config,
+        training_config=scalar_training_config,
+        logging_config=logging_config,
     )
 
+
+@PipelineDecorator.component(
+    return_values=['cvDevDf', 'bestModelConfig', 'bestTrainingConfig', 'objectiveMetrics'],
+    execution_queue='iptc_entity_tasks',
+    task_type=TaskTypes.training,
+)
+def run_cv(
+    trainData,
+    devData,
+    featureDim: int,
+    model_config: Mapping[str, Any],
+    training_config: Mapping[str, Any],
+    evaluation_config: Mapping[str, Any],
+    cv_config: Mapping[str, Any],
+    objective_corpora: str,
+    logging_config: Mapping[str, Any],
+):
+    """Run mandatory CV over train+dev and select best hyperparameter combination."""
+    import pandas as pd
+    from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
+
+    task = Task.current_task()
+    logger = task.get_logger()
+    cv_folds = int(cv_config['folds'])
+    cv_random_seed = int(cv_config['random_seed'])
+    full_data = utils.merge_datasets(left_data=trainData, right_data=devData)
+    x_full = utils.to_numpy_array(matrix_like=full_data.X)
+    y_full = (
+        utils.to_numpy_array(matrix_like=full_data.Y)
+        if hasattr(full_data, 'Y')
+        else build_multilabel_targets(corpus=full_data.corpus)
+    )
+    eval_cfg = utils.get_eval_config(evaluation_config=evaluation_config)
+    combinations = utils.iter_param_grid(
+        model_config=model_config,
+        training_config=training_config,
+    )
+    msg = (
+        f'Running mandatory {cv_folds}-fold cross-validation on train+dev with '
+        f'{len(combinations)} hyperparameter combinations'
+    )
+    logger.report_text(msg)
+    fold_rows: list[dict[str, Any]] = []
+    trial_rows: list[dict[str, Any]] = []
+    best_trial: dict[str, Any] | None = None
+    for combo_idx, (combo_model_config, combo_training_config) in enumerate(combinations, start=1):
+        cv_splitter = MultilabelStratifiedKFold(
+            n_splits=cv_folds,
+            shuffle=True,
+            random_state=cv_random_seed,
+        )
+        fold_scores: dict[str, list[float]] = {
+            'Precision': [],
+            'Recall': [],
+            'F04': [],
+            'F1': [],
+        }
+        for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
+            fit_data = utils.slice_dataset(dataset=full_data, indices=fit_indices.tolist())
+            val_data = utils.slice_dataset(dataset=full_data, indices=val_indices.tolist())
+            model = utils.train_model(
+                train_data=fit_data,
+                dev_data=val_data,
+                feature_dim=featureDim,
+                model_config=combo_model_config,
+                training_config=combo_training_config,
+                logging_config=logging_config,
+            )
+            df_corpora_fold, _ = evaluateModel(
+                model=model,
+                evalData=val_data,
+                evaluationConfig=eval_cfg,
+                customThresholds=None,
+            )
+            objective_row = utils.get_obj_row(
+                df_corpora=df_corpora_fold,
+                objective_corpora=objective_corpora,
+                averaging_type=eval_cfg['averagingType'],
+            )
+            for metric_name in fold_scores:
+                fold_scores[metric_name].append(float(objective_row[metric_name]))
+            fold_rows.append(
+                {
+                    'trial_id': combo_idx,
+                    'fold_id': fold_idx,
+                    'hidden_dim': combo_model_config['hidden_dim'],
+                    'dropouts1': combo_model_config['dropouts1'],
+                    'dropouts2': combo_model_config['dropouts2'],
+                    'batch_size': combo_training_config['batch_size'],
+                    'learning_rate': combo_training_config['learning_rate'],
+                    'Precision': float(objective_row['Precision']),
+                    'Recall': float(objective_row['Recall']),
+                    'F04': float(objective_row['F04']),
+                    'F1': float(objective_row['F1']),
+                }
+            )
+
+        trial_row = {
+            'trial_id': combo_idx,
+            'hidden_dim': combo_model_config['hidden_dim'],
+            'dropouts1': combo_model_config['dropouts1'],
+            'dropouts2': combo_model_config['dropouts2'],
+            'batch_size': combo_training_config['batch_size'],
+            'learning_rate': combo_training_config['learning_rate'],
+            'Precision_mean': float(np.mean(fold_scores['Precision'])),
+            'Precision_std': float(np.std(fold_scores['Precision'])),
+            'Recall_mean': float(np.mean(fold_scores['Recall'])),
+            'Recall_std': float(np.std(fold_scores['Recall'])),
+            'F04_mean': float(np.mean(fold_scores['F04'])),
+            'F04_std': float(np.std(fold_scores['F04'])),
+            'F1_mean': float(np.mean(fold_scores['F1'])),
+            'F1_std': float(np.std(fold_scores['F1'])),
+        }
+        trial_rows.append(trial_row)
+        if best_trial is None or trial_row['F1_mean'] > best_trial['F1_mean']:
+            best_trial = trial_row
+
+    if best_trial is None:
+        raise ValueError('No CV trial results were produced.')
+    trials_df = pd.DataFrame(trial_rows).sort_values(by='F1_mean', ascending=False).reset_index(drop=True)
+    folds_df = pd.DataFrame(fold_rows)
+    cv_dev_df = pd.DataFrame(
+        [
+            {
+                'Precision': best_trial['Precision_mean'],
+                'Recall': best_trial['Recall_mean'],
+                'F04': best_trial['F04_mean'],
+                'F1': best_trial['F1_mean'],
+                'Precision_std': best_trial['Precision_std'],
+                'Recall_std': best_trial['Recall_std'],
+                'F04_std': best_trial['F04_std'],
+                'F1_std': best_trial['F1_std'],
+            }
+        ],
+        index=[objective_corpora],
+    )
+    cv_dev_df.index.name = 'Corpus Name'
+
+    utils.report_cv_outputs(task=task, logger=logger, trials_df=trials_df, folds_df=folds_df, cv_dev_df=cv_dev_df)
+
+    best_model_config = {
+        'hidden_dim': int(best_trial['hidden_dim']),
+        'dropouts1': float(best_trial['dropouts1']),
+        'dropouts2': float(best_trial['dropouts2']),
+    }
+    best_training_config = dict(training_config)
+    best_training_config.update(
+        {
+            'batch_size': int(best_trial['batch_size']),
+            'learning_rate': float(best_trial['learning_rate']),
+        }
+    )
+    objective_metrics = {
+        'Precision_mean': float(best_trial['Precision_mean']),
+        'Precision_std': float(best_trial['Precision_std']),
+        'Recall_mean': float(best_trial['Recall_mean']),
+        'Recall_std': float(best_trial['Recall_std']),
+        'F04_mean': float(best_trial['F04_mean']),
+        'F04_std': float(best_trial['F04_std']),
+        'F1_mean': float(best_trial['F1_mean']),
+        'F1_std': float(best_trial['F1_std']),
+    }
+    return cv_dev_df, best_model_config, best_training_config, objective_metrics
 
 @PipelineDecorator.component(
     return_values=['devCorporaDf', 'testCorporaDf', 'testClassesDf', 'objectiveMetrics'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.testing,
 )
-def evaluate_classification_model(
+def train_best(
+    train_data,
+    test_data,
+    feature_dim: int,
+    best_model_config: Mapping[str, Any],
+    training_config: Mapping[str, Any],
+    logging_config: Mapping[str, Any],
+):
+    return utils.train_model(
+        train_data=train_data,
+        dev_data=test_data,
+        feature_dim=feature_dim,
+        model_config=best_model_config,
+        training_config=training_config,
+        logging_config=logging_config,
+    )
+
+@PipelineDecorator.component(
+    return_values=['devCorporaDf', 'testCorporaDf', 'testClassesDf', 'objectiveMetrics'],
+    execution_queue='iptc_entity_tasks',
+    task_type=TaskTypes.testing,
+)
+def eval_final(
     trainedModel,
-    devData,
+    cvDevDf,
     testData,
     evaluation_config: Mapping[str, Any],
     objective_corpora: str,
     config_name: str,
 ):
-    """Evaluate trained model and save per-article predictions plus metric artifacts."""
+    """Evaluate final model on test and persist CV dev summary with mean/std."""
     import pandas as pd
     from geneea.catlib.model.model import filterLabels
 
     task = Task.current_task()
     logger = task.get_logger()
-    eval_cfg = {
-        'thresholdPredict': float(evaluation_config['threshold_predict']),
-        'thresholdEval': float(evaluation_config['threshold_eval']),
-        'perCorpus': bool(evaluation_config['per_corpus']),
-        'perClass': bool(evaluation_config['per_class']),
-        'averagingType': str(evaluation_config['averaging_type']),
-    }
-
-    df_corpora_dev, df_classes_dev = evaluateModel(
-        model=trainedModel,
-        evalData=devData,
-        evaluationConfig=eval_cfg,
-        customThresholds=None,
-    )
+    eval_cfg = utils.get_eval_config(evaluation_config=evaluation_config)
     df_corpora_test, df_classes_test = evaluateModel(
         model=trainedModel,
         evalData=testData,
@@ -320,29 +464,19 @@ def evaluate_classification_model(
         customThresholds=None,
     )
 
-    def report_eval_scalars(*, title: str, row: Mapping[str, Any]) -> None:
-        logger.report_scalar(title=title, series='Precision', value=row['Precision'], iteration=0)
-        logger.report_scalar(title=title, series='Recall', value=row['Recall'], iteration=0)
-        logger.report_scalar(title=title, series='F04', value=row['F04'], iteration=0)
-        logger.report_scalar(title=title, series='F1', value=row['F1'], iteration=0)
-
     objective_row_name = f'All-{eval_cfg["averagingType"]}'
-    row_all = df_corpora_dev.loc[objective_row_name].to_dict()
-    report_eval_scalars(title='Dev Evaluation Results', row=row_all)
-    row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
-    report_eval_scalars(title='Test Evaluation Results', row=row_all_test)
-    if objective_corpora in df_corpora_dev.index:
-        row_objective = df_corpora_dev.loc[objective_corpora].to_dict()
-        report_eval_scalars(title='Objective Evaluation Results', row=row_objective)
+    if objective_corpora in cvDevDf.index:
+        row_cv = cvDevDf.loc[objective_corpora].to_dict()
     else:
-        logging.getLogger(__name__).warning(
-            'Requested objective_corpora "%s" not found in dev corpus index; available=%s',
-            objective_corpora,
-            list(df_corpora_dev.index),
-        )
+        row_cv = cvDevDf.iloc[0].to_dict()
+    utils.report_eval_scalars(logger=logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
+    if 'Precision_std' in row_cv:
+        utils.report_cv_std_scalars(logger=logger, row=row_cv, iteration=0)
+    row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
+    utils.report_eval_scalars(logger=logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
     if objective_corpora in df_corpora_test.index:
         row_objective_test = df_corpora_test.loc[objective_corpora].to_dict()
-        report_eval_scalars(title='Objective Test Evaluation Results', row=row_objective_test)
+        utils.report_eval_scalars(logger=logger, title='Objective Test Evaluation Results', row=row_objective_test, iteration=0)
     else:
         logging.getLogger(__name__).warning(
             'Requested objective_corpora "%s" not found in test corpus index; available=%s',
@@ -369,11 +503,9 @@ def evaluate_classification_model(
             )
         return pd.DataFrame(rows)
 
-    dev_predictions_df = build_predictions_dataframe(dataset=devData)
     test_predictions_df = build_predictions_dataframe(dataset=testData)
 
-    logger.report_table(title='Dev Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_dev)
-    logger.report_table(title='Dev Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_dev)
+    logger.report_table(title='Cross Validation Summary', series='Mean+Std', iteration=0, table_plot=cvDevDf)
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
@@ -382,18 +514,15 @@ def evaluate_classification_model(
     results_dir.mkdir(parents=True, exist_ok=True)
     excel_path = results_dir / f'final_evaluation_tables_{sanitized_config_name}.xlsx'
     with pd.ExcelWriter(excel_path) as writer:
-        df_corpora_dev.to_excel(excel_writer=writer, sheet_name='dev_corpora')
-        df_classes_dev.to_excel(excel_writer=writer, sheet_name='dev_classes')
+        cvDevDf.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
         df_corpora_test.to_excel(excel_writer=writer, sheet_name='test_corpora')
         df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
     logger.report_text(f'Saved final evaluation tables to {excel_path}')
 
-    task.upload_artifact('dev_corpora_dataframe', artifact_object=df_corpora_dev)
-    task.upload_artifact('dev_classes_dataframe', artifact_object=df_classes_dev)
+    task.upload_artifact('dev_corpora_dataframe', artifact_object=cvDevDf)
     task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
     task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
     task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
-    task.upload_artifact('dev_article_predictions', artifact_object=dev_predictions_df)
     task.upload_artifact('test_article_predictions', artifact_object=test_predictions_df)
     task.upload_artifact(
         'evaluation_thresholds',
@@ -409,11 +538,11 @@ def evaluate_classification_model(
     task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
 
     objective_metrics = (
-        df_corpora_dev.loc[objective_corpora].to_dict()
-        if objective_corpora in df_corpora_dev.index
-        else row_all
+        df_corpora_test.loc[objective_corpora].to_dict()
+        if objective_corpora in df_corpora_test.index
+        else row_all_test
     )
-    return df_corpora_dev, df_corpora_test, df_classes_test, objective_metrics
+    return cvDevDf, df_corpora_test, df_classes_test, objective_metrics
 
 
 @PipelineDecorator.pipeline(
@@ -434,19 +563,24 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     model_config = config_mapping['model']
     training_config = config_mapping['training']
     evaluation_config = config_mapping['evaluation']
+    cv_config = config_mapping.get('cv', {'folds': 5, 'random_seed': 43})
     logging_config = config_mapping['logging']
     objective_corpora = config_mapping['objective_corpora']
+    downsample_corpora = config_mapping.get('downsample_corpora', {})
     use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
 
-    _report_stage_message(
+    utils.log_stage(
         task=task,
-        message='Stage 1/5: Loading corpora and article-to-entity mapping',
+        message='Stage 1/6: Loading corpora and article-to-entity mapping',
         logging_config=logging_config,
     )
-    corpora, article_to_wdids = load_data(paths_config=paths_config)
-    _report_stage_message(
+    corpora, article_to_wdids = load_data(
+        paths_config=paths_config,
+        downsample_corpora=downsample_corpora,
+    )
+    utils.log_stage(
         task=task,
-        message='Stage 2/5: Preparing article embeddings (train/dev/test)',
+        message='Stage 2/6: Preparing article embeddings (train/dev/test)',
         logging_config=logging_config,
     )
     article_embedding_stats = prepare_article_embeddings(
@@ -456,12 +590,12 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
     task.upload_artifact('article_embedding_stats', artifact_object=dict(article_embedding_stats))
 
-    _report_stage_message(
+    utils.log_stage(
         task=task,
         message=(
-            'Stage 3/5: Preparing entity embeddings, linking, and building datasets'
+            'Stage 3/6: Preparing entity embeddings, linking, and building datasets'
             if use_entity_embeddings
-            else 'Stage 3/5: Building article-only datasets (entity embeddings disabled)'
+            else 'Stage 3/6: Building article-only datasets (entity embeddings disabled)'
         ),
         logging_config=logging_config,
     )
@@ -473,28 +607,51 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
     task.upload_artifact('entity_embedding_stats', artifact_object=dict(entity_embedding_stats))
 
-    _report_stage_message(
+    utils.log_stage(
         task=task,
-        message=f'Stage 4/5: Training classification model (feature_dim={feature_dim})',
+        message=f'Stage 4/6: Running mandatory {cv_config["folds"]}-fold cross-validation on train+dev',
         logging_config=logging_config,
     )
-    trained_model = train_classification_model(
+    cv_dev_df, best_model_config, best_training_config, cv_objective_metrics = run_cv(
         trainData=train_data,
         devData=dev_data,
         featureDim=feature_dim,
         model_config=model_config,
         training_config=training_config,
+        evaluation_config=evaluation_config,
+        cv_config=cv_config,
+        objective_corpora=objective_corpora,
+        logging_config=logging_config,
+    )
+    task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_objective_metrics))
+
+    utils.log_stage(
+        task=task,
+        message='Stage 5/6: Retraining final model on full train+dev (validation=test)',
+        logging_config=logging_config,
+    )
+    train_dev_data = utils.merge_datasets(left_data=train_data, right_data=dev_data)
+    final_training_config = dict(best_training_config)
+    final_training_config['validation_split_name'] = 'test'
+    
+    
+    trained_model = train_best(
+        train_data=train_dev_data,
+        test_data=test_data,
+        feature_dim=feature_dim,
+        best_model_config=best_model_config,
+        training_config=final_training_config,
         logging_config=logging_config,
     )
 
-    _report_stage_message(
+    utils.log_stage(
         task=task,
-        message='Stage 5/5: Evaluating model on dev and test',
+        message='Stage 6/6: Evaluating final model on test',
         logging_config=logging_config,
     )
-    df_corpora_dev, df_corpora_test, df_classes_test, objective_metrics = evaluate_classification_model(
+    df_corpora_dev, df_corpora_test, df_classes_test, objective_metrics = eval_final(
         trainedModel=trained_model,
-        devData=dev_data,
+        cvDevDf=cv_dev_df,
         testData=test_data,
         evaluation_config=evaluation_config,
         objective_corpora=objective_corpora,
@@ -504,14 +661,21 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     logger = task.get_logger()
     objective_row_name = f'All-{evaluation_config["averaging_type"]}'
     if objective_row_name in df_corpora_dev.index:
-        _report_eval_scalars(
+        utils.report_eval_scalars(
             logger=logger,
-            title='Dev Evaluation Results',
+            title='Cross Validation Results',
             row=df_corpora_dev.loc[objective_row_name].to_dict(),
             iteration=0,
         )
+    else:
+        utils.report_eval_scalars(
+            logger=logger,
+            title='Cross Validation Results',
+            row=df_corpora_dev.iloc[0].to_dict(),
+            iteration=0,
+        )
     if objective_row_name in df_corpora_test.index:
-        _report_eval_scalars(
+        utils.report_eval_scalars(
             logger=logger,
             title='Test Evaluation Results',
             row=df_corpora_test.loc[objective_row_name].to_dict(),
@@ -523,7 +687,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     task.upload_artifact('dev_corpora_dataframe', artifact_object=df_corpora_dev)
     task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
     task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
-    _report_stage_message(
+    utils.log_stage(
         task=task,
         message='Pipeline finished: metrics, tables, and artifacts uploaded',
         logging_config=logging_config,
