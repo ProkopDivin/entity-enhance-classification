@@ -13,6 +13,7 @@ dependencies = [
     'dill~=0.3',
     'numpy~=1.26',
     'pandas~=2.2',
+    'iterative-stratification~=0.1',
     'sentence-transformers~=3.0',
     'torch~=2.5',
     'geneea.catlib~=2.14.2',

@@ -96,7 +96,22 @@ Useful arguments:
   - `entities_origin_filtred`
   - `entities_chrono_global`
   - `entities_chrono_per_dataset`
+  - `downsample_nl_noordhollandsdagblad_033` (train/dev downsampling for `nl_noordhollandsdagblad`)
 - `--article-only`: deprecated alias for `--config-name article_only`
+
+Run the deterministic downsampling variant:
+
+```bash
+python3 -m iptc_entity_pipeline.run_pipeline --local --config-name downsample_nl_noordhollandsdagblad_033
+```
+
+Validation checklist for this variant:
+
+- Re-run the same command and verify logs report identical train/dev downsampling counts for
+  `nl_noordhollandsdagblad`.
+- Confirm `data/nl_noordhollandsdagblad_train.txt` and `data/nl_noordhollandsdagblad_dev.txt` exist after first run
+  and are reused on subsequent runs.
+- Confirm test split size stays unchanged, and logs still print `Downsampling skipped for test split by design`.
 
 ## What Is Reused vs New
 
@@ -115,8 +130,16 @@ New components added in this repository:
 - ClearML orchestration for the entity-enhanced input path
 
 
-Run new worker
+Run new worker(agent)
 
 ```sh
     env CLEARML_AGENT_SKIP_PIP_VENV_INSTALL=/home/prokop/Git/entity-enhance-classification/venv/bin/python  clearml-agent daemon --queue iptc_entity_tasks --detached
 ```
+
+### 3.A To kill agent use:
+   ```sh
+   clearml-agent daemon --stop
+   ```
+
+
+python3 -m iptc_entity_pipeline.run_pipeline --local --config-name article_only
