@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Create new train/dev/test splits from .jsonl.gz files:
+Create new train/test splits from .jsonl.gz files:
 - Global chronological split (all articles together)
 - Per-dataset chronological split (each dataset independently)
-Outputs jsonl.gz files. For per-dataset splits, creates train/test/dev files
-for all datasets, even if they have no articles with dates.
+Outputs jsonl.gz files. For both split types, creates train/test files for all
+datasets, even if they have no articles with dates.
 """
 import argparse
 import gzip
@@ -185,26 +185,23 @@ def read_all_articles(
 
 def create_chronological_splits(
     articles_with_dates: list[ArticleRecord],
-) -> Tuple[list[ArticleRecord], list[ArticleRecord], list[ArticleRecord]]:
+) -> Tuple[list[ArticleRecord], list[ArticleRecord]]:
     """
-    Create new train/dev/test splits based on date ordering (global).
+    Create new train/test splits based on date ordering (global).
 
     :param articles_with_dates: List of dated article records
-    :return: Tuple of (train_articles, dev_articles, test_articles)
+    :return: Tuple of (train_articles, test_articles)
     """
     # Sort by date (oldest first)
     sorted_articles = sorted(articles_with_dates, key=lambda article: article.date or datetime.min)
 
     total = len(sorted_articles)
-    train_size = int(total * 0.8)
-    test_size = int(total * 0.1)
-    dev_size = total - train_size - test_size
+    train_size = int(total * 0.9)
 
     train_articles = sorted_articles[:train_size]
-    dev_articles = sorted_articles[train_size : train_size + dev_size]
-    test_articles = sorted_articles[train_size + dev_size :]
+    test_articles = sorted_articles[train_size:]
 
-    return train_articles, dev_articles, test_articles
+    return train_articles, test_articles
 
 
 def create_per_dataset_splits(
@@ -218,21 +215,19 @@ def create_per_dataset_splits(
     Tuple[
         list[ArticleRecord],
         list[ArticleRecord],
-        list[ArticleRecord],
     ],
 ]:
     """
-    Create new train/dev/test splits per dataset based on date ordering.
+    Create new train/test splits per dataset based on date ordering.
     If dated articles already produce a non-empty test split, all undated
-    articles go to train. Otherwise, only ``nl_eventdna`` datasets use a
-    random 8/1/1 train/dev/test split for undated articles; other datasets
-    still place undated articles into train.
+    articles go to train. Otherwise, undated articles are randomly split
+    90/10 into train/test.
 
     :param articles_with_dates: List of dated article records
     :param articles_without_dates: List of undated article records
     :param all_datasets: Set of dataset names
     :param seed: Random seed for undated fallback split
-    :return: Dict mapping dataset name to (train_articles, dev_articles, test_articles)
+    :return: Dict mapping dataset name to (train_articles, test_articles)
     """
     articles_by_dataset = defaultdict(list)
     for article in articles_with_dates:
@@ -252,36 +247,84 @@ def create_per_dataset_splits(
         if dataset_articles:
             sorted_articles = sorted(dataset_articles, key=lambda article: article.date or datetime.min)
             total = len(sorted_articles)
-            train_size = int(total * 0.8)
-            test_size = int(total * 0.1)
-            dev_size = total - train_size - test_size
+            train_size = int(total * 0.9)
             train_articles = list(sorted_articles[:train_size])
-            dev_articles = list(sorted_articles[train_size : train_size + dev_size])
-            test_articles = list(sorted_articles[train_size + dev_size :])
+            test_articles = list(sorted_articles[train_size:])
         else:
             train_articles = []
-            dev_articles = []
             test_articles = []
 
         if test_articles:
             train_articles.extend(dataset_undated)
         elif dataset_undated:
-            if dataset.startswith("nl_eventdna"):
-                shuffled_undated = list(dataset_undated)
-                rng.shuffle(shuffled_undated)
-                undated_total = len(shuffled_undated)
-                undated_train_size = int(undated_total * 0.8)
-                undated_test_size = int(undated_total * 0.1)
-                undated_dev_size = undated_total - undated_train_size - undated_test_size
-                train_articles.extend(shuffled_undated[:undated_train_size])
-                dev_articles.extend(shuffled_undated[undated_train_size : undated_train_size + undated_dev_size])
-                test_articles.extend(shuffled_undated[undated_train_size + undated_dev_size :])
-            else:
-                train_articles.extend(dataset_undated)
+            shuffled_undated = list(dataset_undated)
+            rng.shuffle(shuffled_undated)
+            undated_total = len(shuffled_undated)
+            undated_train_size = int(undated_total * 0.9)
+            train_articles.extend(shuffled_undated[:undated_train_size])
+            test_articles.extend(shuffled_undated[undated_train_size:])
 
-        per_dataset_splits[dataset] = (train_articles, dev_articles, test_articles)
+        per_dataset_splits[dataset] = (train_articles, test_articles)
 
     return per_dataset_splits
+
+
+def load_downsample_ids(path: Path) -> set[str]:
+    """
+    Load article IDs from a plain-text file (one ID per line).
+
+    :param path: path to the IDs file
+    :return: set of stripped, non-empty IDs
+    """
+    with open(path, encoding="utf-8") as f:
+        ids = {line.strip() for line in f if line.strip()}
+    print(f"Loaded {len(ids):,} downsample IDs from {path}")
+    return ids
+
+
+_DOWNSAMPLE_DATASET = "nl_noordhollandsdagblad"
+
+
+def apply_downsample_filter(
+    articles_with_dates: list[ArticleRecord],
+    articles_without_dates: list[ArticleRecord],
+    downsample_ids: set[str],
+) -> tuple[list[ArticleRecord], list[ArticleRecord]]:
+    """
+    Keep only whitelisted articles for nl_noordhollandsdagblad_iptc; other datasets pass through.
+
+    :param articles_with_dates: dated articles
+    :param articles_without_dates: undated articles
+    :param downsample_ids: whitelist of article IDs to keep
+    :return: filtered (articles_with_dates, articles_without_dates)
+    """
+    before_dated = len(articles_with_dates)
+    before_undated = len(articles_without_dates)
+
+    articles_with_dates = [
+        a for a in articles_with_dates if a.dataset != _DOWNSAMPLE_DATASET or a.article_id in downsample_ids
+    ]
+    articles_without_dates = [
+        a for a in articles_without_dates if a.dataset != _DOWNSAMPLE_DATASET or a.article_id in downsample_ids
+    ]
+
+    after_dated = len(articles_with_dates)
+    after_undated = len(articles_without_dates)
+    print(
+        f"Downsample filter ({_DOWNSAMPLE_DATASET}): "
+        f"dated {before_dated} -> {after_dated}, undated {before_undated} -> {after_undated}"
+    )
+
+    found_ids = {a.article_id for a in articles_with_dates + articles_without_dates} & downsample_ids
+    missing_ids = downsample_ids - found_ids
+    if missing_ids:
+        print(
+            f"WARNING: {len(missing_ids):,}/{len(downsample_ids):,} IDs from downsample file "
+            f"were not found in any input article",
+            file=sys.stderr,
+        )
+
+    return articles_with_dates, articles_without_dates
 
 
 def write_split_file(articles: list[ArticleRecord], output_path: Path) -> None:
@@ -325,7 +368,7 @@ def main() -> None:
     """Main entry point for the script."""
     argparser = argparse.ArgumentParser(
         description=(
-            "Create new train/dev/test splits from .jsonl.gz files. "
+            "Create new train/test splits from .jsonl.gz files. "
             "Supports global chronological split (all articles together), "
             "or per-dataset chronological split (each dataset independently)."
         )
@@ -348,6 +391,16 @@ def main() -> None:
             '"per-dataset" (each dataset independently, default)'
         ),
     )
+    argparser.add_argument(
+        "--downsample-ids",
+        type=str,
+        default=None,
+        help=(
+            "Path to a plain-text file with one article ID per line. "
+            "Datasets that contain any of these IDs are downsampled to only those articles; "
+            "other datasets are unaffected."
+        ),
+    )
     args = argparser.parse_args()
 
     input_dir = Path(args.input)
@@ -366,25 +419,27 @@ def main() -> None:
     print(f"Found {len(articles_without_dates)} articles without dates")
     print(f"Found {len(all_datasets)} unique datasets")
 
-    split_type = args.split_type
+    if args.downsample_ids:
+        downsample_ids = load_downsample_ids(path=Path(args.downsample_ids))
+        articles_with_dates, articles_without_dates = apply_downsample_filter(
+            articles_with_dates=articles_with_dates,
+            articles_without_dates=articles_without_dates,
+            downsample_ids=downsample_ids,
+        )
+
+    split_type = args.split
 
     # Create global chronological splits
     if split_type == "global":
         print("\nCreating global chronological splits...")
-        train_articles, dev_articles, test_articles = create_chronological_splits(
-            articles_with_dates=articles_with_dates
-        )
+        train_articles, test_articles = create_chronological_splits(articles_with_dates=articles_with_dates)
 
         # Group articles by dataset within each split
         train_by_dataset: dict[str, list[ArticleRecord]] = defaultdict(list)
-        dev_by_dataset: dict[str, list[ArticleRecord]] = defaultdict(list)
         test_by_dataset: dict[str, list[ArticleRecord]] = defaultdict(list)
 
         for article in train_articles:
             train_by_dataset[article.dataset].append(article)
-
-        for article in dev_articles:
-            dev_by_dataset[article.dataset].append(article)
 
         for article in test_articles:
             test_by_dataset[article.dataset].append(article)
@@ -392,11 +447,9 @@ def main() -> None:
         # Write per-dataset files for all datasets (even if empty)
         for dataset in all_datasets:
             train_arts = train_by_dataset.get(dataset, [])
-            dev_arts = dev_by_dataset.get(dataset, [])
             test_arts = test_by_dataset.get(dataset, [])
 
             write_split_file(articles=train_arts, output_path=output_dir / f"{dataset}.train.analysis.jsonl.gz")
-            write_split_file(articles=dev_arts, output_path=output_dir / f"{dataset}.dev.analysis.jsonl.gz")
             write_split_file(articles=test_arts, output_path=output_dir / f"{dataset}.test.analysis.jsonl.gz")
 
     # Create per-dataset chronological splits
@@ -409,21 +462,17 @@ def main() -> None:
         )
 
         total_train = 0
-        total_dev = 0
         total_test = 0
 
-        for dataset, (train_arts, dev_arts, test_arts) in per_dataset_splits.items():
+        for dataset, (train_arts, test_arts) in per_dataset_splits.items():
             total_train += len(train_arts)
-            total_dev += len(dev_arts)
             total_test += len(test_arts)
 
             write_split_file(articles=train_arts, output_path=output_dir / f"{dataset}.train.analysis.jsonl.gz")
-            write_split_file(articles=dev_arts, output_path=output_dir / f"{dataset}.dev.analysis.jsonl.gz")
             write_split_file(articles=test_arts, output_path=output_dir / f"{dataset}.test.analysis.jsonl.gz")
 
         print("\nPer-dataset splits summary:")
         print(f"  Total train: {total_train} articles")
-        print(f"  Total dev: {total_dev} articles")
         print(f"  Total test: {total_test} articles")
         print(f"  Number of datasets: {len(per_dataset_splits)}")
 
