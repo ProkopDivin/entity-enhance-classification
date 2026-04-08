@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
-from iptc_entity_pipeline.data_loading import get_article_text
+from iptc_entity_pipeline.data_loading import get_article_text, get_doc_wdids
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.pooling import EntityPoolingStrategy
 
@@ -38,14 +37,14 @@ class FeatureBuilder:
         self,
         *,
         corpus: Any,
-        article_to_wdids: Mapping[str, list[str]],
         ensure_article_embeddings: bool = False,
     ) -> np.ndarray:
         """
         Build feature matrix for all docs in a corpus.
 
-        :param corpus: ``geneea.catlib.data.Corpus`` object.
-        :param article_to_wdids: Mapping ``article_id -> wdIds``.
+        Entity wdIds are read from ``doc.entities`` (attached :class:`LinkedEntity` objects).
+
+        :param corpus: ``geneea.catlib.data.Corpus`` object with entities attached to each doc.
         :param ensure_article_embeddings: If ``True``, precompute missing article embeddings for the corpus.
         :return: Feature matrix of shape ``[docs, article_dim + entity_dim]``.
         """
@@ -66,9 +65,9 @@ class FeatureBuilder:
                 article_text=get_article_text(doc),
                 article_doc=doc,
             )
-            wdids = article_to_wdids.get(doc.id, [])
+            wdids = get_doc_wdids(doc)
             if not wdids:
-                LOGGER.warning('No linked entities for article_id=%s (article missing in article_to_wdids mapping)', doc.id)
+                LOGGER.warning('No linked entities for article_id=%s', doc.id)
             unique_requested_wdids.update(wdids)
             entity_embeddings = []
             missing_wdids: list[str] = []

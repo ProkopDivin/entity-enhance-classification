@@ -11,10 +11,9 @@ DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
 class PathsConfig:
     """Filesystem paths for data and artifacts."""
 
-    train_csv: str = f'{DATA_ROOT}/origin-corpora/all-corpora-train.csv'
-    dev_csv: str = f'{DATA_ROOT}/origin-corpora/all-corpora-dev.csv'
-    test_csv: str = f'{DATA_ROOT}/origin-corpora/all-corpora-test.csv'
-    article_entities_tsv: str = f'{DATA_ROOT}/article_2_entities.tsv'
+    train_csv: str = f'{DATA_ROOT}/gold-chrono-per-dataset/all-corpora-train-entities.csv'
+    test_csv: str = f'{DATA_ROOT}/gold-chrono-per-dataset/all-corpora-test-entities.csv'
+    wdid_mapping_tsv: str = f'{DATA_ROOT}/gold-chrono-per-dataset/wdId_mapping.tsv'
     article_embeddings_dir: str = f'{DATA_ROOT}/article_embeddings'
     entity_embeddings_dir: str = f'{DATA_ROOT}/entity_embeddings/WikidataProject'
     downsampling_order_cache_json: str = f'{DATA_ROOT}/downsampling_order_cache.json'
@@ -101,6 +100,7 @@ class BaseConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
+    debug: bool = True
 
     def to_clearml_mapping(self) -> dict[str, Any]:
         """Convert dataclasses to serializable mapping."""
@@ -113,9 +113,8 @@ def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
     paths = config.paths
     resolved_paths = PathsConfig(
         train_csv=str(root_path / paths.train_csv),
-        dev_csv=str(root_path / paths.dev_csv),
         test_csv=str(root_path / paths.test_csv),
-        article_entities_tsv=str(root_path / paths.article_entities_tsv),
+        wdid_mapping_tsv=str(root_path / paths.wdid_mapping_tsv),
         article_embeddings_dir=str(root_path / paths.article_embeddings_dir),
         entity_embeddings_dir=str(root_path / paths.entity_embeddings_dir),
         downsampling_order_cache_json=str(root_path / paths.downsampling_order_cache_json),
@@ -131,6 +130,7 @@ def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
         logging=config.logging,
         objective_corpora=config.objective_corpora,
         downsample_corpora=config.downsample_corpora,
+        debug=config.debug,
     )
 
 
@@ -155,19 +155,19 @@ def to_article_only_config(config: BaseConfig) -> BaseConfig:
 
 def _with_corpora_dir(config: BaseConfig, corpora_dir_name: str) -> BaseConfig:
     """
-    Return a config variant with train/dev/test CSVs from selected corpora directory.
+    Return a config variant with train/test CSVs from selected corpora directory.
 
     :param config: Base config to adapt.
     :param corpora_dir_name: Subdirectory under ``DATA_ROOT`` containing corpora CSV files.
-    :return: Config with updated corpora CSV paths.
+    :return: Config with updated corpora CSV and wdId mapping paths.
     """
     return replace(
         config,
         paths=replace(
             config.paths,
-            train_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-train.csv',
-            dev_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-dev.csv',
-            test_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-test.csv',
+            train_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-train-entities.csv',
+            test_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-test-entities.csv',
+            wdid_mapping_tsv=f'{DATA_ROOT}/{corpora_dir_name}/wdId_mapping.tsv',
         ),
     )
 
@@ -185,7 +185,7 @@ def to_article_config_filtred_dataset(config: BaseConfig, corpora_dir: str) -> B
 
 def to_downsample_nl_noordhollandsdagblad_033(config: BaseConfig) -> BaseConfig:
     """
-    Return config variant with train/dev downsampling for ``nl_noordhollandsdagblad``.
+    Return config variant with train downsampling for ``nl_noordhollandsdagblad``.
 
     :param config: Base config to adapt.
     :return: Config with deterministic per-corpus downsampling enabled.
@@ -201,12 +201,12 @@ def get_config(config_name: str) -> BaseConfig:
     Return config variant by name.
 
     Supported names:
-    - ``base``: entity-enhanced default setup.
+    - ``base``: entity-enhanced default setup (gold-chrono-per-dataset).
     - ``article_only``: article embeddings only (entity embeddings disabled).
     - ``entities_origin_filtred``: entity-enhanced with ``origin-corpora-filtred`` inputs.
     - ``entities_chrono_global``: entity-enhanced with ``chrono-corpora-global`` inputs.
     - ``entities_chrono_per_dataset``: entity-enhanced with ``chrono-corpora-per-dataset`` inputs.
-    - ``downsample_nl_noordhollandsdagblad_033``: downsample ``nl_noordhollandsdagblad`` train/dev to 33%.
+    - ``downsample_nl_noordhollandsdagblad_033``: downsample ``nl_noordhollandsdagblad`` train to 33%.
 
     :param config_name: Config variant name.
     :return: Selected config object.

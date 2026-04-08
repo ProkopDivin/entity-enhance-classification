@@ -14,7 +14,7 @@ if __package__ is None or __package__ == '':
     if str(src_root) not in sys.path:
         sys.path.insert(0, str(src_root))
 
-from iptc_entity_pipeline.clearml_pipeline import run_local_pipeline
+from iptc_entity_pipeline.clearml_pipeline import run_pipeline
 from iptc_entity_pipeline.config import get_config, list_config_names
 
 LOGGER = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ def main() -> None:
     config_name = 'article_only' if args.article_only else args.config_name
     config = get_config(config_name=config_name)
     LOGGER.info('Using config: %s', config_name)
-    run_local_pipeline(config=config, config_name=config_name)
+    run_pipeline(config=config, config_name=config_name, is_local=args.local)
     LOGGER.info('Pipeline execution finished.')
 
 

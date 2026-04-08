@@ -50,7 +50,14 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-
+.npy
+.pt
+.ptl
+.ptz
+.ptzl
+.ptzl
+.ptzl
+.ptzl
 # Translations
 *.mo
 *.pot
@@ -158,6 +165,9 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+.json
+.jsonl
+.jsonl.gz
 
 # Pyre type checker
 .pyre/
@@ -200,6 +210,9 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+.json
+.jsonl
+.jsonl.gz
 
 # Marimo
 marimo/_static/
