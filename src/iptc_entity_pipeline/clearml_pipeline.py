@@ -12,7 +12,13 @@ from clearml.automation.controller import PipelineDecorator
 import iptc_entity_pipeline.utils as utils
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
 from iptc_entity_pipeline.config import BaseConfig, resolve_paths
-from iptc_entity_pipeline.data_loading import get_article_text, load_and_normalize_corpora, load_article_wdids
+from iptc_entity_pipeline.data_loading import (
+    attach_entities_to_corpus,
+    get_article_text,
+    get_doc_wdids,
+    load_and_normalize_corpora,
+    load_wdid_mapping,
+)
 from iptc_entity_pipeline.dataset_builder import build_embedding_dataset, build_multilabel_targets
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.feature_builder import FeatureBuilder
@@ -23,7 +29,7 @@ from iptc_entity_pipeline.pooling import SumEntityPooling
 
 
 @PipelineDecorator.component(
-    return_values=['corpora', 'articleToWdids'],
+    return_values=['corpora'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
@@ -31,17 +37,18 @@ def load_data(
     paths_config: Mapping[str, Any],
     downsample_corpora: Mapping[str, float] | None = None,
 ):
-    """Load normalized corpora and article-to-wdIds mapping."""
+    """Load normalized corpora with linked entities attached to each document."""
     corpora = load_and_normalize_corpora(
         train_csv=paths_config['train_csv'],
-        dev_csv=paths_config['dev_csv'],
         test_csv=paths_config['test_csv'],
         removed_cat_ids=paths_config['removed_cat_ids'],
         downsample_corpora=downsample_corpora or {},
         downsampling_order_cache_json=paths_config.get('downsampling_order_cache_json'),
     )
-    article_to_wdids = load_article_wdids(article_entities_tsv=paths_config['article_entities_tsv'])
-    return corpora, article_to_wdids
+    wdid_mapping = load_wdid_mapping(wdid_mapping_tsv=paths_config['wdid_mapping_tsv'])
+    attach_entities_to_corpus(corpus=corpora.train, csv_path=paths_config['train_csv'], wdid_mapping=wdid_mapping)
+    attach_entities_to_corpus(corpus=corpora.test, csv_path=paths_config['test_csv'], wdid_mapping=wdid_mapping)
+    return corpora
 
 
 @PipelineDecorator.component(
@@ -64,14 +71,10 @@ def prepare_article_embeddings(
         embedding_dim=embedding_config['article_embedding_dim'],
     )
 
-    # Keep explicit per-corpus calls for visibility in logs and progress reporting.
     train_stats = article_provider.recompute_embeddings(corpus=corpora.train)
-    dev_stats = article_provider.recompute_embeddings(corpus=corpora.dev)
     test_stats = article_provider.recompute_embeddings(corpus=corpora.test)
-    total_docs = int(train_stats['total_docs'] + dev_stats['total_docs'] + test_stats['total_docs'])
-    total_computed = int(
-        train_stats['computed_docs'] + dev_stats['computed_docs'] + test_stats['computed_docs']
-    )
+    total_docs = int(train_stats['total_docs'] + test_stats['total_docs'])
+    total_computed = int(train_stats['computed_docs'] + test_stats['computed_docs'])
     logger.info(
         'Article embedding preparation progress: %s/%s articles (computed_missing=%s, cached_or_present=%s)',
         total_docs,
@@ -81,7 +84,6 @@ def prepare_article_embeddings(
     )
     return {
         'train': dict(train_stats),
-        'dev': dict(dev_stats),
         'test': dict(test_stats),
         'total_docs': total_docs,
         'total_computed': total_computed,
@@ -90,13 +92,12 @@ def prepare_article_embeddings(
 
 
 @PipelineDecorator.component(
-    return_values=['trainData', 'devData', 'testData', 'featureDim', 'entityEmbeddingStats'],
+    return_values=['trainData', 'testData', 'featureDim', 'entityEmbeddingStats'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
 def link_embeddings_and_build_datasets(
     corpora,
-    articleToWdids,
     paths_config: Mapping[str, Any],
     embedding_config: Mapping[str, Any],
 ):
@@ -146,10 +147,8 @@ def link_embeddings_and_build_datasets(
 
         logger.info('Entity embeddings disabled by config; running article-only feature pipeline')
         x_train = build_article_only_matrix(split_corpus=corpora.train, split_name='train')
-        x_dev = build_article_only_matrix(split_corpus=corpora.dev, split_name='dev')
         x_test = build_article_only_matrix(split_corpus=corpora.test, split_name='test')
         train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
-        dev_data = build_embedding_dataset(corpus=corpora.dev, x_matrix=x_dev)
         test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
         feature_dim = int(x_train.shape[1])
         entity_embedding_stats = {
@@ -159,12 +158,12 @@ def link_embeddings_and_build_datasets(
             'found_embeddings': 0,
             'missing_embeddings': 0,
         }
-        return train_data, dev_data, test_data, feature_dim, entity_embedding_stats
+        return train_data, test_data, feature_dim, entity_embedding_stats
 
     unique_wdids: set[str] = set()
-    for corpus in [corpora.train, corpora.dev, corpora.test]:
+    for corpus in [corpora.train, corpora.test]:
         for doc in corpus:
-            unique_wdids.update(articleToWdids.get(doc.id, []))
+            unique_wdids.update(get_doc_wdids(doc))
 
     found_cnt = 0
     missing_cnt = 0
@@ -190,30 +189,21 @@ def link_embeddings_and_build_datasets(
     logger.info('Building linked features for train corpus (%s articles)', len(corpora.train))
     x_train = builder.build_features_for_corpus(
         corpus=corpora.train,
-        article_to_wdids=articleToWdids,
-        ensure_article_embeddings=False,
-    )
-    logger.info('Building linked features for dev corpus (%s articles)', len(corpora.dev))
-    x_dev = builder.build_features_for_corpus(
-        corpus=corpora.dev,
-        article_to_wdids=articleToWdids,
         ensure_article_embeddings=False,
     )
     logger.info('Building linked features for test corpus (%s articles)', len(corpora.test))
     x_test = builder.build_features_for_corpus(
         corpus=corpora.test,
-        article_to_wdids=articleToWdids,
         ensure_article_embeddings=False,
     )
 
     train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
-    dev_data = build_embedding_dataset(corpus=corpora.dev, x_matrix=x_dev)
     test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
     actual_entity_dim = int(entity_store.infer_embedding_dim())
     if entity_dim != actual_entity_dim:
         raise ValueError(f'Entity embedding dimension mismatch: expected={entity_dim}, actual={actual_entity_dim}')
-    return train_data, dev_data, test_data, feature_dim, entity_embedding_stats
+    return train_data, test_data, feature_dim, entity_embedding_stats
 
 
 @PipelineDecorator.component(
@@ -259,7 +249,6 @@ def train_classification_model(
 )
 def run_cv(
     trainData,
-    devData,
     featureDim: int,
     model_config: Mapping[str, Any],
     training_config: Mapping[str, Any],
@@ -267,8 +256,9 @@ def run_cv(
     cv_config: Mapping[str, Any],
     objective_corpora: str,
     logging_config: Mapping[str, Any],
+    debug: bool = False,
 ):
-    """Run mandatory CV over train+dev and select best hyperparameter combination."""
+    """Run mandatory CV over train and select best hyperparameter combination."""
     import pandas as pd
     from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 
@@ -276,12 +266,11 @@ def run_cv(
     logger = task.get_logger()
     cv_folds = int(cv_config['folds'])
     cv_random_seed = int(cv_config['random_seed'])
-    full_data = utils.merge_datasets(left_data=trainData, right_data=devData)
-    x_full = utils.to_numpy_array(matrix_like=full_data.X)
+    x_full = utils.to_numpy_array(matrix_like=trainData.X)
     y_full = (
-        utils.to_numpy_array(matrix_like=full_data.Y)
-        if hasattr(full_data, 'Y')
-        else build_multilabel_targets(corpus=full_data.corpus)
+        utils.to_numpy_array(matrix_like=trainData.Y)
+        if hasattr(trainData, 'Y')
+        else build_multilabel_targets(corpus=trainData.corpus)
     )
     eval_cfg = utils.get_eval_config(evaluation_config=evaluation_config)
     combinations = utils.iter_param_grid(
@@ -289,9 +278,11 @@ def run_cv(
         training_config=training_config,
     )
     msg = (
-        f'Running mandatory {cv_folds}-fold cross-validation on train+dev with '
+        f'Running mandatory {cv_folds}-fold cross-validation on train with '
         f'{len(combinations)} hyperparameter combinations'
     )
+    if debug:
+        msg += ' (debug mode: first fold only)'
     logger.report_text(msg)
     fold_rows: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
@@ -309,8 +300,8 @@ def run_cv(
             'F1': [],
         }
         for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
-            fit_data = utils.slice_dataset(dataset=full_data, indices=fit_indices.tolist())
-            val_data = utils.slice_dataset(dataset=full_data, indices=val_indices.tolist())
+            fit_data = utils.slice_dataset(dataset=trainData, indices=fit_indices.tolist())
+            val_data = utils.slice_dataset(dataset=trainData, indices=val_indices.tolist())
             model = utils.train_model(
                 train_data=fit_data,
                 dev_data=val_data,
@@ -347,6 +338,9 @@ def run_cv(
                     'F1': float(objective_row['F1']),
                 }
             )
+            if debug:
+                logger.report_text(f'Debug mode enabled, stopping CV after first fold for trial_id={combo_idx}')
+                break
 
         trial_row = {
             'trial_id': combo_idx,
@@ -416,9 +410,9 @@ def run_cv(
     return cv_dev_df, best_model_config, best_training_config, objective_metrics
 
 @PipelineDecorator.component(
-    return_values=['devCorporaDf', 'testCorporaDf', 'testClassesDf', 'objectiveMetrics'],
+    return_values=['trainedModel'],
     execution_queue='iptc_entity_tasks',
-    task_type=TaskTypes.testing,
+    task_type=TaskTypes.training,
 )
 def train_best(
     train_data,
@@ -568,19 +562,20 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     objective_corpora = config_mapping['objective_corpora']
     downsample_corpora = config_mapping.get('downsample_corpora', {})
     use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
+    debug = bool(config_mapping.get('debug', False))
 
     utils.log_stage(
         task=task,
         message='Stage 1/6: Loading corpora and article-to-entity mapping',
         logging_config=logging_config,
     )
-    corpora, article_to_wdids = load_data(
+    corpora = load_data(
         paths_config=paths_config,
         downsample_corpora=downsample_corpora,
     )
     utils.log_stage(
         task=task,
-        message='Stage 2/6: Preparing article embeddings (train/dev/test)',
+        message='Stage 2/6: Preparing article embeddings (train/test)',
         logging_config=logging_config,
     )
     article_embedding_stats = prepare_article_embeddings(
@@ -599,9 +594,8 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         ),
         logging_config=logging_config,
     )
-    train_data, dev_data, test_data, feature_dim, entity_embedding_stats = link_embeddings_and_build_datasets(
+    train_data, test_data, feature_dim, entity_embedding_stats = link_embeddings_and_build_datasets(
         corpora=corpora,
-        articleToWdids=article_to_wdids,
         paths_config=paths_config,
         embedding_config=embedding_config,
     )
@@ -609,12 +603,11 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
 
     utils.log_stage(
         task=task,
-        message=f'Stage 4/6: Running mandatory {cv_config["folds"]}-fold cross-validation on train+dev',
+        message=f'Stage 4/6: Running mandatory {cv_config["folds"]}-fold cross-validation on train',
         logging_config=logging_config,
     )
     cv_dev_df, best_model_config, best_training_config, cv_objective_metrics = run_cv(
         trainData=train_data,
-        devData=dev_data,
         featureDim=feature_dim,
         model_config=model_config,
         training_config=training_config,
@@ -622,21 +615,18 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         cv_config=cv_config,
         objective_corpora=objective_corpora,
         logging_config=logging_config,
+        debug=debug,
     )
     task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_objective_metrics))
 
     utils.log_stage(
         task=task,
-        message='Stage 5/6: Retraining final model on full train+dev (validation=test)',
+        message='Stage 5/6: Training final model on full train (validation=test)',
         logging_config=logging_config,
     )
-    train_dev_data = utils.merge_datasets(left_data=train_data, right_data=dev_data)
     final_training_config = dict(best_training_config)
-    final_training_config['validation_split_name'] = 'test'
-    
-    
     trained_model = train_best(
-        train_data=train_dev_data,
+        train_data=train_data,
         test_data=test_data,
         feature_dim=feature_dim,
         best_model_config=best_model_config,
@@ -694,21 +684,25 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
 
 
-def run_local_pipeline(
+def run_pipeline(
     config: Optional[BaseConfig] = None,
     config_name: str = 'base',
+    is_local: bool = False,
 ) -> Tuple[BaseConfig, Mapping[str, Any]]:
     """
     Resolve config and execute the ClearML pipeline locally.
 
     :param config: Optional custom pipeline config.
     :param config_name: Name of selected config variant.
+    :param is_local: Run pipeline steps locally instead of dispatching to a queue.
     :return: Tuple of resolved config and mapping passed to ClearML.
     """
     pipeline_config = config or BaseConfig()
     resolved_config = resolve_paths(config=pipeline_config, root_dir=Path.cwd())
     config_mapping = asdict(resolved_config)
     config_mapping['config_name'] = config_name
+    if is_local:
+        PipelineDecorator.run_locally()
     run_training_pipeline(config_mapping=config_mapping)
     return resolved_config, config_mapping
 

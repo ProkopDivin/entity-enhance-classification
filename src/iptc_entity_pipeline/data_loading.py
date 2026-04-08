@@ -8,11 +8,23 @@ import json
 import logging
 import random
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from iptc_entity_pipeline.utils import DocWithEntities
+
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LinkedEntity:
+    """Resolved entity linked to a corpus article."""
+
+    gkb_id: str
+    wd_ids: tuple[str, ...]
+    relevance: float
 
 
 def _require_geneea():
@@ -29,7 +41,6 @@ def _require_geneea():
 def load_and_normalize_corpora(
     *,
     train_csv: str,
-    dev_csv: str,
     test_csv: str,
     removed_cat_ids: Iterable[str],
     downsample_corpora: Mapping[str, float] | None = None,
@@ -39,13 +50,13 @@ def load_and_normalize_corpora(
     Load and normalize corpora similarly to the reference pipeline.
 
     :param train_csv: Training CSV path.
-    :param dev_csv: Development CSV path.
     :param test_csv: Test CSV path.
     :param removed_cat_ids: Category IDs to remove after normalization.
     :param downsample_corpora: Optional mapping ``corpus_name -> keep_ratio`` for train/dev downsampling.
     :param downsampling_order_cache_json: Optional path used to resolve persisted per-corpus order files.
-    :return: ``CorpusGroup`` instance with normalized categories.
+    :return: ``CorpusGroup`` with synchronized train/test category space.
     """
+    _ensure_csv_field_limit()
     Corpus, CorpusGroup, iptc = _require_geneea()
     iptc_cats = iptc.IptcTopics.load()
     removed_cat_ids_set = frozenset(removed_cat_ids)
@@ -83,11 +94,12 @@ def load_and_normalize_corpora(
         return Corpus(new_docs())
 
     train = norm_corpus(Corpus.fromCsv(train_csv))
-    dev = norm_corpus(Corpus.fromCsv(dev_csv))
     test = norm_corpus(Corpus.fromCsv(test_csv))
 
     downsample_mapping = {corpus_name: float(ratio) for corpus_name, ratio in (downsample_corpora or {}).items()}
-    cache_dir = _resolve_downsampling_cache_dir(cache_path=Path(downsampling_order_cache_json) if downsampling_order_cache_json else None)
+    cache_dir = _resolve_downsampling_cache_dir(
+        cache_path=Path(downsampling_order_cache_json) if downsampling_order_cache_json else None,
+    )
     if downsample_mapping:
         if cache_dir is None:
             LOGGER.warning('Downsampling cache path is not configured; order files will not be persisted')
@@ -98,17 +110,11 @@ def load_and_normalize_corpora(
             cache_dir=cache_dir,
             corpus_factory=Corpus,
         )
-        dev = _downsample_split_corpus(
-            corpus=dev,
-            split_name='dev',
-            downsample_corpora=downsample_mapping,
-            cache_dir=cache_dir,
-            corpus_factory=Corpus,
-        )
         LOGGER.info('Downsampling skipped for test split by design')
 
-    LOGGER.info('Loaded corpora: train=%s dev=%s test=%s', len(train), len(dev), len(test))
-    return CorpusGroup(train=train, dev=dev, test=test)
+    corpora = CorpusGroup(train=train, test=test)
+    LOGGER.info('Loaded corpora: train=%s test=%s cat_count=%s', len(corpora.train), len(corpora.test), corpora.catCnt)
+    return corpora
 
 
 def _stable_seed_from_keys(*, split_name: str, corpus_name: str) -> int:
@@ -246,47 +252,95 @@ def _ensure_csv_field_limit() -> None:
             field_limit = field_limit // 10
 
 
-def load_article_entities(*, article_entities_tsv: str) -> dict[str, list[dict]]:
+def load_wdid_mapping(*, wdid_mapping_tsv: str) -> dict[str, list[str]]:
     """
-    Parse article-to-entity mapping and return all entities per article.
+    Parse wdId mapping TSV into gkbId to wdId lookup.
 
-    :param article_entities_tsv: Path to ``article_2_entities.tsv``.
-    :return: Mapping ``article_id -> list[entity_dict]``.
+    :param wdid_mapping_tsv: Path to ``wdId_mapping.tsv`` with columns ``gkb_id`` and ``wikidata_ids``.
+    :return: Mapping ``gkbId -> list[wdId]``.
     """
-    mapping: dict[str, list[dict]] = {}
-    path = Path(article_entities_tsv)
-    _ensure_csv_field_limit()
-
+    mapping: dict[str, list[str]] = {}
+    path = Path(wdid_mapping_tsv)
     with path.open(mode='r', encoding='utf-8', newline='') as in_file:
         reader = csv.DictReader(in_file, delimiter='\t')
         for row in reader:
-            article_id = row.get('article_id')
-            entities_json = row.get('entities')
-            if not article_id or not entities_json:
+            gkb_id = (row.get('gkb_id') or '').strip()
+            wikidata_ids = (row.get('wikidata_ids') or '').strip()
+            if not gkb_id:
                 continue
-            try:
-                entities = json.loads(entities_json)
-            except json.JSONDecodeError:
-                LOGGER.warning('Skipping malformed entities JSON for article_id=%s', article_id)
-                continue
-            if isinstance(entities, list):
-                mapping[article_id] = entities
-    LOGGER.info('Loaded entity mapping for %s articles', len(mapping))
+            wdids = [wid.strip() for wid in wikidata_ids.split('|') if wid.strip()] if wikidata_ids else []
+            mapping[gkb_id] = wdids
+    LOGGER.info('Loaded wdId mapping for %s gkb entities', len(mapping))
     return mapping
 
 
-def load_article_wdids(*, article_entities_tsv: str) -> dict[str, list[str]]:
+def attach_entities_to_corpus(
+    *,
+    corpus: Any,
+    csv_path: str,
+    wdid_mapping: Mapping[str, Sequence[str]],
+) -> None:
     """
-    Parse article to entity mapping and keep only entities with ``wdId``.
+    Parse entities from CSV and attach resolved :class:`LinkedEntity` objects to each doc.
 
-    :param article_entities_tsv: Path to ``article_2_entities.tsv``.
-    :return: Mapping ``article_id -> list[wdId]``.
+    Sets ``doc.entities`` to a list of :class:`LinkedEntity` for every document in the
+    corpus. Documents not present in the CSV get an empty list.
+
+    :param corpus: Corpus whose documents will be enriched in-place.
+    :param csv_path: Path to a corpus CSV containing an ``entities`` JSON column.
+    :param wdid_mapping: Pre-loaded gkbId-to-wdId mapping from :func:`load_wdid_mapping`.
     """
-    all_entities = load_article_entities(article_entities_tsv=article_entities_tsv)
-    return {
-        article_id: [ent['wdId'] for ent in entities if isinstance(ent, Mapping) and ent.get('wdId')]
-        for article_id, entities in all_entities.items()
-    }
+    _ensure_csv_field_limit()
+    article_entities: dict[str, list[LinkedEntity]] = {}
+    path = Path(csv_path)
+    with path.open(mode='r', encoding='utf-8', newline='') as in_file:
+        reader = csv.DictReader(in_file)
+        for row in reader:
+            article_id = (row.get('id') or '').strip()
+            entities_json = (row.get('entities') or '').strip()
+            if not article_id or not entities_json:
+                continue
+            try:
+                raw_entities = json.loads(entities_json)
+            except json.JSONDecodeError:
+                LOGGER.warning('Skipping malformed entities JSON for article_id=%s', article_id)
+                continue
+            linked: list[LinkedEntity] = []
+            if isinstance(raw_entities, list):
+                for ent in raw_entities:
+                    if not isinstance(ent, Mapping):
+                        continue
+                    gkb_id = ent.get('gkbId', '')
+                    if not gkb_id:
+                        continue
+                    wd_ids = tuple(wdid_mapping.get(gkb_id, ()))
+                    relevance = float(ent.get('relevance', 0.0))
+                    linked.append(LinkedEntity(gkb_id=gkb_id, wd_ids=wd_ids, relevance=relevance))
+            if linked:
+                article_entities[article_id] = linked
+
+    attached = 0
+    for i, doc in enumerate(corpus.docs):
+        enriched = DocWithEntities.from_doc(doc=doc, entities=article_entities.get(doc.id, []))
+        corpus.docs[i] = enriched
+        if enriched.entities:
+            attached += 1
+    LOGGER.info(
+        'Attached entities to corpus: %s/%s articles have entities (from %s)',
+        attached,
+        len(corpus),
+        csv_path,
+    )
+
+
+def get_doc_wdids(doc: Any) -> list[str]:
+    """
+    Extract flat wdId list from ``doc.entities``.
+
+    :param doc: Corpus document with attached :class:`LinkedEntity` objects.
+    :return: List of all wdIds across the document's linked entities.
+    """
+    return [wd_id for ent in getattr(doc, 'entities', []) for wd_id in ent.wd_ids]
 
 
 def get_article_text(doc: Any) -> str:

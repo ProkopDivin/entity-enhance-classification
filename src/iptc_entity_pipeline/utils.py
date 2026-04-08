@@ -7,11 +7,23 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import torch
 from clearml import Task
+from geneea.catlib.data import Doc  # type: ignore
 
 from iptc_entity_pipeline.dataset_builder import build_embedding_dataset
 from iptc_entity_pipeline.legacy_reuse import createClassificationModel, trainClassificationModel
 
 LOGGER = logging.getLogger(__name__)
+
+
+class DocWithEntities(Doc):
+    """Doc subclass allowing a mutable ``entities`` attribute."""
+
+    @classmethod
+    def from_doc(cls, *, doc: Doc, entities: Sequence[Any]) -> 'DocWithEntities':
+        """Create enriched doc copy with attached entities."""
+        enriched = cls._make(doc)
+        enriched.entities = list(entities)
+        return enriched
 
 
 def report_eval_scalars(*, logger: Any, title: str, row: Mapping[str, Any], iteration: int = 0) -> None:
