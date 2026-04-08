@@ -27,6 +27,10 @@ def load_entities_dict(entities_path: Path) -> dict[str, list]:
     try:
         with open(entities_path, mode="r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f, delimiter="\t")
+            if not reader.fieldnames:
+                print(f"Error: TSV header missing in {entities_path}", file=sys.stderr)
+                sys.exit(1)
+
             if "article_id" not in reader.fieldnames or "entities" not in reader.fieldnames:
                 print(
                     f"Error: TSV file must have 'article_id' and 'entities' columns. Found: {reader.fieldnames}",
@@ -61,7 +65,10 @@ def load_entities_dict(entities_path: Path) -> dict[str, list]:
 
 
 def add_entities_to_csv(
-    input_csv_path: Path, output_csv_path: Path, entities_dict: dict[str, list], id_column: str
+    input_csv_path: Path,
+    output_csv_path: Path,
+    entities_dict: dict[str, list],
+    id_column: str,
 ) -> None:
     """
     Add entities column to CSV file.
@@ -72,8 +79,12 @@ def add_entities_to_csv(
     :param id_column: Name of the column containing article IDs
     """
     try:
-        with open(input_csv_path, mode="r", encoding="utf-8", newline="") as f_in:
+        with open(input_csv_path, mode='r', encoding='latin-1', newline='') as f_in:
             reader = csv.DictReader(f_in)
+            if not reader.fieldnames:
+                print(f'Error: CSV header missing in {input_csv_path}', file=sys.stderr)
+                sys.exit(1)
+
             fieldnames = list(reader.fieldnames)
 
             if id_column not in fieldnames:
@@ -81,8 +92,8 @@ def add_entities_to_csv(
                 sys.exit(1)
 
             # Add entities column if it doesn't exist
-            if "entities" not in fieldnames:
-                fieldnames.append("entities")
+            if 'entities' not in fieldnames:
+                fieldnames.append('entities')
             else:
                 print("Warning: 'entities' column already exists. It will be overwritten.", file=sys.stderr)
 
@@ -90,31 +101,35 @@ def add_entities_to_csv(
             rows_with_entities = 0
             rows_without_entities = 0
 
-            with open(output_csv_path, mode="w", encoding="utf-8", newline="") as f_out:
-                writer = csv.DictWriter(f_out, fieldnames=fieldnames)
-                writer.writeheader()
+            # Keep behavior simple and safe even for in-place output:
+            # read all rows first, then write.
+            updated_rows: list[dict[str, str]] = []
+            for row in reader:
+                rows_processed += 1
+                article_id = row.get(id_column, '').strip()
 
-                for row in reader:
-                    rows_processed += 1
-                    article_id = row.get(id_column, "").strip()
+                if article_id in entities_dict:
+                    entities = entities_dict[article_id]
+                    rows_with_entities += 1
+                else:
+                    entities = []
+                    rows_without_entities += 1
 
-                    if article_id in entities_dict:
-                        entities = entities_dict[article_id]
-                        rows_with_entities += 1
-                    else:
-                        entities = []
-                        rows_without_entities += 1
+                # Serialize entities as JSON string
+                row['entities'] = json.dumps(entities, ensure_ascii=False)
+                updated_rows.append(row)
 
-                    # Serialize entities as JSON string
-                    row["entities"] = json.dumps(entities, ensure_ascii=False)
-                    writer.writerow(row)
+        with open(output_csv_path, mode='w', encoding='utf-8', newline='') as f_out:
+            writer = csv.DictWriter(f_out, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(updated_rows)
 
-        print(f"Processed {rows_processed} rows")
-        print(f"  - {rows_with_entities} rows with matching entities")
-        print(f"  - {rows_without_entities} rows without matching entities")
-        print(f"Output written to: {output_csv_path}")
-    except OSError as e:
-        print(f"Error processing CSV file: {e}", file=sys.stderr)
+        print(f'Processed {rows_processed} rows')
+        print(f'  - {rows_with_entities} rows with matching entities')
+        print(f'  - {rows_without_entities} rows without matching entities')
+        print(f'Output written to: {output_csv_path}')
+    except (OSError, UnicodeDecodeError) as e:
+        print(f'Error processing CSV file: {e}', file=sys.stderr)
         sys.exit(1)
 
 
