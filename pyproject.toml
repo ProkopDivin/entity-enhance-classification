@@ -17,9 +17,6 @@ dependencies = [
     'sentence-transformers~=3.0',
     'torch~=2.5',
     'geneea.catlib~=2.14.2',
-<<<<<<< HEAD
-    'geneea.mediacats~=2.21',
-=======
     'geneea.mediacats~=2.22.0',
     'geneea.evaluation~=1.37.0',
     'geneea.core~=1.14.2',
