@@ -455,13 +455,11 @@ def evaluateModel(
         statistics: Dict[str, List],
         data_count: int,
         stats: ClassData | AvgData,
-        f_beta: float = 0.4,
         digits: int = 3,
     ) -> None:
         statistics['Data Count'].append(data_count)
         statistics['Precision'].append(round(stats.precision, digits))
         statistics['Recall'].append(round(stats.recall, digits))
-        statistics['F04'].append(round(stats.fmeasure(beta=f_beta), digits))
         statistics['F1'].append(round(stats.fmeasure(beta=1), digits))
 
     def update_labels(
@@ -509,7 +507,6 @@ def evaluateModel(
             'Data Count': [],
             'Precision': [],
             'Recall': [],
-            'F04': [],
             'F1': [],
             'Docs No Labels': [],
             'Decent Labels': [],
@@ -526,7 +523,7 @@ def evaluateModel(
                         f'length of subData is {len(subData)} but it should be equal to length of predCatsSc {len(predCatsSc)}'
                     )
                 count, stats, zeroLabelDocsSc, decentLabelsSc = prepare_stats(subData, predCatsSc, averagingType)
-                update_statistics(statistics, count, stats, f_beta=0.4, digits=3)
+                update_statistics(statistics, count, stats, digits=3)
                 update_labels(statistics, zeroLabelDocsSc, predCatsSc, decentLabelsSc)
 
         goldVals = [d.cats for d in evalCorpus]
@@ -562,7 +559,7 @@ def evaluateModel(
         predCats = [filterLabels(dc, thr=thr, thrByLabel=catToThr, keepWgh=False) for dc in predWghCats]
         predCats = normalizeCategories(predCats)
 
-        statistics = {'Data Count': [], 'Precision': [], 'Recall': [], 'F04': [], 'F1': []}
+        statistics = {'Data Count': [], 'Precision': [], 'Recall': [], 'F1': []}
         categoryNames = []
         if perClass:
             categories = evalCorpus.catList
