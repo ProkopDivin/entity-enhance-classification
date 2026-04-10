@@ -30,7 +30,6 @@ def report_eval_scalars(*, logger: Any, title: str, row: Mapping[str, Any], iter
     """Report shared eval metrics to ClearML scalar charts."""
     logger.report_scalar(title=title, series='Precision', value=row['Precision'], iteration=iteration)
     logger.report_scalar(title=title, series='Recall', value=row['Recall'], iteration=iteration)
-    logger.report_scalar(title=title, series='F04', value=row['F04'], iteration=iteration)
     logger.report_scalar(title=title, series='F1', value=row['F1'], iteration=iteration)
 
 
@@ -52,12 +51,6 @@ def report_cv_std_scalars(*, logger: Any, row: Mapping[str, Any], iteration: int
         title='Dev Cross Validation Std',
         series='Recall_std',
         value=float(row['Recall_std']),
-        iteration=iteration,
-    )
-    logger.report_scalar(
-        title='Dev Cross Validation Std',
-        series='F04_std',
-        value=float(row['F04_std']),
         iteration=iteration,
     )
     logger.report_scalar(

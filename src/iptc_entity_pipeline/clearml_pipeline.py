@@ -296,7 +296,6 @@ def run_cv(
         fold_scores: dict[str, list[float]] = {
             'Precision': [],
             'Recall': [],
-            'F04': [],
             'F1': [],
         }
         for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
@@ -334,7 +333,6 @@ def run_cv(
                     'learning_rate': combo_training_config['learning_rate'],
                     'Precision': float(objective_row['Precision']),
                     'Recall': float(objective_row['Recall']),
-                    'F04': float(objective_row['F04']),
                     'F1': float(objective_row['F1']),
                 }
             )
@@ -353,8 +351,6 @@ def run_cv(
             'Precision_std': float(np.std(fold_scores['Precision'])),
             'Recall_mean': float(np.mean(fold_scores['Recall'])),
             'Recall_std': float(np.std(fold_scores['Recall'])),
-            'F04_mean': float(np.mean(fold_scores['F04'])),
-            'F04_std': float(np.std(fold_scores['F04'])),
             'F1_mean': float(np.mean(fold_scores['F1'])),
             'F1_std': float(np.std(fold_scores['F1'])),
         }
@@ -371,11 +367,9 @@ def run_cv(
             {
                 'Precision': best_trial['Precision_mean'],
                 'Recall': best_trial['Recall_mean'],
-                'F04': best_trial['F04_mean'],
                 'F1': best_trial['F1_mean'],
                 'Precision_std': best_trial['Precision_std'],
                 'Recall_std': best_trial['Recall_std'],
-                'F04_std': best_trial['F04_std'],
                 'F1_std': best_trial['F1_std'],
             }
         ],
@@ -402,8 +396,6 @@ def run_cv(
         'Precision_std': float(best_trial['Precision_std']),
         'Recall_mean': float(best_trial['Recall_mean']),
         'Recall_std': float(best_trial['Recall_std']),
-        'F04_mean': float(best_trial['F04_mean']),
-        'F04_std': float(best_trial['F04_std']),
         'F1_mean': float(best_trial['F1_mean']),
         'F1_std': float(best_trial['F1_std']),
     }
