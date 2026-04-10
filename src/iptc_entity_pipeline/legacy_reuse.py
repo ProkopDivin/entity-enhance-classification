@@ -525,7 +525,12 @@ def evaluateModel(
                 count, stats, zeroLabelDocsSc, decentLabelsSc = prepare_stats(subData, predCatsSc, averagingType)
                 update_statistics(statistics, count, stats, digits=3)
                 update_labels(statistics, zeroLabelDocsSc, predCatsSc, decentLabelsSc)
-
+        
+        for stat in statistics.keys():
+            statistics[stat].append(pd.Series(statistics[stat], dtype=float).mean())
+        corporaNames.append('All-macro')
+            
+        macroStats = {}
         goldVals = [d.cats for d in evalCorpus]
         avgStats, microStats, indivStats = evalutil.multiStats(goldVals=goldVals, predVals=predCats)
         decentLabels = [name for name, stats in indivStats.items() if isDecentLabel(stats)]
@@ -537,9 +542,6 @@ def evaluateModel(
         for cat in indivStats:
             classData = indivStats[cat]
             macroStats.update(prec=classData.precision, recall=classData.recall)
-        update_statistics(statistics, avgStats.cnt, macroStats)
-        update_labels(statistics, zeroLabelDocs, predCats, decentLabels)
-        corporaNames.append('All-macro')
         update_statistics(statistics, avgStats.cnt, avgStats)
         update_labels(statistics, zeroLabelDocs, predCats, decentLabels)
         corporaNames.append('All-datapoint')

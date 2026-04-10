@@ -183,6 +183,22 @@ def to_article_config_filtred_dataset(config: BaseConfig, corpora_dir: str) -> B
     return _with_corpora_dir(config=config, corpora_dir_name=corpora_dir)
 
 
+def to_debug_config(config: BaseConfig) -> BaseConfig:
+    """
+    Return a minimal config variant for fast local debugging.
+
+    :param config: Base config to adapt.
+    :return: Config pointing to ``data/debug`` with reduced training parameters.
+    """
+    config = _with_corpora_dir(config=config, corpora_dir_name='debug')
+    return replace(
+        config,
+        training=replace(config.training, epochs=5),
+        cv=replace(config.cv, folds=2),
+        debug=True,
+    )
+
+
 def to_downsample_nl_noordhollandsdagblad_033(config: BaseConfig) -> BaseConfig:
     """
     Return config variant with train downsampling for ``nl_noordhollandsdagblad``.
@@ -201,6 +217,7 @@ def get_config(config_name: str) -> BaseConfig:
     Return config variant by name.
 
     Supported names:
+    - ``debug``: minimal config loading from ``data/debug`` for fast local testing.
     - ``base``: entity-enhanced default setup (gold-chrono-per-dataset).
     - ``article_only``: article embeddings only (entity embeddings disabled).
     - ``entities_origin_filtred``: entity-enhanced with ``origin-corpora-filtred`` inputs.
@@ -213,6 +230,8 @@ def get_config(config_name: str) -> BaseConfig:
     :raises ValueError: If ``config_name`` is unknown.
     """
     name = config_name.strip().lower()
+    if name == 'debug':
+        return to_debug_config(config=BaseConfig())
     if name == 'base':
         return BaseConfig()
     if name == 'article_only':
@@ -237,6 +256,7 @@ def list_config_names() -> tuple[str, ...]:
     :return: Tuple of supported config names.
     """
     return (
+        'debug',
         'base',
         'article_only',
         'entities_origin_filtred',
