@@ -26,6 +26,19 @@ class TrainingResult:
     epochs_run: int
     train_loss_per_epoch: tuple[float, ...]
     dev_loss_per_epoch: tuple[float, ...]
+    train_f1_per_epoch: tuple[float, ...]
+    dev_f1_per_epoch: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class CvFoldCurves:
+    """Per-epoch train/dev curves for one CV fold."""
+
+    fold_id: int
+    train_loss_per_epoch: tuple[float, ...]
+    dev_loss_per_epoch: tuple[float, ...]
+    train_f1_per_epoch: tuple[float, ...]
+    dev_f1_per_epoch: tuple[float, ...]
 
 
 def combo_params_json(*, model_config: Mapping[str, Any], training_config: Mapping[str, Any]) -> str:
@@ -40,56 +53,57 @@ def combo_params_json(*, model_config: Mapping[str, Any], training_config: Mappi
     return json.dumps(payload, sort_keys=True)
 
 
-def report_cv_loss_curve_charts(
+def report_cv_fold_curve_charts(
     *,
     logger: Any,
-    train_losses: Sequence[float],
-    dev_losses: Sequence[float],
+    fold_curves: Sequence[CvFoldCurves],
 ) -> None:
-    """Report the two best-model loss charts expected on the CV step (no per-epoch scalar spam)."""
-    n = len(dev_losses)
-    if n == 0:
+    """Report loss and F1 curves for folds of the best CV configuration."""
+    if not fold_curves:
         return
 
     def scatter_xy(data: Sequence[float]) -> Any:
-        return np.hstack([np.atleast_2d(np.arange(0, len(data))).T, np.atleast_2d(list(data)).T])
+        epochs = np.arange(1, len(data) + 1)
+        return np.column_stack((epochs, np.asarray(list(data), dtype=float)))
 
-    logger.report_scatter2d(
-        title='Best model: train vs test loss',
-        series='training loss',
-        iteration=n,
-        scatter=scatter_xy(train_losses),
-        xaxis='epoch',
-        yaxis='loss',
-        mode='lines+markers',
-    )
-    logger.report_scatter2d(
-        title='Best model: train vs test loss',
-        series='test loss',
-        iteration=n,
-        scatter=scatter_xy(dev_losses),
-        xaxis='epoch',
-        yaxis='loss',
-        mode='lines+markers',
-    )
-    logger.report_scatter2d(
-        title='Best hyperparameters: train vs dev loss',
-        series='train loss',
-        iteration=n,
-        scatter=scatter_xy(train_losses),
-        xaxis='epoch',
-        yaxis='loss',
-        mode='lines+markers',
-    )
-    logger.report_scatter2d(
-        title='Best hyperparameters: train vs dev loss',
-        series='dev loss',
-        iteration=n,
-        scatter=scatter_xy(dev_losses),
-        xaxis='epoch',
-        yaxis='loss',
-        mode='lines+markers',
-    )
+    for fold_curve in fold_curves:
+        iteration = fold_curve.fold_id
+        logger.report_scatter2d(
+            title='Cross Validation Fold Loss',
+            series=f'train fold {fold_curve.fold_id}',
+            iteration=iteration,
+            scatter=scatter_xy(fold_curve.train_loss_per_epoch),
+            xaxis='epoch',
+            yaxis='loss',
+            mode='lines+markers',
+        )
+        logger.report_scatter2d(
+            title='Cross Validation Fold Loss',
+            series=f'dev fold {fold_curve.fold_id}',
+            iteration=iteration,
+            scatter=scatter_xy(fold_curve.dev_loss_per_epoch),
+            xaxis='epoch',
+            yaxis='loss',
+            mode='lines+markers',
+        )
+        logger.report_scatter2d(
+            title='Cross Validation Fold F1',
+            series=f'train fold {fold_curve.fold_id}',
+            iteration=iteration,
+            scatter=scatter_xy(fold_curve.train_f1_per_epoch),
+            xaxis='epoch',
+            yaxis='f1',
+            mode='lines+markers',
+        )
+        logger.report_scatter2d(
+            title='Cross Validation Fold F1',
+            series=f'dev fold {fold_curve.fold_id}',
+            iteration=iteration,
+            scatter=scatter_xy(fold_curve.dev_f1_per_epoch),
+            xaxis='epoch',
+            yaxis='f1',
+            mode='lines+markers',
+        )
 
 
 class DocWithEntities(Doc):
@@ -116,22 +130,28 @@ def log_stage(*, task: Task, message: str, logging_config: Mapping[str, Any]) ->
     task.get_logger().report_text(message, print_console=bool(logging_config['print_logs']))
 
 
-def report_cv_std_scalars(*, logger: Any, row: Mapping[str, Any], iteration: int = 0) -> None:
+def report_cv_std_scalars(
+    *,
+    logger: Any,
+    row: Mapping[str, Any],
+    title: str = 'Cross Validation Results',
+    iteration: int = 0,
+) -> None:
     """Report standard deviations from CV objective metrics."""
     logger.report_scalar(
-        title='Dev Cross Validation Std',
+        title=title,
         series='Precision_std',
         value=float(row['Precision_std']),
         iteration=iteration,
     )
     logger.report_scalar(
-        title='Dev Cross Validation Std',
+        title=title,
         series='Recall_std',
         value=float(row['Recall_std']),
         iteration=iteration,
     )
     logger.report_scalar(
-        title='Dev Cross Validation Std',
+        title=title,
         series='F1_std',
         value=float(row['F1_std']),
         iteration=iteration,
@@ -139,9 +159,9 @@ def report_cv_std_scalars(*, logger: Any, row: Mapping[str, Any], iteration: int
 
 
 def report_cv_outputs(*, task: Task, logger: Any, trials_df: Any, folds_df: Any, cv_dev_df: Any) -> None:
-    """Report CV tables (Folds + best summary only) and upload all frames as artifacts."""
+    """Report CV tables and upload all frames as artifacts."""
     logger.report_table(title='Cross Validation', series='Folds', iteration=0, table_plot=folds_df)
-    logger.report_table(title='Cross Validation', series='Best Dev Mean+Std', iteration=0, table_plot=cv_dev_df)
+    logger.report_table(title='Cross Validation', series='Cross Validation Results', iteration=0, table_plot=trials_df)
     task.upload_artifact('cv_trials_dataframe', artifact_object=trials_df)
     task.upload_artifact('cv_folds_dataframe', artifact_object=folds_df)
     task.upload_artifact('cv_dev_summary_dataframe', artifact_object=cv_dev_df)
@@ -312,11 +332,18 @@ def train_model(
     model_config: Mapping[str, Any],
     training_config: Mapping[str, Any],
     logging_config: Mapping[str, Any],
-) -> tuple[Any, float]:
+) -> TrainingResult:
     """Create and train the classification model on given fit/dev datasets.
 
     :return: Tuple of trained model and final dev loss.
     """
+    def calc_f1_curve(*, precision_curve: Sequence[float], recall_curve: Sequence[float]) -> tuple[float, ...]:
+        f1_values: list[float] = []
+        for precision, recall in zip(precision_curve, recall_curve):
+            denom = precision + recall
+            f1_values.append(0.0 if denom == 0.0 else float((2.0 * precision * recall) / denom))
+        return tuple(f1_values)
+
     if hasattr(train_data, 'Y'):
         out_dim = int(to_numpy_array(matrix_like=train_data.Y).shape[1])
     else:
@@ -328,13 +355,22 @@ def train_model(
         textVectorizer='not None',
         logConfig={'PRINT_LOGS': bool(logging_config['print_logs'])},
     )
-    model, final_dev_loss, epochs_run, train_losses, dev_losses = trainClassificationModel(
+    (
+        model,
+        final_dev_loss,
+        epochs_run,
+        train_precisions,
+        train_recalls,
+        train_losses,
+        dev_precisions,
+        dev_recalls,
+        dev_losses,
+    ) = trainClassificationModel(
         model=model,
         trainData=train_data,
         devData=dev_data,
         trainingConfig=train_payload(training_config=training_config),
         logConfig={'PRINT_LOGS': bool(logging_config['print_logs'])},
-        quiet=quiet,
     )
     return TrainingResult(
         model=model,
@@ -342,6 +378,8 @@ def train_model(
         epochs_run=epochs_run,
         train_loss_per_epoch=tuple(train_losses),
         dev_loss_per_epoch=tuple(dev_losses),
+        train_f1_per_epoch=calc_f1_curve(precision_curve=train_precisions, recall_curve=train_recalls),
+        dev_f1_per_epoch=calc_f1_curve(precision_curve=dev_precisions, recall_curve=dev_recalls),
     )
 
 
