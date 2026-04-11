@@ -279,6 +279,24 @@ def trainClassificationModel(
 
         for i, st in enumerate([dev_precision, dev_recall, dev_loss]):
             dev_stats[i].append(st)
+        logger.report_scalar(
+            title=f'{validation_title_name} Training Stats',
+            series='Precision',
+            value=dev_precision,
+            iteration=t,
+        )
+        logger.report_scalar(
+            title=f'{validation_title_name} Training Stats',
+            series='Recall',
+            value=dev_recall,
+            iteration=t,
+        )
+        logger.report_scalar(
+            title=f'{validation_title_name} Training Stats',
+            series='Loss',
+            value=dev_loss,
+            iteration=t,
+        )
 
         if es_patience > 0:
             if best_dev_loss is None or _is_better_loss(current_loss=dev_loss, best_loss=best_dev_loss):
@@ -314,6 +332,9 @@ def trainClassificationModel(
         last_time = time.time()
         for i, st in enumerate([train_precision, train_recall, train_loss]):
             train_stats[i].append(st)
+        logger.report_scalar(title='Train Training Stats', series='Precision', value=train_precision, iteration=t)
+        logger.report_scalar(title='Train Training Stats', series='Recall', value=train_recall, iteration=t)
+        logger.report_scalar(title='Train Training Stats', series='Loss', value=train_loss, iteration=t)
 
         if es_patience > 0 and epochs_without_improvement >= es_patience:
             logger.report_text(
@@ -364,7 +385,9 @@ def evaluateModel(
     evalData: EmbeddingDataset,
     evaluationConfig: Mapping[str, Any],
     customThresholds: Optional[Mapping[str, float]] = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    *,
+    returnPredictions: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame] | Tuple[pd.DataFrame, pd.DataFrame, Any]:
     """
     Legacy evaluation implementation copied from original pipeline.
 
@@ -372,7 +395,8 @@ def evaluateModel(
     :param evalData: Evaluation dataset.
     :param evaluationConfig: Evaluation settings.
     :param customThresholds: Optional per-label thresholds.
-    :return: Corpora-level and class-level evaluation tables.
+    :param returnPredictions: Whether to also return raw prediction scores.
+    :return: Corpora/class tables, optionally with raw prediction scores.
     """
     from geneea.catlib.model.model import LabelT, WghLabels, filterLabels
     from geneea.evaluation import utils as evalutil
@@ -549,4 +573,6 @@ def evaluateModel(
         catToThr=customThresholds,
         perClass=evaluationConfig['perClass'],
     )
+    if returnPredictions:
+        return dfCorpora, dfClasses, predictions
     return dfCorpora, dfClasses

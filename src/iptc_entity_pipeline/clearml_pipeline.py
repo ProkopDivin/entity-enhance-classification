@@ -463,6 +463,8 @@ def eval_final(
     evaluation_config: Mapping[str, Any],
     objective_corpora: str,
     config_name: str,
+    config_mapping: Mapping[str, Any],
+    feature_dim: int,
 ):
     """Evaluate final model on test and persist CV dev summary with mean/std."""
     import pandas as pd
@@ -471,11 +473,12 @@ def eval_final(
     task = Task.current_task()
     logger = task.get_logger()
     eval_cfg = utils.get_eval_config(evaluation_config=evaluation_config)
-    df_corpora_test, df_classes_test = evaluateModel(
+    df_corpora_test, df_classes_test, pred_scores = evaluateModel(
         model=trainedModel,
         evalData=testData,
         evaluationConfig=eval_cfg,
         customThresholds=None,
+        returnPredictions=True,
     )
 
     objective_row_name = f'All-{eval_cfg["averagingType"]}'
@@ -507,12 +510,10 @@ def eval_final(
         )
 
     def build_predictions_dataframe(*, dataset) -> pd.DataFrame:
-        pred_wgh = trainedModel.classifyDataset(
-            dataset,
-            thr=eval_cfg['thresholdPredict'],
-            returnScores=True,
-        )
-        pred_labels = [filterLabels(dc, thr=eval_cfg['thresholdEval'], thrByLabel=None, keepWgh=False) for dc in pred_wgh]
+        pred_labels = [
+            filterLabels(dc, thr=eval_cfg['thresholdEval'], thrByLabel=None, keepWgh=False)
+            for dc in pred_scores
+        ]
         rows = []
         for doc, pred in zip(dataset.corpus, pred_labels):
             rows.append(
@@ -541,11 +542,21 @@ def eval_final(
         df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
     logger.report_text(f'Saved final evaluation tables to {excel_path}')
 
+    save_paths = utils.save_final_model_outputs(
+        model=trainedModel,
+        test_data=testData,
+        pred_scores=pred_scores,
+        config_mapping=config_mapping,
+        config_name=config_name,
+        feature_dim=feature_dim,
+    )
+
     task.upload_artifact('dev_corpora_dataframe', artifact_object=cvDevDf)
     task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
     task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
     task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
     task.upload_artifact('test_article_predictions', artifact_object=test_predictions_df)
+    task.upload_artifact('saved_model_paths', artifact_object=dict(save_paths))
     task.upload_artifact(
         'evaluation_thresholds',
         artifact_object={
@@ -674,6 +685,8 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         evaluation_config=evaluation_config,
         objective_corpora=objective_corpora,
         config_name=config_name,
+        config_mapping=config_mapping,
+        feature_dim=feature_dim,
     )
 
     logger = task.get_logger()
