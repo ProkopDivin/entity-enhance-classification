@@ -60,7 +60,9 @@ def trainClassificationModel(
     devData: EmbeddingDataset,
     trainingConfig: Dict[str, Any],
     logConfig: Dict[str, Any],
-) -> NeuralCategModel:
+    *,
+    quiet: bool = False,
+) -> Tuple[NeuralCategModel, float, int, List[float], List[float]]:
     """
     Legacy training loop kept equivalent to original pipeline.
 
@@ -69,7 +71,7 @@ def trainClassificationModel(
     :param devData: Development dataset.
     :param trainingConfig: Training configuration.
     :param logConfig: Logging configuration.
-    :return: Trained model.
+    :return: Tuple of trained model and final dev loss.
     """
     import logging
     import time
@@ -323,7 +325,7 @@ def trainClassificationModel(
             print_console=logConfig['PRINT_LOGS'],
         )
         last_time = time.time()
-        dev_precision, dev_recall, dev_loss = validation(model, dev_loader, loss_fn)
+        dev_precision, dev_recall, dev_loss = validation(model, dev_loader, loss_fn, logInfo=not minimal)
         logger.report_text(
             f'time {validation_split_name} validation done: {time.time() - last_time}',
             level=logging.INFO,
@@ -386,7 +388,7 @@ def trainClassificationModel(
         last_time = time.time()
         for i, st in enumerate([train_precision, train_recall, train_loss]):
             train_stats[i].append(st)
-        logger.report_scalar(title='Train Training Stats', series='Precision', value=train_precision, iteration=t)
+        logger.rt_scalar(title='Train Training Stats', series='Precision', value=train_precision, iteration=t)
         logger.report_scalar(title='Train Training Stats', series='Recall', value=train_recall, iteration=t)
         logger.report_scalar(title='Train Training Stats', series='Loss', value=train_loss, iteration=t)
 
@@ -407,14 +409,18 @@ def trainClassificationModel(
             print_console=logConfig['PRINT_LOGS'],
         )
 
-    logger.report_text(
-        f'time: {time.time() - start_training_time}',
-        level=logging.INFO,
-        print_console=logConfig['PRINT_LOGS'],
-    )
+     logger.report_text(
+         f'time: {time.time() - start_training_time}',
+         level=logging.INFO,
+         print_console=logConfig['PRINT_LOGS'],
+     )
     model._nn.eval()
     makePlots(train_stats, dev_stats)
-    return model
+    final_dev_loss = best_dev_loss if best_dev_loss is not None else (dev_stats[2][-1] if dev_stats[2] else 0.0)
+    epochs_run = len(dev_stats[2]) if dev_stats[2] else 0
+    train_losses = list(train_stats[2]) if train_stats[2] else []
+    dev_losses = list(dev_stats[2]) if dev_stats[2] else []
+    return model, final_dev_loss, epochs_run, train_losses, dev_losses
 
 
 def evaluateModel(
@@ -608,4 +614,3 @@ def evaluateModel(
         perClass=evaluationConfig['perClass'],
     )
     return dfCorpora, dfClasses
-
