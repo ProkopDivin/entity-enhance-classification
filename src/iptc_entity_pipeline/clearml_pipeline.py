@@ -1,5 +1,6 @@
 """ClearML pipeline orchestration for entity-enhanced IPTC training."""
 
+import json
 import logging
 from dataclasses import asdict
 from pathlib import Path
@@ -232,7 +233,7 @@ def train_classification_model(
             'learning_rate': float(training_config['learning_rate'][0]),
         }
     )
-    return utils.train_model(
+    result = utils.train_model(
         train_data=trainData,
         dev_data=devData,
         feature_dim=featureDim,
@@ -240,6 +241,7 @@ def train_classification_model(
         training_config=scalar_training_config,
         logging_config=logging_config,
     )
+    return result.model
 
 
 @PipelineDecorator.component(
@@ -277,23 +279,22 @@ def run_cv(
         model_config=model_config,
         training_config=training_config,
     )
-    msg = (
-        f'Running mandatory {cv_folds}-fold cross-validation on train with '
-        f'{len(combinations)} hyperparameter combinations'
-    )
-    if debug:
-        msg += ' (debug mode: first fold only)'
-    logger.report_text(msg)
     fold_rows: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
     best_trial: dict[str, Any] | None = None
     for combo_idx, (combo_model_config, combo_training_config) in enumerate(combinations, start=1):
+        params_json = utils.combo_params_json(
+            model_config=combo_model_config,
+            training_config=combo_training_config,
+        )
         cv_splitter = MultilabelStratifiedKFold(
             n_splits=cv_folds,
             shuffle=True,
             random_state=cv_random_seed,
         )
         fold_scores: dict[str, list[float]] = {
+            'Loss': [],
+            'epochs': [],
             'Precision': [],
             'Recall': [],
             'F1': [],
@@ -301,7 +302,7 @@ def run_cv(
         for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
             fit_data = utils.slice_dataset(dataset=trainData, indices=fit_indices.tolist())
             val_data = utils.slice_dataset(dataset=trainData, indices=val_indices.tolist())
-            model = utils.train_model(
+            train_result = utils.train_model(
                 train_data=fit_data,
                 dev_data=val_data,
                 feature_dim=featureDim,
@@ -309,50 +310,55 @@ def run_cv(
                 training_config=combo_training_config,
                 logging_config=logging_config,
             )
+            model = train_result.model
+            dev_loss = train_result.final_dev_loss
             df_corpora_fold, _ = evaluateModel(
                 model=model,
                 evalData=val_data,
                 evaluationConfig=eval_cfg,
                 customThresholds=None,
+                connect_evaluation_config=False,
             )
-            objective_row = utils.get_obj_row(
-                df_corpora=df_corpora_fold,
-                objective_corpora=objective_corpora,
-                averaging_type=eval_cfg['averagingType'],
+            micro_row = (
+                df_corpora_fold.loc['All-micro'].to_dict()
+                if 'All-micro' in df_corpora_fold.index
+                else utils.get_obj_row(
+                    df_corpora=df_corpora_fold,
+                    objective_corpora=objective_corpora,
+                    averaging_type=eval_cfg['averagingType'],
+                )
             )
-            for metric_name in fold_scores:
-                fold_scores[metric_name].append(float(objective_row[metric_name]))
+            fold_scores['Loss'].append(dev_loss)
+            fold_scores['epochs'].append(float(train_result.epochs_run))
+            for metric_name in ('Precision', 'Recall', 'F1'):
+                fold_scores[metric_name].append(float(micro_row[metric_name]))
             fold_rows.append(
                 {
                     'trial_id': combo_idx,
                     'fold_id': fold_idx,
-                    'hidden_dim': combo_model_config['hidden_dim'],
-                    'dropouts1': combo_model_config['dropouts1'],
-                    'dropouts2': combo_model_config['dropouts2'],
-                    'batch_size': combo_training_config['batch_size'],
-                    'learning_rate': combo_training_config['learning_rate'],
-                    'Precision': float(objective_row['Precision']),
-                    'Recall': float(objective_row['Recall']),
-                    'F1': float(objective_row['F1']),
+                    'params': params_json,
+                    'epochs': float(train_result.epochs_run),
+                    'Loss': dev_loss,
+                    'Precision': float(micro_row['Precision']),
+                    'Recall': float(micro_row['Recall']),
+                    'F1': float(micro_row['F1']),
                 }
             )
             if debug:
-                logger.report_text(f'Debug mode enabled, stopping CV after first fold for trial_id={combo_idx}')
                 break
 
         trial_row = {
             'trial_id': combo_idx,
-            'hidden_dim': combo_model_config['hidden_dim'],
-            'dropouts1': combo_model_config['dropouts1'],
-            'dropouts2': combo_model_config['dropouts2'],
-            'batch_size': combo_training_config['batch_size'],
-            'learning_rate': combo_training_config['learning_rate'],
+            'params': params_json,
+            'epochs': float(np.mean(fold_scores['epochs'])),
+            'Loss_mean': float(np.mean(fold_scores['Loss'])),
+            'Loss_std': float(np.std(fold_scores['Loss'])),
+            'F1_mean': float(np.mean(fold_scores['F1'])),
+            'F1_std': float(np.std(fold_scores['F1'])),
             'Precision_mean': float(np.mean(fold_scores['Precision'])),
             'Precision_std': float(np.std(fold_scores['Precision'])),
             'Recall_mean': float(np.mean(fold_scores['Recall'])),
             'Recall_std': float(np.std(fold_scores['Recall'])),
-            'F1_mean': float(np.mean(fold_scores['F1'])),
-            'F1_std': float(np.std(fold_scores['F1'])),
         }
         trial_rows.append(trial_row)
         if best_trial is None or trial_row['F1_mean'] > best_trial['F1_mean']:
@@ -362,15 +368,20 @@ def run_cv(
         raise ValueError('No CV trial results were produced.')
     trials_df = pd.DataFrame(trial_rows).sort_values(by='F1_mean', ascending=False).reset_index(drop=True)
     folds_df = pd.DataFrame(fold_rows)
+    best_params = json.loads(best_trial['params'])
     cv_dev_df = pd.DataFrame(
         [
             {
+                'params': best_trial['params'],
+                'epochs': best_trial['epochs'],
                 'Precision': best_trial['Precision_mean'],
                 'Recall': best_trial['Recall_mean'],
                 'F1': best_trial['F1_mean'],
+                'Loss': best_trial['Loss_mean'],
                 'Precision_std': best_trial['Precision_std'],
                 'Recall_std': best_trial['Recall_std'],
                 'F1_std': best_trial['F1_std'],
+                'Loss_std': best_trial['Loss_std'],
             }
         ],
         index=[objective_corpora],
@@ -380,25 +391,52 @@ def run_cv(
     utils.report_cv_outputs(task=task, logger=logger, trials_df=trials_df, folds_df=folds_df, cv_dev_df=cv_dev_df)
 
     best_model_config = {
-        'hidden_dim': int(best_trial['hidden_dim']),
-        'dropouts1': float(best_trial['dropouts1']),
-        'dropouts2': float(best_trial['dropouts2']),
+        'hidden_dim': int(best_params['hidden_dim']),
+        'dropouts1': float(best_params['dropouts1']),
+        'dropouts2': float(best_params['dropouts2']),
     }
     best_training_config = dict(training_config)
     best_training_config.update(
         {
-            'batch_size': int(best_trial['batch_size']),
-            'learning_rate': float(best_trial['learning_rate']),
+            'batch_size': int(best_params['batch_size']),
+            'learning_rate': float(best_params['learning_rate']),
         }
     )
     objective_metrics = {
+        'Loss_mean': float(best_trial['Loss_mean']),
+        'Loss_std': float(best_trial['Loss_std']),
         'Precision_mean': float(best_trial['Precision_mean']),
         'Precision_std': float(best_trial['Precision_std']),
         'Recall_mean': float(best_trial['Recall_mean']),
         'Recall_std': float(best_trial['Recall_std']),
         'F1_mean': float(best_trial['F1_mean']),
         'F1_std': float(best_trial['F1_std']),
+        'epochs': float(best_trial['epochs']),
     }
+
+    n_refit_splits = max(2, min(10, len(x_full)))
+    refit_splitter = MultilabelStratifiedKFold(
+        n_splits=n_refit_splits,
+        shuffle=True,
+        random_state=cv_random_seed,
+    )
+    refit_train_idx, refit_val_idx = next(refit_splitter.split(x_full, y_full))
+    refit_fit = utils.slice_dataset(dataset=trainData, indices=refit_train_idx.tolist())
+    refit_val = utils.slice_dataset(dataset=trainData, indices=refit_val_idx.tolist())
+    curve_result = utils.train_model(
+        train_data=refit_fit,
+        dev_data=refit_val,
+        feature_dim=featureDim,
+        model_config=best_model_config,
+        training_config=best_training_config,
+        logging_config=logging_config,
+        quiet=True,
+    )
+    utils.report_cv_loss_curve_charts(
+        logger=logger,
+        train_losses=curve_result.train_loss_per_epoch,
+        dev_losses=curve_result.dev_loss_per_epoch,
+    )
     return cv_dev_df, best_model_config, best_training_config, objective_metrics
 
 @PipelineDecorator.component(
@@ -414,7 +452,7 @@ def train_best(
     training_config: Mapping[str, Any],
     logging_config: Mapping[str, Any],
 ):
-    return utils.train_model(
+    result = utils.train_model(
         train_data=train_data,
         dev_data=test_data,
         feature_dim=feature_dim,
@@ -422,6 +460,7 @@ def train_best(
         training_config=training_config,
         logging_config=logging_config,
     )
+    return result.model
 
 @PipelineDecorator.component(
     return_values=['devCorporaDf', 'testCorporaDf', 'testClassesDf', 'objectiveMetrics'],
@@ -460,6 +499,9 @@ def eval_final(
         utils.report_cv_std_scalars(logger=logger, row=row_cv, iteration=0)
     row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
     utils.report_eval_scalars(logger=logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
+    if 'All-micro' in df_corpora_test.index:
+        row_micro_test = df_corpora_test.loc['All-micro'].to_dict()
+        utils.report_eval_scalars(logger=logger, title='Test Evaluation Results (micro)', row=row_micro_test, iteration=0)
     if objective_corpora in df_corpora_test.index:
         row_objective_test = df_corpora_test.loc[objective_corpora].to_dict()
         utils.report_eval_scalars(logger=logger, title='Objective Test Evaluation Results', row=row_objective_test, iteration=0)
@@ -656,11 +698,17 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
             row=df_corpora_dev.iloc[0].to_dict(),
             iteration=0,
         )
-    if objective_row_name in df_corpora_test.index:
+    utils.report_eval_scalars(
+        logger=logger,
+        title='Test Evaluation Results',
+        row=objective_metrics,
+        iteration=0,
+    )
+    if 'All-micro' in df_corpora_test.index:
         utils.report_eval_scalars(
             logger=logger,
-            title='Test Evaluation Results',
-            row=df_corpora_test.loc[objective_row_name].to_dict(),
+            title='Test Evaluation Results (micro)',
+            row=df_corpora_test.loc['All-micro'].to_dict(),
             iteration=0,
         )
 
@@ -697,4 +745,3 @@ def run_pipeline(
         PipelineDecorator.run_locally()
     run_training_pipeline(config_mapping=config_mapping)
     return resolved_config, config_mapping
-

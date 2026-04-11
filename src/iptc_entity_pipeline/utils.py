@@ -1,6 +1,8 @@
 """Utility helpers for the ClearML training pipeline."""
 
+import json
 import logging
+from dataclasses import dataclass
 from itertools import product
 from typing import Any, Mapping, Sequence
 
@@ -13,6 +15,81 @@ from iptc_entity_pipeline.dataset_builder import build_embedding_dataset
 from iptc_entity_pipeline.legacy_reuse import createClassificationModel, trainClassificationModel
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TrainingResult:
+    """Outputs from one classification training run."""
+
+    model: Any
+    final_dev_loss: float
+    epochs_run: int
+    train_loss_per_epoch: tuple[float, ...]
+    dev_loss_per_epoch: tuple[float, ...]
+
+
+def combo_params_json(*, model_config: Mapping[str, Any], training_config: Mapping[str, Any]) -> str:
+    """Serialize selected hyperparameters as JSON for tabular display."""
+    payload = {
+        'hidden_dim': model_config['hidden_dim'],
+        'batch_size': training_config['batch_size'],
+        'dropouts1': model_config['dropouts1'],
+        'dropouts2': model_config['dropouts2'],
+        'learning_rate': training_config['learning_rate'],
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
+def report_cv_loss_curve_charts(
+    *,
+    logger: Any,
+    train_losses: Sequence[float],
+    dev_losses: Sequence[float],
+) -> None:
+    """Report the two best-model loss charts expected on the CV step (no per-epoch scalar spam)."""
+    n = len(dev_losses)
+    if n == 0:
+        return
+
+    def scatter_xy(data: Sequence[float]) -> Any:
+        return np.hstack([np.atleast_2d(np.arange(0, len(data))).T, np.atleast_2d(list(data)).T])
+
+    logger.report_scatter2d(
+        title='Best model: train vs test loss',
+        series='training loss',
+        iteration=n,
+        scatter=scatter_xy(train_losses),
+        xaxis='epoch',
+        yaxis='loss',
+        mode='lines+markers',
+    )
+    logger.report_scatter2d(
+        title='Best model: train vs test loss',
+        series='test loss',
+        iteration=n,
+        scatter=scatter_xy(dev_losses),
+        xaxis='epoch',
+        yaxis='loss',
+        mode='lines+markers',
+    )
+    logger.report_scatter2d(
+        title='Best hyperparameters: train vs dev loss',
+        series='train loss',
+        iteration=n,
+        scatter=scatter_xy(train_losses),
+        xaxis='epoch',
+        yaxis='loss',
+        mode='lines+markers',
+    )
+    logger.report_scatter2d(
+        title='Best hyperparameters: train vs dev loss',
+        series='dev loss',
+        iteration=n,
+        scatter=scatter_xy(dev_losses),
+        xaxis='epoch',
+        yaxis='loss',
+        mode='lines+markers',
+    )
 
 
 class DocWithEntities(Doc):
@@ -62,8 +139,7 @@ def report_cv_std_scalars(*, logger: Any, row: Mapping[str, Any], iteration: int
 
 
 def report_cv_outputs(*, task: Task, logger: Any, trials_df: Any, folds_df: Any, cv_dev_df: Any) -> None:
-    """Report CV tables and upload them as ClearML artifacts."""
-    logger.report_table(title='Cross Validation', series='Trials', iteration=0, table_plot=trials_df)
+    """Report CV tables (Folds + best summary only) and upload all frames as artifacts."""
     logger.report_table(title='Cross Validation', series='Folds', iteration=0, table_plot=folds_df)
     logger.report_table(title='Cross Validation', series='Best Dev Mean+Std', iteration=0, table_plot=cv_dev_df)
     task.upload_artifact('cv_trials_dataframe', artifact_object=trials_df)
@@ -236,8 +312,11 @@ def train_model(
     model_config: Mapping[str, Any],
     training_config: Mapping[str, Any],
     logging_config: Mapping[str, Any],
-) -> Any:
-    """Create and train the classification model on given fit/dev datasets."""
+) -> tuple[Any, float]:
+    """Create and train the classification model on given fit/dev datasets.
+
+    :return: Tuple of trained model and final dev loss.
+    """
     if hasattr(train_data, 'Y'):
         out_dim = int(to_numpy_array(matrix_like=train_data.Y).shape[1])
     else:
@@ -249,12 +328,20 @@ def train_model(
         textVectorizer='not None',
         logConfig={'PRINT_LOGS': bool(logging_config['print_logs'])},
     )
-    return trainClassificationModel(
+    model, final_dev_loss, epochs_run, train_losses, dev_losses = trainClassificationModel(
         model=model,
         trainData=train_data,
         devData=dev_data,
         trainingConfig=train_payload(training_config=training_config),
         logConfig={'PRINT_LOGS': bool(logging_config['print_logs'])},
+        quiet=quiet,
+    )
+    return TrainingResult(
+        model=model,
+        final_dev_loss=final_dev_loss,
+        epochs_run=epochs_run,
+        train_loss_per_epoch=tuple(train_losses),
+        dev_loss_per_epoch=tuple(dev_losses),
     )
 
 
