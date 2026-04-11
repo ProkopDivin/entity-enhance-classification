@@ -195,7 +195,7 @@ def to_debug_config(config: BaseConfig) -> BaseConfig:
         config,
         training=replace(config.training, epochs=5),
         cv=replace(config.cv, folds=2),
-        debug=True,
+        debug=False,
     )
 
 

@@ -60,9 +60,17 @@ def trainClassificationModel(
     devData: EmbeddingDataset,
     trainingConfig: Dict[str, Any],
     logConfig: Dict[str, Any],
-    *,
-    quiet: bool = False,
-) -> Tuple[NeuralCategModel, float, int, List[float], List[float]]:
+) -> Tuple[
+    NeuralCategModel,
+    float,
+    int,
+    List[float],
+    List[float],
+    List[float],
+    List[float],
+    List[float],
+    List[float],
+]:
     """
     Legacy training loop kept equivalent to original pipeline.
 
@@ -205,70 +213,6 @@ def trainClassificationModel(
     validation_split_name = str(trainingConfig.get('validationSplitName', 'dev')).strip().lower() or 'dev'
     validation_title_name = validation_split_name.capitalize()
 
-    def makePlots(train_stats: list[List[float]], dev_stats: list[List[float]]) -> None:
-        def scatter(iterations, data):
-            return np.hstack([np.atleast_2d(np.arange(0, iterations)).T, np.atleast_2d(data).T])
-
-        logger = Task.current_task().get_logger()
-        iterations = len(dev_stats[2])
-        dev_precision, dev_recall, dev_loss = dev_stats[0], dev_stats[1], dev_stats[2]
-        train_precision, train_recall, train_loss = train_stats[0], train_stats[1], train_stats[2]
-
-        logger.report_scatter2d(
-            title='loss during training',
-            series=f'{validation_split_name} loss',
-            iteration=t + 1,
-            scatter=scatter(iterations=iterations, data=dev_loss),
-            xaxis='epoch',
-            yaxis='loss',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='loss during training',
-            series='train loss',
-            iteration=t + 1,
-            scatter=scatter(iterations=iterations, data=train_loss),
-            xaxis='epoch',
-            yaxis='loss',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='precission during training',
-            series=f'{validation_split_name} precission',
-            iteration=t + 1,
-            scatter=scatter(iterations=iterations, data=dev_precision),
-            xaxis='epoch',
-            yaxis='precision',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='precission during training',
-            series='train precission',
-            iteration=t + 1,
-            scatter=scatter(iterations=iterations, data=train_precision),
-            xaxis='epoch',
-            yaxis='precision',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='recall during training',
-            series=f'{validation_split_name} recall',
-            iteration=t + 1,
-            scatter=scatter(iterations=iterations, data=dev_recall),
-            xaxis='epoch',
-            yaxis='recall',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='recall during training',
-            series='train recall',
-            iteration=t + 1,
-            scatter=scatter(iterations=iterations, data=train_recall),
-            xaxis='epoch',
-            yaxis='recall',
-            mode='lines+markers',
-        )
-
     optimizerFactory, lr = parseOptimizer(trainingConfig['optimizerConfig'])
     lrSchedFactory = parseLrScheduler(trainingConfig['lrSchedulerConfig'])
     loss_fn = parseLoss(trainingConfig['lossConfig'], trainData, model._device)
@@ -325,7 +269,7 @@ def trainClassificationModel(
             print_console=logConfig['PRINT_LOGS'],
         )
         last_time = time.time()
-        dev_precision, dev_recall, dev_loss = validation(model, dev_loader, loss_fn, logInfo=not minimal)
+        dev_precision, dev_recall, dev_loss = validation(model, dev_loader, loss_fn)
         logger.report_text(
             f'time {validation_split_name} validation done: {time.time() - last_time}',
             level=logging.INFO,
@@ -335,24 +279,6 @@ def trainClassificationModel(
 
         for i, st in enumerate([dev_precision, dev_recall, dev_loss]):
             dev_stats[i].append(st)
-        logger.report_scalar(
-            title=f'{validation_title_name} Training Stats',
-            series='Precision',
-            value=dev_precision,
-            iteration=t,
-        )
-        logger.report_scalar(
-            title=f'{validation_title_name} Training Stats',
-            series='Recall',
-            value=dev_recall,
-            iteration=t,
-        )
-        logger.report_scalar(
-            title=f'{validation_title_name} Training Stats',
-            series='Loss',
-            value=dev_loss,
-            iteration=t,
-        )
 
         if es_patience > 0:
             if best_dev_loss is None or _is_better_loss(current_loss=dev_loss, best_loss=best_dev_loss):
@@ -388,9 +314,6 @@ def trainClassificationModel(
         last_time = time.time()
         for i, st in enumerate([train_precision, train_recall, train_loss]):
             train_stats[i].append(st)
-        logger.rt_scalar(title='Train Training Stats', series='Precision', value=train_precision, iteration=t)
-        logger.report_scalar(title='Train Training Stats', series='Recall', value=train_recall, iteration=t)
-        logger.report_scalar(title='Train Training Stats', series='Loss', value=train_loss, iteration=t)
 
         if es_patience > 0 and epochs_without_improvement >= es_patience:
             logger.report_text(
@@ -409,18 +332,31 @@ def trainClassificationModel(
             print_console=logConfig['PRINT_LOGS'],
         )
 
-     logger.report_text(
-         f'time: {time.time() - start_training_time}',
-         level=logging.INFO,
-         print_console=logConfig['PRINT_LOGS'],
-     )
+    logger.report_text(
+        f'time: {time.time() - start_training_time}',
+        level=logging.INFO,
+        print_console=logConfig['PRINT_LOGS'],
+    )
     model._nn.eval()
-    makePlots(train_stats, dev_stats)
     final_dev_loss = best_dev_loss if best_dev_loss is not None else (dev_stats[2][-1] if dev_stats[2] else 0.0)
     epochs_run = len(dev_stats[2]) if dev_stats[2] else 0
+    train_precisions = list(train_stats[0]) if train_stats[0] else []
+    train_recalls = list(train_stats[1]) if train_stats[1] else []
     train_losses = list(train_stats[2]) if train_stats[2] else []
+    dev_precisions = list(dev_stats[0]) if dev_stats[0] else []
+    dev_recalls = list(dev_stats[1]) if dev_stats[1] else []
     dev_losses = list(dev_stats[2]) if dev_stats[2] else []
-    return model, final_dev_loss, epochs_run, train_losses, dev_losses
+    return (
+        model,
+        final_dev_loss,
+        epochs_run,
+        train_precisions,
+        train_recalls,
+        train_losses,
+        dev_precisions,
+        dev_recalls,
+        dev_losses,
+    )
 
 
 def evaluateModel(

@@ -282,6 +282,7 @@ def run_cv(
     fold_rows: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
     best_trial: dict[str, Any] | None = None
+    best_fold_curves: tuple[utils.CvFoldCurves, ...] = ()
     for combo_idx, (combo_model_config, combo_training_config) in enumerate(combinations, start=1):
         params_json = utils.combo_params_json(
             model_config=combo_model_config,
@@ -299,6 +300,7 @@ def run_cv(
             'Recall': [],
             'F1': [],
         }
+        combo_fold_curves: list[utils.CvFoldCurves] = []
         for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
             fit_data = utils.slice_dataset(dataset=trainData, indices=fit_indices.tolist())
             val_data = utils.slice_dataset(dataset=trainData, indices=val_indices.tolist())
@@ -317,7 +319,6 @@ def run_cv(
                 evalData=val_data,
                 evaluationConfig=eval_cfg,
                 customThresholds=None,
-                connect_evaluation_config=False,
             )
             micro_row = (
                 df_corpora_fold.loc['All-micro'].to_dict()
@@ -332,6 +333,15 @@ def run_cv(
             fold_scores['epochs'].append(float(train_result.epochs_run))
             for metric_name in ('Precision', 'Recall', 'F1'):
                 fold_scores[metric_name].append(float(micro_row[metric_name]))
+            combo_fold_curves.append(
+                utils.CvFoldCurves(
+                    fold_id=fold_idx,
+                    train_loss_per_epoch=train_result.train_loss_per_epoch,
+                    dev_loss_per_epoch=train_result.dev_loss_per_epoch,
+                    train_f1_per_epoch=train_result.train_f1_per_epoch,
+                    dev_f1_per_epoch=train_result.dev_f1_per_epoch,
+                )
+            )
             fold_rows.append(
                 {
                     'trial_id': combo_idx,
@@ -363,6 +373,7 @@ def run_cv(
         trial_rows.append(trial_row)
         if best_trial is None or trial_row['F1_mean'] > best_trial['F1_mean']:
             best_trial = trial_row
+            best_fold_curves = tuple(combo_fold_curves)
 
     if best_trial is None:
         raise ValueError('No CV trial results were produced.')
@@ -386,9 +397,9 @@ def run_cv(
         ],
         index=[objective_corpora],
     )
-    cv_dev_df.index.name = 'Corpus Name'
 
     utils.report_cv_outputs(task=task, logger=logger, trials_df=trials_df, folds_df=folds_df, cv_dev_df=cv_dev_df)
+    utils.report_cv_fold_curve_charts(logger=logger, fold_curves=best_fold_curves)
 
     best_model_config = {
         'hidden_dim': int(best_params['hidden_dim']),
@@ -413,30 +424,6 @@ def run_cv(
         'F1_std': float(best_trial['F1_std']),
         'epochs': float(best_trial['epochs']),
     }
-
-    n_refit_splits = max(2, min(10, len(x_full)))
-    refit_splitter = MultilabelStratifiedKFold(
-        n_splits=n_refit_splits,
-        shuffle=True,
-        random_state=cv_random_seed,
-    )
-    refit_train_idx, refit_val_idx = next(refit_splitter.split(x_full, y_full))
-    refit_fit = utils.slice_dataset(dataset=trainData, indices=refit_train_idx.tolist())
-    refit_val = utils.slice_dataset(dataset=trainData, indices=refit_val_idx.tolist())
-    curve_result = utils.train_model(
-        train_data=refit_fit,
-        dev_data=refit_val,
-        feature_dim=featureDim,
-        model_config=best_model_config,
-        training_config=best_training_config,
-        logging_config=logging_config,
-        quiet=True,
-    )
-    utils.report_cv_loss_curve_charts(
-        logger=logger,
-        train_losses=curve_result.train_loss_per_epoch,
-        dev_losses=curve_result.dev_loss_per_epoch,
-    )
     return cv_dev_df, best_model_config, best_training_config, objective_metrics
 
 @PipelineDecorator.component(
@@ -496,7 +483,12 @@ def eval_final(
         row_cv = cvDevDf.iloc[0].to_dict()
     utils.report_eval_scalars(logger=logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
     if 'Precision_std' in row_cv:
-        utils.report_cv_std_scalars(logger=logger, row=row_cv, iteration=0)
+        utils.report_cv_std_scalars(
+            logger=logger,
+            row=row_cv,
+            title='Dev Cross Validation Mean Results',
+            iteration=0,
+        )
     row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
     utils.report_eval_scalars(logger=logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
     if 'All-micro' in df_corpora_test.index:
@@ -685,19 +677,24 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     logger = task.get_logger()
     objective_row_name = f'All-{evaluation_config["averaging_type"]}'
     if objective_row_name in df_corpora_dev.index:
-        utils.report_eval_scalars(
-            logger=logger,
-            title='Cross Validation Results',
-            row=df_corpora_dev.loc[objective_row_name].to_dict(),
-            iteration=0,
-        )
+        row_cv = df_corpora_dev.loc[objective_row_name].to_dict()
     else:
-        utils.report_eval_scalars(
+        row_cv = df_corpora_dev.iloc[0].to_dict()
+        
+    utils.report_eval_scalars(
+        logger=logger,
+        title='Cross Validation Results',
+        row=row_cv,
+        iteration=0,
+    )
+    if 'Precision_std' in row_cv:
+        utils.report_cv_std_scalars(
             logger=logger,
+            row=row_cv,
             title='Cross Validation Results',
-            row=df_corpora_dev.iloc[0].to_dict(),
             iteration=0,
         )
+  
     utils.report_eval_scalars(
         logger=logger,
         title='Test Evaluation Results',
