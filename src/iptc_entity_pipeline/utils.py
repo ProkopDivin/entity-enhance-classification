@@ -24,6 +24,10 @@ class TrainingResult:
     model: Any
     final_dev_loss: float
     epochs_run: int
+    train_precision_per_epoch: tuple[float, ...]
+    dev_precision_per_epoch: tuple[float, ...]
+    train_recall_per_epoch: tuple[float, ...]
+    dev_recall_per_epoch: tuple[float, ...]
     train_loss_per_epoch: tuple[float, ...]
     dev_loss_per_epoch: tuple[float, ...]
     train_f1_per_epoch: tuple[float, ...]
@@ -102,6 +106,41 @@ def report_cv_fold_curve_charts(
             scatter=scatter_xy(fold_curve.dev_f1_per_epoch),
             xaxis='epoch',
             yaxis='f1',
+            mode='lines+markers',
+        )
+
+
+def report_train_test_curve_charts(*, logger: Any, result: TrainingResult) -> None:
+    """Report final-model train vs test curves across epochs."""
+    def scatter_xy(data: Sequence[float]) -> Any:
+        epochs = np.arange(1, len(data) + 1)
+        return np.column_stack((epochs, np.asarray(list(data), dtype=float)))
+
+    charts = (
+        ('Final Model Loss', 'loss', result.train_loss_per_epoch, result.dev_loss_per_epoch),
+        ('Final Model F1', 'f1', result.train_f1_per_epoch, result.dev_f1_per_epoch),
+        ('Final Model Precision', 'precision', result.train_precision_per_epoch, result.dev_precision_per_epoch),
+        ('Final Model Recall', 'recall', result.train_recall_per_epoch, result.dev_recall_per_epoch),
+    )
+    for title, yaxis, train_curve, test_curve in charts:
+        if not train_curve and not test_curve:
+            continue
+        logger.report_scatter2d(
+            title=title,
+            series='train',
+            iteration=0,
+            scatter=scatter_xy(train_curve),
+            xaxis='epoch',
+            yaxis=yaxis,
+            mode='lines+markers',
+        )
+        logger.report_scatter2d(
+            title=title,
+            series='test',
+            iteration=0,
+            scatter=scatter_xy(test_curve),
+            xaxis='epoch',
+            yaxis=yaxis,
             mode='lines+markers',
         )
 
@@ -376,6 +415,10 @@ def train_model(
         model=model,
         final_dev_loss=final_dev_loss,
         epochs_run=epochs_run,
+        train_precision_per_epoch=tuple(train_precisions),
+        dev_precision_per_epoch=tuple(dev_precisions),
+        train_recall_per_epoch=tuple(train_recalls),
+        dev_recall_per_epoch=tuple(dev_recalls),
         train_loss_per_epoch=tuple(train_losses),
         dev_loss_per_epoch=tuple(dev_losses),
         train_f1_per_epoch=calc_f1_curve(precision_curve=train_precisions, recall_curve=train_recalls),

@@ -395,7 +395,6 @@ def run_cv(
                 'Loss_std': best_trial['Loss_std'],
             }
         ],
-        index=[objective_corpora],
     )
 
     utils.report_cv_outputs(task=task, logger=logger, trials_df=trials_df, folds_df=folds_df, cv_dev_df=cv_dev_df)
@@ -447,6 +446,9 @@ def train_best(
         training_config=training_config,
         logging_config=logging_config,
     )
+    task = Task.current_task()
+    logger = task.get_logger()
+    utils.report_train_test_curve_charts(logger=logger, result=result)
     return result.model
 
 @PipelineDecorator.component(
