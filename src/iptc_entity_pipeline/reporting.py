@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, NamedTuple, Sequence
 
 import numpy as np
 from clearml import Task
 
 from iptc_entity_pipeline.training import CvFoldCurves, TrainingResult
+
+
+class ChartSpec(NamedTuple):
+    """Specification for a single train-vs-test scatter chart."""
+
+    title: str
+    yaxis: str
+    train_curve: Sequence[float]
+    dev_curve: Sequence[float]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -121,29 +130,29 @@ def report_cv_fold_curve_charts(
 def report_train_test_curve_charts(*, logger: Any, result: TrainingResult) -> None:
     """Report final-model train vs test curves across epochs."""
     charts = (
-        ('Final Model Loss', 'loss', result.train_loss_per_epoch, result.dev_loss_per_epoch),
-        ('Final Model F1', 'f1', result.train_f1_per_epoch, result.dev_f1_per_epoch),
-        ('Final Model Precision', 'precision', result.train_precision_per_epoch, result.dev_precision_per_epoch),
-        ('Final Model Recall', 'recall', result.train_recall_per_epoch, result.dev_recall_per_epoch),
+        ChartSpec('Final Model Loss', 'loss', result.train_loss_per_epoch, result.dev_loss_per_epoch),
+        ChartSpec('Final Model F1', 'f1', result.train_f1_per_epoch, result.dev_f1_per_epoch),
+        ChartSpec('Final Model Precision', 'precision', result.train_precision_per_epoch, result.dev_precision_per_epoch),
+        ChartSpec('Final Model Recall', 'recall', result.train_recall_per_epoch, result.dev_recall_per_epoch),
     )
-    for title, yaxis, train_curve, test_curve in charts:
-        if not train_curve and not test_curve:
+    for chart in charts:
+        if not chart.train_curve and not chart.dev_curve:
             continue
         logger.report_scatter2d(
-            title=title,
+            title=chart.title,
             series='train',
             iteration=0,
-            scatter=_scatter_xy(train_curve),
+            scatter=_scatter_xy(chart.train_curve),
             xaxis='epoch',
-            yaxis=yaxis,
+            yaxis=chart.yaxis,
             mode='lines+markers',
         )
         logger.report_scatter2d(
-            title=title,
+            title=chart.title,
             series='test',
             iteration=0,
-            scatter=_scatter_xy(test_curve),
+            scatter=_scatter_xy(chart.dev_curve),
             xaxis='epoch',
-            yaxis=yaxis,
+            yaxis=chart.yaxis,
             mode='lines+markers',
         )

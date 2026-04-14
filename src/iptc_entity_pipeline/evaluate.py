@@ -1,16 +1,10 @@
-"""Shared evaluation logic for corpora and per-class metric tables.
-
-Provides :func:`evaluate_predictions` as the main entry point, combining
-:func:`filter_and_normalize`, :func:`evaluate_corpora`, and
-:func:`evaluate_classes` into a single call that both
-:mod:`legacy_reuse` and :mod:`evaluation_comparison` delegate to.
-"""
+"""Shared evaluation logic for corpora and per-class metric tables."""
 
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
-from typing import Any, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Mapping, NamedTuple, Sequence
 
 import pandas as pd
 
@@ -19,7 +13,72 @@ LOGGER = logging.getLogger(__name__)
 REMOVED_CAT_IDS = frozenset({'20000419'})
 
 
-@lru_cache(maxsize=1)
+class PreparedStats(NamedTuple):
+    """Aggregated stats produced by :func:`evaluate_corpora` per sub-corpus."""
+
+    count: int
+    stats: Any
+    zero_docs: int
+    decent: list[str]
+
+
+@dataclass
+class MetricAccumulator:
+    """Column-oriented accumulator for core evaluation metrics."""
+
+    data_count: list[Any] = field(default_factory=list)
+    precision: list[Any] = field(default_factory=list)
+    recall: list[Any] = field(default_factory=list)
+    f1: list[Any] = field(default_factory=list)
+
+    def append_metrics(self, *, data_count: int, stats: Any, digits: int = 3) -> None:
+        """Append one row of core metrics from an evaluation stats object."""
+        self.data_count.append(data_count)
+        self.precision.append(round(stats.precision, digits))
+        self.recall.append(round(stats.recall, digits))
+        self.f1.append(round(stats.fmeasure(beta=1), digits))
+
+    def to_dataframe_dict(self) -> dict[str, list[Any]]:
+        """Return dict keyed by DataFrame column names."""
+        return {
+            'Data Count': self.data_count,
+            'Precision': self.precision,
+            'Recall': self.recall,
+            'F1': self.f1,
+        }
+
+
+@dataclass
+class CorporaMetricAccumulator(MetricAccumulator):
+    """Extended accumulator that also tracks label-level statistics."""
+
+    docs_no_labels: list[Any] = field(default_factory=list)
+    decent_labels: list[Any] = field(default_factory=list)
+
+    def append_label_metrics(
+        self,
+        *,
+        zero_label_docs: int,
+        pred_cats: Sequence[Sequence[str]],
+        decent_labels: Sequence[str],
+    ) -> None:
+        """Append one row of label-level metrics."""
+        self.docs_no_labels.append(round(zero_label_docs / len(pred_cats), 3))
+        self.decent_labels.append(len(decent_labels))
+
+    def append_column_means(self) -> None:
+        """Append per-column means as a summary row (All-macro)."""
+        for col in (self.data_count, self.precision, self.recall, self.f1, self.docs_no_labels, self.decent_labels):
+            col.append(pd.Series(col, dtype=float).mean())
+
+    def to_dataframe_dict(self) -> dict[str, list[Any]]:
+        """Return dict keyed by DataFrame column names."""
+        d = super().to_dataframe_dict()
+        d['Docs No Labels'] = self.docs_no_labels
+        d['Decent Labels'] = self.decent_labels
+        return d
+
+
 def get_iptc_topics() -> Any:
     """Load IPTC topic metadata once per process."""
     from geneea.mediacats import iptc
@@ -56,30 +115,6 @@ def _is_decent_label(stats: Any) -> bool:
     return stats.precision >= 0.6 and stats.fmeasure(beta=0.4) >= 0.5 and stats.trueCnt >= 10
 
 
-def _update_stats(
-    *,
-    stats_map: dict[str, list[Any]],
-    data_count: int,
-    stats: Any,
-    digits: int = 3,
-) -> None:
-    stats_map['Data Count'].append(data_count)
-    stats_map['Precision'].append(round(stats.precision, digits))
-    stats_map['Recall'].append(round(stats.recall, digits))
-    stats_map['F1'].append(round(stats.fmeasure(beta=1), digits))
-
-
-def _update_label_stats(
-    *,
-    stats_map: dict[str, list[Any]],
-    zero_label_docs: int,
-    pred_cats: Sequence[Sequence[str]],
-    decent_labels: Sequence[str],
-) -> None:
-    stats_map['Docs No Labels'].append(round(zero_label_docs / len(pred_cats), 3))
-    stats_map['Decent Labels'].append(len(decent_labels))
-
-
 def evaluate_corpora(
     *,
     pred_cats: Sequence[Sequence[str]],
@@ -99,7 +134,7 @@ def evaluate_corpora(
     from geneea.evaluation import utils as evalutil
     from geneea.evaluation.utils import AvgData
 
-    def prepare_stats(*, sub_data: Any, sub_pred_cats: list[list[str]]) -> tuple[int, Any, int, list[str]]:
+    def prepare_stats(*, sub_data: Any, sub_pred_cats: list[list[str]]) -> PreparedStats:
         avg_stats, micro_stats, indiv_stats = evalutil.multiStats(
             goldVals=[d.cats for d in sub_data],
             predVals=sub_pred_cats,
@@ -116,16 +151,9 @@ def evaluate_corpora(
             raise ValueError(f'Unsupported averaging_type={averaging_type}')
         zero_docs = sum(1 for cats in sub_pred_cats if not cats)
         decent = [name for name, st in indiv_stats.items() if _is_decent_label(st)]
-        return avg_stats.cnt, stats, zero_docs, decent
+        return PreparedStats(count=avg_stats.cnt, stats=stats, zero_docs=zero_docs, decent=decent)
 
-    stats_map: dict[str, list[Any]] = {
-        'Data Count': [],
-        'Precision': [],
-        'Recall': [],
-        'F1': [],
-        'Docs No Labels': [],
-        'Decent Labels': [],
-    }
+    accumulator = CorporaMetricAccumulator()
     corpora_names: list[str] = []
     if per_corpus:
         corpora_names = sorted({d.metadata['corpusName'] for d in eval_corpus})
@@ -133,12 +161,13 @@ def evaluate_corpora(
             mask = [d.metadata['corpusName'] == corpus_name for d in eval_corpus]
             sub_data = eval_corpus.filterByBools(mask)
             sub_pred = [cats for in_scope, cats in zip(mask, pred_cats) if in_scope]
-            count, stats, zero_docs, decent = prepare_stats(sub_data=sub_data, sub_pred_cats=sub_pred)
-            _update_stats(stats_map=stats_map, data_count=count, stats=stats)
-            _update_label_stats(stats_map=stats_map, zero_label_docs=zero_docs, pred_cats=sub_pred, decent_labels=decent)
+            prepared = prepare_stats(sub_data=sub_data, sub_pred_cats=sub_pred)
+            accumulator.append_metrics(data_count=prepared.count, stats=prepared.stats)
+            accumulator.append_label_metrics(
+                zero_label_docs=prepared.zero_docs, pred_cats=sub_pred, decent_labels=prepared.decent,
+            )
 
-    for key in stats_map:
-        stats_map[key].append(pd.Series(stats_map[key], dtype=float).mean())
+    accumulator.append_column_means()
     corpora_names.append('All-macro')
 
     gold_vals = [d.cats for d in eval_corpus]
@@ -146,22 +175,22 @@ def evaluate_corpora(
     decent_labels = [name for name, st in indiv_stats.items() if _is_decent_label(st)]
     zero_label_docs = sum(1 for cats in pred_cats if not cats)
 
-    _update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=micro_stats)
-    _update_label_stats(
-        stats_map=stats_map, zero_label_docs=zero_label_docs, pred_cats=pred_cats, decent_labels=decent_labels,
+    accumulator.append_metrics(data_count=avg_stats.cnt, stats=micro_stats)
+    accumulator.append_label_metrics(
+        zero_label_docs=zero_label_docs, pred_cats=pred_cats, decent_labels=decent_labels,
     )
     corpora_names.append('All-micro')
 
     macro_stats = AvgData.empty()
     for cat in indiv_stats:
         macro_stats.update(prec=indiv_stats[cat].precision, recall=indiv_stats[cat].recall)
-    _update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=avg_stats)
-    _update_label_stats(
-        stats_map=stats_map, zero_label_docs=zero_label_docs, pred_cats=pred_cats, decent_labels=decent_labels,
+    accumulator.append_metrics(data_count=avg_stats.cnt, stats=avg_stats)
+    accumulator.append_label_metrics(
+        zero_label_docs=zero_label_docs, pred_cats=pred_cats, decent_labels=decent_labels,
     )
     corpora_names.append('All-datapoint')
 
-    df = pd.DataFrame(data=stats_map)
+    df = pd.DataFrame(data=accumulator.to_dataframe_dict())
     df.index = corpora_names
     df.index.name = 'Corpus Name'
     return df
@@ -184,7 +213,7 @@ def evaluate_classes(
     from geneea.evaluation import utils as evalutil
     from geneea.evaluation.utils import AvgData
 
-    stats_map: dict[str, list[Any]] = {'Data Count': [], 'Precision': [], 'Recall': [], 'F1': []}
+    accumulator = MetricAccumulator()
     category_names: list[str] = []
     if per_class:
         categories = eval_corpus.catList
@@ -193,24 +222,24 @@ def evaluate_classes(
             pred_vals = [1 if category in cats else 0 for cats in pred_cats]
             gold_vals = [1 if category in doc.cats else 0 for doc in eval_corpus]
             class_to_data, _, _ = evalutil.classStats(trueVals=gold_vals, predVals=pred_vals)
-            _update_stats(stats_map=stats_map, data_count=sum(gold_vals), stats=class_to_data[1])
+            accumulator.append_metrics(data_count=sum(gold_vals), stats=class_to_data[1])
 
     gold_vals = [doc.cats for doc in eval_corpus]
     avg_stats, micro_stats, class_stats = evalutil.multiStats(goldVals=gold_vals, predVals=pred_cats)
 
-    _update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=micro_stats)
+    accumulator.append_metrics(data_count=avg_stats.cnt, stats=micro_stats)
     category_names.append('All - micro avg')
 
     macro_avg = AvgData.empty()
     for cat in class_stats:
         macro_avg.update(prec=class_stats[cat].precision, recall=class_stats[cat].recall)
-    _update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=macro_avg)
+    accumulator.append_metrics(data_count=avg_stats.cnt, stats=macro_avg)
     category_names.append('All - macro avg')
 
-    _update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=avg_stats)
+    accumulator.append_metrics(data_count=avg_stats.cnt, stats=avg_stats)
     category_names.append('All - datapoint avg')
 
-    df = pd.DataFrame(data=stats_map)
+    df = pd.DataFrame(data=accumulator.to_dataframe_dict())
     df.index = category_names
     df.index.name = 'IPTC Category'
     return df

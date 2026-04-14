@@ -2,7 +2,7 @@
 
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple
 
@@ -10,7 +10,7 @@ import numpy as np
 from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
-from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
+from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider, EmbeddingCacheStats
 from iptc_entity_pipeline.config import BaseConfig, resolve_paths
 from iptc_entity_pipeline.data_loading import (
     attach_entities_to_corpus,
@@ -48,6 +48,57 @@ from iptc_entity_pipeline.training import (
     train_model,
 )
 
+
+@dataclass(frozen=True)
+class EntityEmbeddingStats:
+    """Coverage statistics for entity embeddings linked to a corpus."""
+
+    use_entity_embeddings: bool = True
+    entity_dim: int = 0
+    linked_unique_wdids: int = 0
+    found_embeddings: int = 0
+    missing_embeddings: int = 0
+
+
+@dataclass(frozen=True)
+class DatasetBundle:
+    """Outputs of the dataset-building pipeline step."""
+
+    train_data: Any
+    test_data: Any
+    feature_dim: int
+    entity_embedding_stats: EntityEmbeddingStats
+
+
+@dataclass(frozen=True)
+class CvResult:
+    """Outputs of the cross-validation pipeline step."""
+
+    cv_dev_df: Any
+    best_model_config: dict[str, Any]
+    best_training_config: dict[str, Any]
+    objective_metrics: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class EvalResult:
+    """Outputs of the final evaluation pipeline step."""
+
+    dev_corpora_df: Any
+    test_corpora_df: Any
+    test_classes_df: Any
+    objective_metrics: dict[str, Any]
+
+
+@dataclass
+class FoldScores:
+    """Per-fold metric accumulator for cross-validation."""
+
+    loss: list[float] = field(default_factory=list)
+    epochs: list[float] = field(default_factory=list)
+    precision: list[float] = field(default_factory=list)
+    recall: list[float] = field(default_factory=list)
+    f1: list[float] = field(default_factory=list)
 
 
 
@@ -96,8 +147,8 @@ def prepare_article_embeddings(
 
     train_stats = article_provider.recompute_embeddings(corpus=corpora.train)
     test_stats = article_provider.recompute_embeddings(corpus=corpora.test)
-    total_docs = int(train_stats['total_docs'] + test_stats['total_docs'])
-    total_computed = int(train_stats['computed_docs'] + test_stats['computed_docs'])
+    total_docs = train_stats.total_docs + test_stats.total_docs
+    total_computed = train_stats.computed_docs + test_stats.computed_docs
     logger.info(
         'Article embedding preparation progress: %s/%s articles (computed_missing=%s, cached_or_present=%s)',
         total_docs,
@@ -106,16 +157,16 @@ def prepare_article_embeddings(
         total_docs - total_computed,
     )
     return {
-        'train': dict(train_stats),
-        'test': dict(test_stats),
+        'train': asdict(train_stats),
+        'test': asdict(test_stats),
         'total_docs': total_docs,
         'total_computed': total_computed,
-        'total_cached_or_present': int(total_docs - total_computed),
+        'total_cached_or_present': total_docs - total_computed,
     }
 
 
 @PipelineDecorator.component(
-    return_values=['trainData', 'testData', 'featureDim', 'entityEmbeddingStats'],
+    return_values=['datasetBundle'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
@@ -163,14 +214,13 @@ def link_embeddings_and_build_datasets(
         train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
         test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
         feature_dim = int(x_train.shape[1])
-        entity_embedding_stats = {
-            'use_entity_embeddings': False,
-            'entity_dim': 0,
-            'linked_unique_wdids': 0,
-            'found_embeddings': 0,
-            'missing_embeddings': 0,
-        }
-        return train_data, test_data, feature_dim, entity_embedding_stats
+        entity_embedding_stats = EntityEmbeddingStats(use_entity_embeddings=False)
+        return DatasetBundle(
+            train_data=train_data,
+            test_data=test_data,
+            feature_dim=feature_dim,
+            entity_embedding_stats=entity_embedding_stats,
+        )
 
     entity_store = EntityEmbeddingStore(
         root_dir=paths_config['entity_embeddings_dir'],
@@ -203,12 +253,12 @@ def link_embeddings_and_build_datasets(
             logger.info('Prepared entity embeddings for %s/%s linked entities', idx, total_wdids)
 
     entity_dim = int(entity_store.infer_embedding_dim())
-    entity_embedding_stats = {
-        'entity_dim': entity_dim,
-        'linked_unique_wdids': int(total_wdids),
-        'found_embeddings': int(found_cnt),
-        'missing_embeddings': int(missing_cnt),
-    }
+    entity_embedding_stats = EntityEmbeddingStats(
+        entity_dim=entity_dim,
+        linked_unique_wdids=int(total_wdids),
+        found_embeddings=int(found_cnt),
+        missing_embeddings=int(missing_cnt),
+    )
 
     logger.info('Building linked features for train corpus (%s articles)', len(corpora.train))
     x_train = builder.build_features_for_corpus(
@@ -227,7 +277,12 @@ def link_embeddings_and_build_datasets(
     actual_entity_dim = int(entity_store.infer_embedding_dim())
     if entity_dim != actual_entity_dim:
         raise ValueError(f'Entity embedding dimension mismatch: expected={entity_dim}, actual={actual_entity_dim}')
-    return train_data, test_data, feature_dim, entity_embedding_stats
+    return DatasetBundle(
+        train_data=train_data,
+        test_data=test_data,
+        feature_dim=feature_dim,
+        entity_embedding_stats=entity_embedding_stats,
+    )
 
 
 @PipelineDecorator.component(
@@ -268,7 +323,7 @@ def train_classification_model(
 
 
 @PipelineDecorator.component(
-    return_values=['cvDevDf', 'bestModelConfig', 'bestTrainingConfig', 'objectiveMetrics'],
+    return_values=['cvResult'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.training,
 )
@@ -316,13 +371,7 @@ def run_cv(
             shuffle=True,
             random_state=cv_random_seed,
         )
-        fold_scores: dict[str, list[float]] = {
-            'Loss': [],
-            'epochs': [],
-            'Precision': [],
-            'Recall': [],
-            'F1': [],
-        }
+        fold_scores = FoldScores()
         combo_fold_curves: list[CvFoldCurves] = []
         for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
             fit_data = slice_dataset(dataset=trainData, indices=fit_indices.tolist())
@@ -352,10 +401,11 @@ def run_cv(
                     averaging_type=eval_cfg['averagingType'],
                 )
             )
-            fold_scores['Loss'].append(dev_loss)
-            fold_scores['epochs'].append(float(train_result.epochs_run))
-            for metric_name in ('Precision', 'Recall', 'F1'):
-                fold_scores[metric_name].append(float(micro_row[metric_name]))
+            fold_scores.loss.append(dev_loss)
+            fold_scores.epochs.append(float(train_result.epochs_run))
+            fold_scores.precision.append(float(micro_row['Precision']))
+            fold_scores.recall.append(float(micro_row['Recall']))
+            fold_scores.f1.append(float(micro_row['F1']))
             combo_fold_curves.append(
                 CvFoldCurves(
                     fold_id=fold_idx,
@@ -383,15 +433,15 @@ def run_cv(
         trial_row = {
             'trial_id': combo_idx,
             'params': params_json,
-            'epochs': float(np.mean(fold_scores['epochs'])),
-            'Loss_mean': float(np.mean(fold_scores['Loss'])),
-            'Loss_std': float(np.std(fold_scores['Loss'])),
-            'F1_mean': float(np.mean(fold_scores['F1'])),
-            'F1_std': float(np.std(fold_scores['F1'])),
-            'Precision_mean': float(np.mean(fold_scores['Precision'])),
-            'Precision_std': float(np.std(fold_scores['Precision'])),
-            'Recall_mean': float(np.mean(fold_scores['Recall'])),
-            'Recall_std': float(np.std(fold_scores['Recall'])),
+            'epochs': float(np.mean(fold_scores.epochs)),
+            'Loss_mean': float(np.mean(fold_scores.loss)),
+            'Loss_std': float(np.std(fold_scores.loss)),
+            'F1_mean': float(np.mean(fold_scores.f1)),
+            'F1_std': float(np.std(fold_scores.f1)),
+            'Precision_mean': float(np.mean(fold_scores.precision)),
+            'Precision_std': float(np.std(fold_scores.precision)),
+            'Recall_mean': float(np.mean(fold_scores.recall)),
+            'Recall_std': float(np.std(fold_scores.recall)),
         }
         trial_rows.append(trial_row)
         if best_trial is None or trial_row['F1_mean'] > best_trial['F1_mean']:
@@ -446,7 +496,12 @@ def run_cv(
         'F1_std': float(best_trial['F1_std']),
         'epochs': float(best_trial['epochs']),
     }
-    return cv_dev_df, best_model_config, best_training_config, objective_metrics
+    return CvResult(
+        cv_dev_df=cv_dev_df,
+        best_model_config=best_model_config,
+        best_training_config=best_training_config,
+        objective_metrics=objective_metrics,
+    )
 
 @PipelineDecorator.component(
     return_values=['trainedModel'],
@@ -475,7 +530,7 @@ def train_best(
     return result.model
 
 @PipelineDecorator.component(
-    return_values=['devCorporaDf', 'testCorporaDf', 'testClassesDf', 'objectiveMetrics'],
+    return_values=['evalResult'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.testing,
 )
@@ -573,7 +628,7 @@ def eval_final(
     task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
     task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
     task.upload_artifact('test_article_predictions', artifact_object=test_predictions_df)
-    task.upload_artifact('saved_model_paths', artifact_object=dict(save_paths))
+    task.upload_artifact('saved_model_paths', artifact_object=asdict(save_paths))
     task.upload_artifact(
         'evaluation_thresholds',
         artifact_object={
@@ -594,7 +649,7 @@ def eval_final(
     comparison_result = None
     if base_probabilities_csv:
         comparison_result = compare_runs(
-            current_probabilities=save_paths['probabilities_csv_path'],
+            current_probabilities=save_paths.probabilities_csv_path,
             base_probabilities=base_probabilities_csv,
             gold_data=testData,
             threshold_eval=float(eval_cfg['thresholdEval']),
@@ -650,7 +705,12 @@ def eval_final(
         if objective_corpora in df_corpora_test.index
         else row_all_test
     )
-    return cvDevDf, df_corpora_test, df_classes_test, objective_metrics
+    return EvalResult(
+        dev_corpora_df=cvDevDf,
+        test_corpora_df=df_corpora_test,
+        test_classes_df=df_classes_test,
+        objective_metrics=objective_metrics,
+    )
 
 
 @PipelineDecorator.pipeline(
@@ -708,21 +768,21 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         ),
         logging_config=logging_config,
     )
-    train_data, test_data, feature_dim, entity_embedding_stats = link_embeddings_and_build_datasets(
+    dataset_bundle = link_embeddings_and_build_datasets(
         corpora=corpora,
         paths_config=paths_config,
         embedding_config=embedding_config,
     )
-    task.upload_artifact('entity_embedding_stats', artifact_object=dict(entity_embedding_stats))
+    task.upload_artifact('entity_embedding_stats', artifact_object=asdict(dataset_bundle.entity_embedding_stats))
 
     log_stage(
         task=task,
         message=f'Stage 4/6: Running mandatory {cv_config["folds"]}-fold cross-validation on train',
         logging_config=logging_config,
     )
-    cv_dev_df, best_model_config, best_training_config, cv_objective_metrics = run_cv(
-        trainData=train_data,
-        featureDim=feature_dim,
+    cv_result = run_cv(
+        trainData=dataset_bundle.train_data,
+        featureDim=dataset_bundle.feature_dim,
         model_config=model_config,
         training_config=training_config,
         evaluation_config=evaluation_config,
@@ -731,19 +791,19 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         logging_config=logging_config,
         debug=debug,
     )
-    task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_objective_metrics))
+    task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result.objective_metrics))
 
     log_stage(
         task=task,
         message='Stage 5/6: Training final model on full train (validation=test)',
         logging_config=logging_config,
     )
-    final_training_config = dict(best_training_config)
+    final_training_config = dict(cv_result.best_training_config)
     trained_model = train_best(
-        train_data=train_data,
-        test_data=test_data,
-        feature_dim=feature_dim,
-        best_model_config=best_model_config,
+        train_data=dataset_bundle.train_data,
+        test_data=dataset_bundle.test_data,
+        feature_dim=dataset_bundle.feature_dim,
+        best_model_config=cv_result.best_model_config,
         training_config=final_training_config,
         logging_config=logging_config,
     )
@@ -753,23 +813,23 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         message='Stage 6/6: Evaluating final model on test',
         logging_config=logging_config,
     )
-    df_corpora_dev, df_corpora_test, df_classes_test, objective_metrics = eval_final(
+    eval_result = eval_final(
         trainedModel=trained_model,
-        cvDevDf=cv_dev_df,
-        testData=test_data,
+        cvDevDf=cv_result.cv_dev_df,
+        testData=dataset_bundle.test_data,
         evaluation_config=evaluation_config,
         objective_corpora=objective_corpora,
         config_name=config_name,
         config_mapping=config_mapping,
-        feature_dim=feature_dim,
+        feature_dim=dataset_bundle.feature_dim,
     )
 
     logger = task.get_logger()
     objective_row_name = f'All-{evaluation_config["averaging_type"]}'
-    if objective_row_name in df_corpora_dev.index:
-        row_cv = df_corpora_dev.loc[objective_row_name].to_dict()
+    if objective_row_name in eval_result.dev_corpora_df.index:
+        row_cv = eval_result.dev_corpora_df.loc[objective_row_name].to_dict()
     else:
-        row_cv = df_corpora_dev.iloc[0].to_dict()
+        row_cv = eval_result.dev_corpora_df.iloc[0].to_dict()
         
     report_eval_scalars(
         logger=logger,
@@ -788,22 +848,22 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     report_eval_scalars(
         logger=logger,
         title='Test Evaluation Results',
-        row=objective_metrics,
+        row=eval_result.objective_metrics,
         iteration=0,
     )
-    if 'All-micro' in df_corpora_test.index:
+    if 'All-micro' in eval_result.test_corpora_df.index:
         report_eval_scalars(
             logger=logger,
             title='Test Evaluation Results (micro)',
-            row=df_corpora_test.loc['All-micro'].to_dict(),
+            row=eval_result.test_corpora_df.loc['All-micro'].to_dict(),
             iteration=0,
         )
 
     task.upload_artifact('pipeline_config', artifact_object=dict(config_mapping))
-    task.upload_artifact('objective_metrics', artifact_object=dict(objective_metrics))
-    task.upload_artifact('dev_corpora_dataframe', artifact_object=df_corpora_dev)
-    task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
-    task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
+    task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
+    task.upload_artifact('dev_corpora_dataframe', artifact_object=eval_result.dev_corpora_df)
+    task.upload_artifact('test_corpora_dataframe', artifact_object=eval_result.test_corpora_df)
+    task.upload_artifact('test_classes_dataframe', artifact_object=eval_result.test_classes_df)
     log_stage(
         task=task,
         message='Pipeline finished: metrics, tables, and artifacts uploaded',

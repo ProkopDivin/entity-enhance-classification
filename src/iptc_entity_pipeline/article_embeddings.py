@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EmbeddingCacheStats:
+    """Summary of article embedding cache state after a recompute pass."""
+
+    total_docs: int
+    cached_docs: int
+    missing_docs: int
+    computed_docs: int
 
 
 class ArticleEmbeddingProvider:
@@ -89,7 +100,7 @@ class ArticleEmbeddingProvider:
 
         LOGGER.info('Computed and cached article embeddings for %s/%s missing articles', total_docs, total_docs)
 
-    def recompute_embeddings(self, *, corpus: Any) -> dict[str, int]:
+    def recompute_embeddings(self, *, corpus: Any) -> EmbeddingCacheStats:
         """
         Precompute and cache missing article embeddings for the whole corpus.
 
@@ -107,12 +118,12 @@ class ArticleEmbeddingProvider:
                 total_docs,
                 cached_docs,
             )
-            return {
-                'total_docs': int(total_docs),
-                'cached_docs': int(cached_docs),
-                'missing_docs': 0,
-                'computed_docs': 0,
-            }
+            return EmbeddingCacheStats(
+                total_docs=int(total_docs),
+                cached_docs=int(cached_docs),
+                missing_docs=0,
+                computed_docs=0,
+            )
 
         LOGGER.info('Found %s missing article embeddings', len(missing_docs))
         if self._backend == 'origin_service':
@@ -124,12 +135,12 @@ class ArticleEmbeddingProvider:
                 len(missing_docs),
                 cached_docs,
             )
-            return {
-                'total_docs': int(total_docs),
-                'cached_docs': int(cached_docs),
-                'missing_docs': int(len(missing_docs)),
-                'computed_docs': int(len(missing_docs)),
-            }
+            return EmbeddingCacheStats(
+                total_docs=int(total_docs),
+                cached_docs=int(cached_docs),
+                missing_docs=int(len(missing_docs)),
+                computed_docs=int(len(missing_docs)),
+            )
 
         if self._backend == 'local_sentence_transformers':
             missing_total = len(missing_docs)
@@ -155,12 +166,12 @@ class ArticleEmbeddingProvider:
                 missing_total,
                 cached_docs,
             )
-            return {
-                'total_docs': int(total_docs),
-                'cached_docs': int(cached_docs),
-                'missing_docs': int(missing_total),
-                'computed_docs': int(missing_total),
-            }
+            return EmbeddingCacheStats(
+                total_docs=int(total_docs),
+                cached_docs=int(cached_docs),
+                missing_docs=int(missing_total),
+                computed_docs=int(missing_total),
+            )
 
         raise ValueError(f'Unsupported article embedding backend: {self._backend}')
 

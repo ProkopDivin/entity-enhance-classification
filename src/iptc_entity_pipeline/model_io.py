@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -12,6 +13,18 @@ import numpy as np
 from clearml import Task
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SavedModelPaths:
+    """Filesystem paths for all artifacts produced by :func:`save_final_model_outputs`."""
+
+    output_dir: str
+    model_path: str
+    test_embeddings_path: str
+    config_yaml_path: str
+    parameters_json_path: str
+    probabilities_csv_path: str
 
 
 def build_probability_dataframe(
@@ -49,7 +62,7 @@ def save_final_model_outputs(
     config_mapping: Mapping[str, Any],
     config_name: str,
     feature_dim: int,
-) -> Mapping[str, str]:
+) -> SavedModelPaths:
     """Save final model bundle and test probability CSV to disk and ClearML."""
     import yaml
 
@@ -109,11 +122,11 @@ def save_final_model_outputs(
     task.upload_artifact('saved_model_parameters_json', artifact_object=str(parameters_json_path))
     task.upload_artifact('saved_model_test_probabilities_csv', artifact_object=str(probabilities_csv_path))
 
-    return {
-        'output_dir': str(output_dir),
-        'model_path': str(model_path),
-        'test_embeddings_path': str(test_embeddings_path),
-        'config_yaml_path': str(config_yaml_path),
-        'parameters_json_path': str(parameters_json_path),
-        'probabilities_csv_path': str(probabilities_csv_path),
-    }
+    return SavedModelPaths(
+        output_dir=str(output_dir),
+        model_path=str(model_path),
+        test_embeddings_path=str(test_embeddings_path),
+        config_yaml_path=str(config_yaml_path),
+        parameters_json_path=str(parameters_json_path),
+        probabilities_csv_path=str(probabilities_csv_path),
+    )

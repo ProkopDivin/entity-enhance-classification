@@ -106,25 +106,25 @@ def iter_param_grid(
         'learning_rate': [float(value) for value in training_config['learning_rate']],
     }
     combos: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for model_values in product(
+    for hidden_dim, dropouts1, dropouts2 in product(
         model_space['hidden_dim'],
         model_space['dropouts1'],
         model_space['dropouts2'],
     ):
-        for training_values in product(
+        for batch_size, learning_rate in product(
             training_space['batch_size'],
             training_space['learning_rate'],
         ):
             combo_model_config = {
-                'hidden_dim': model_values[0],
-                'dropouts1': model_values[1],
-                'dropouts2': model_values[2],
+                'hidden_dim': hidden_dim,
+                'dropouts1': dropouts1,
+                'dropouts2': dropouts2,
             }
             combo_training_config = dict(training_config)
             combo_training_config.update(
                 {
-                    'batch_size': training_values[0],
-                    'learning_rate': training_values[1],
+                    'batch_size': batch_size,
+                    'learning_rate': learning_rate,
                 }
             )
             combos.append((combo_model_config, combo_training_config))
