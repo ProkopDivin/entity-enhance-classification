@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import numpy as np
+from clearml import Task
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
 from iptc_entity_pipeline.data_loading import get_article_text, get_doc_wdids
@@ -100,17 +101,21 @@ class FeatureBuilder:
         unique_missing_entities = len(unique_missing_wdids_all)
         avg_missing_per_article = (total_missing_embeddings / total_docs) if total_docs else 0.0
         avg_found_per_article = (total_found_embeddings / total_docs) if total_docs else 0.0
-        LOGGER.info(
-            (
-                'Entity embedding final stats: unique_missing=%s unique_total=%s missing_ratio=%.4f '
-                'avg_missing_per_article=%.4f avg_found_per_article=%.4f'
-            ),
-            unique_missing_entities,
-            unique_total_entities,
-            (unique_missing_entities / unique_total_entities) if unique_total_entities else 0.0,
-            avg_missing_per_article,
-            avg_found_per_article,
+        final_stats_message = (
+            'Entity embedding final stats: '
+            f'unique_missing={unique_missing_entities} '
+            f'unique_total={unique_total_entities} '
+            f'missing_ratio='
+            f'{((unique_missing_entities / unique_total_entities) if unique_total_entities else 0.0):.4f} '
+            f'avg_missing_per_article={avg_missing_per_article:.4f} '
+            f'avg_found_per_article={avg_found_per_article:.4f}'
         )
+        LOGGER.info(
+            final_stats_message,
+        )
+        task = Task.current_task()
+        if task is not None:
+            task.get_logger().report_text(final_stats_message, print_console=True)
 
         return np.vstack(rows)
 
