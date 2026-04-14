@@ -136,6 +136,8 @@ def prepare_article_embeddings(
     embedding_config: Mapping[str, Any],
 ):
     """Precompute and cache missing article embeddings for all corpora."""
+    from dataclasses import asdict
+
     logger = logging.getLogger(__name__)
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths_config['article_embeddings_dir'],
@@ -176,6 +178,8 @@ def link_embeddings_and_build_datasets(
     embedding_config: Mapping[str, Any],
 ):
     """Prepare entity coverage, link embeddings, and build EmbeddingDataset objects."""
+    from iptc_entity_pipeline.clearml_pipeline import DatasetBundle, EntityEmbeddingStats
+
     logger = logging.getLogger(__name__)
     logger.info('Initializing providers for merged entity preparation + linking step')
     article_provider = ArticleEmbeddingProvider(
@@ -340,6 +344,7 @@ def run_cv(
 ):
     """Run mandatory CV over train and select best hyperparameter combination."""
     import pandas as pd
+    from iptc_entity_pipeline.clearml_pipeline import CvResult, FoldScores
     from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 
     task = Task.current_task()
@@ -545,8 +550,11 @@ def eval_final(
     feature_dim: int,
 ):
     """Evaluate final model on test and persist CV dev summary with mean/std."""
+    from dataclasses import asdict
+
     import pandas as pd
     from geneea.catlib.model.model import filterLabels
+    from iptc_entity_pipeline.clearml_pipeline import EvalResult
 
     task = Task.current_task()
     logger = task.get_logger()
