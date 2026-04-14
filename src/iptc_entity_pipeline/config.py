@@ -90,13 +90,16 @@ class HyperparamSpace:
         :param base_training: Base training config whose non-grid fields are preserved.
         :return: List of ``(ModelConfig, TrainingConfig)`` tuples.
         """
-        combos: list[tuple[ModelConfig, TrainingConfig]] = []
-        for hd, d1, d2 in product(self.hidden_dims, self.dropouts1, self.dropouts2):
-            for bs, lr in product(self.batch_sizes, self.learning_rates):
-                model_cfg = ModelConfig(hidden_dim=hd, dropouts1=d1, dropouts2=d2)
-                train_cfg = replace(base_training, batch_size=bs, learning_rate=lr)
-                combos.append((model_cfg, train_cfg))
-        return combos
+        return [
+            (
+                ModelConfig(hidden_dim=hd, dropouts1=d1, dropouts2=d2),
+                replace(base_training, batch_size=bs, learning_rate=lr),
+            )
+            for hd, d1, d2, bs, lr in product(
+                self.hidden_dims, self.dropouts1, self.dropouts2,
+                self.batch_sizes, self.learning_rates,
+            )
+        ]
 
 
 @dataclass(frozen=True)

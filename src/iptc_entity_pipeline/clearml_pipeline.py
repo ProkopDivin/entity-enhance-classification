@@ -29,6 +29,7 @@ from iptc_entity_pipeline.data_loading import (
     get_doc_wdids,
     load_and_normalize_corpora,
     load_wdid_mapping,
+    sanitize_name,
 )
 from iptc_entity_pipeline.dataset_builder import (
     build_embedding_dataset,
@@ -296,9 +297,6 @@ def link_embeddings_and_build_datasets(
     train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
     test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
-    actual_entity_dim = int(entity_store.infer_embedding_dim())
-    if entity_dim != actual_entity_dim:
-        raise ValueError(f'Entity embedding dimension mismatch: expected={entity_dim}, actual={actual_entity_dim}')
     return DatasetBundle(
         train_data=train_data,
         test_data=test_data,
@@ -609,10 +607,9 @@ def eval_final(
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
-    sanitized_config_name = ''.join(ch if ch.isalnum() or ch in ['-', '_'] else '_' for ch in config_name)
     results_dir = Path('results')
     results_dir.mkdir(parents=True, exist_ok=True)
-    excel_path = results_dir / f'final_evaluation_tables_{sanitized_config_name}.xlsx'
+    excel_path = results_dir / f'final_evaluation_tables_{sanitize_name(value=config_name)}.xlsx'
     save_paths = save_final_model_outputs(
         model=trainedModel,
         test_data=testData,

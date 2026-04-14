@@ -143,15 +143,15 @@ def _resolve_downsampling_cache_dir(*, cache_path: Path | None) -> Path | None:
     return cache_path
 
 
-def _sanitize_filename_part(*, value: str) -> str:
-    """Create filesystem-safe fragment for order cache filenames."""
+def sanitize_name(*, value: str) -> str:
+    """Replace non-alphanumeric characters (except ``-`` and ``_``) with underscores."""
     return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '_' for ch in value)
 
 
 def _order_file_path(*, cache_dir: Path, corpus_name: str, split_name: str) -> Path:
     """Build path to persisted order file for split/corpus pair."""
-    safe_corpus_name = _sanitize_filename_part(value=corpus_name)
-    safe_split_name = _sanitize_filename_part(value=split_name)
+    safe_corpus_name = sanitize_name(value=corpus_name)
+    safe_split_name = sanitize_name(value=split_name)
     return cache_dir / f'{safe_corpus_name}_{safe_split_name}.txt'
 
 
@@ -252,15 +252,12 @@ def _downsample_split_corpus(
     return corpus_factory(filtered_docs())
 
 
+_CSV_FIELD_LIMIT = 1_000_000
+
+
 def _ensure_csv_field_limit() -> None:
     """Raise CSV parser field-size limit to handle large JSON entity columns."""
-    field_limit = sys.maxsize
-    while True:
-        try:
-            csv.field_size_limit(field_limit)
-            break
-        except OverflowError:
-            field_limit = field_limit // 10
+    csv.field_size_limit(_CSV_FIELD_LIMIT)
 
 
 def load_wdid_mapping(*, wdid_mapping_tsv: str) -> dict[str, list[str]]:
