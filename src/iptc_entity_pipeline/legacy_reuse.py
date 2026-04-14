@@ -8,7 +8,17 @@ Source provenance:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
+
+
+@dataclass
+class EpochStats:
+    """Per-epoch metric accumulator for a single data split."""
+
+    precision: list[float] = field(default_factory=list)
+    recall: list[float] = field(default_factory=list)
+    loss: list[float] = field(default_factory=list)
 
 import numpy as np
 import pandas as pd
@@ -234,8 +244,8 @@ def trainClassificationModel(
     task = Task.current_task()
     logger = task.get_logger()
 
-    train_stats = [[], [], []]
-    dev_stats = [[], [], []]
+    train_stats = EpochStats()
+    dev_stats = EpochStats()
     es_patience = int(trainingConfig.get('earlyStoppingPatience', 0))
     es_min_delta = float(trainingConfig.get('earlyStoppingMinDelta', 0.0))
 
@@ -275,8 +285,9 @@ def trainClassificationModel(
         )
         last_time = time.time()
 
-        for i, st in enumerate([dev_precision, dev_recall, dev_loss]):
-            dev_stats[i].append(st)
+        dev_stats.precision.append(dev_precision)
+        dev_stats.recall.append(dev_recall)
+        dev_stats.loss.append(dev_loss)
         logger.report_scalar(
             title=f'{validation_title_name} Training Stats',
             series='Precision',
@@ -328,8 +339,9 @@ def trainClassificationModel(
             print_console=logConfig['PRINT_LOGS'],
         )
         last_time = time.time()
-        for i, st in enumerate([train_precision, train_recall, train_loss]):
-            train_stats[i].append(st)
+        train_stats.precision.append(train_precision)
+        train_stats.recall.append(train_recall)
+        train_stats.loss.append(train_loss)
         logger.report_scalar(title='Train Training Stats', series='Precision', value=train_precision, iteration=t)
         logger.report_scalar(title='Train Training Stats', series='Recall', value=train_recall, iteration=t)
         logger.report_scalar(title='Train Training Stats', series='Loss', value=train_loss, iteration=t)
@@ -357,14 +369,14 @@ def trainClassificationModel(
         print_console=logConfig['PRINT_LOGS'],
     )
     model._nn.eval()
-    final_dev_loss = best_dev_loss if best_dev_loss is not None else (dev_stats[2][-1] if dev_stats[2] else 0.0)
-    epochs_run = len(dev_stats[2]) if dev_stats[2] else 0
-    train_precisions = list(train_stats[0]) if train_stats[0] else []
-    train_recalls = list(train_stats[1]) if train_stats[1] else []
-    train_losses = list(train_stats[2]) if train_stats[2] else []
-    dev_precisions = list(dev_stats[0]) if dev_stats[0] else []
-    dev_recalls = list(dev_stats[1]) if dev_stats[1] else []
-    dev_losses = list(dev_stats[2]) if dev_stats[2] else []
+    final_dev_loss = best_dev_loss if best_dev_loss is not None else (dev_stats.loss[-1] if dev_stats.loss else 0.0)
+    epochs_run = len(dev_stats.loss)
+    train_precisions = list(train_stats.precision)
+    train_recalls = list(train_stats.recall)
+    train_losses = list(train_stats.loss)
+    dev_precisions = list(dev_stats.precision)
+    dev_recalls = list(dev_stats.recall)
+    dev_losses = list(dev_stats.loss)
     return (
         model,
         final_dev_loss,
