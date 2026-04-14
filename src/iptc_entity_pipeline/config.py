@@ -48,7 +48,7 @@ class TrainingConfig:
     """Training loop parameters."""
 
     epochs: int = 100
-    batch_size: list[int] = field(default_factory=lambda: [64])
+    batch_size: list[int] = field(default_factory=lambda: [100])
     optimizer_name: str = 'adam'
     learning_rate: list[float] = field(default_factory=lambda: [0.00037])
     lr_scheduler_name: str = 'stepLR'
@@ -65,11 +65,13 @@ class TrainingConfig:
 class EvaluationConfig:
     """Evaluation behavior and threshold settings."""
 
-    threshold_predict: float = -0.3
+    threshold_predict: float = -9999
     threshold_eval: float = 0.5
     per_corpus: bool = True
     per_class: bool = True
     averaging_type: str = 'datapoint'
+    base_probabilities_csv: str = ''
+
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,70 @@ class BaseConfig:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class WpEntitiesConfig(BaseConfig):
+    """Default entity-enhanced configuration."""
+
+
+@dataclass(frozen=True)
+class ArticleOnlyConfig(BaseConfig):
+    """Article-only configuration without entity embeddings."""
+
+    embeddings: EmbeddingConfig = field(
+        default_factory=lambda: EmbeddingConfig(
+            article_embedding_backend='origin_service',
+            article_model_name='paraphrase-multilingual-MiniLM-L12-v2-300-0.3',
+            article_embedding_dim=384,
+            embed_svc_url='http://tau.g:5533',
+            entity_lang='en',
+            use_entity_embeddings=False,
+            combine_method='concat',
+            entity_pooling='sum',
+        )
+    )
+    
+
+
+@dataclass(frozen=True)
+class DebugConfig(BaseConfig):
+    """Debug configuration for quick local runs."""
+
+    paths: PathsConfig = field(
+        default_factory=lambda: PathsConfig(
+            train_csv=f'{DATA_ROOT}/debug/all-corpora-train-entities.csv',
+            test_csv=f'{DATA_ROOT}/debug/all-corpora-test-entities.csv',
+            wdid_mapping_tsv=f'{DATA_ROOT}/debug/wdId_mapping.tsv',
+            article_embeddings_dir=f'{DATA_ROOT}/article_embeddings',
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/WikidataProject',
+            downsampling_order_cache_json=f'{DATA_ROOT}/downsampling_order_cache.json',
+            removed_cat_ids=['20000419'],
+        )
+    )
+    model: ModelConfig = field(
+        default_factory=lambda: ModelConfig(
+            hidden_dim=[1024],
+            dropouts1=[0.1],
+            dropouts2=[0.3],
+        )
+    )
+    training: TrainingConfig = field(
+        default_factory=lambda: TrainingConfig(
+            epochs=5,
+            batch_size=[100],
+            optimizer_name='adam',
+            learning_rate=[0.00037],
+            lr_scheduler_name='stepLR',
+            step_size=1,
+            gamma=1,
+            loss_name='bceWithLogitsLoss',
+            early_stopping_patience=6,
+            early_stopping_min_delta=0.000000001,
+        )
+    )
+    cv: CvConfig = field(default_factory=lambda: CvConfig(folds=2, random_seed=43))
+    debug: bool = False
+
+
 def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
     """Return a config with absolute paths resolved from ``root_dir``."""
     root_path = Path(root_dir)
@@ -120,96 +186,16 @@ def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
         downsampling_order_cache_json=str(root_path / paths.downsampling_order_cache_json),
         removed_cat_ids=paths.removed_cat_ids,
     )
-    return BaseConfig(
-        paths=resolved_paths,
-        embeddings=config.embeddings,
-        model=config.model,
-        training=config.training,
-        evaluation=config.evaluation,
-        cv=config.cv,
-        logging=config.logging,
-        objective_corpora=config.objective_corpora,
-        downsample_corpora=config.downsample_corpora,
-        debug=config.debug,
-    )
+    return replace(config, paths=resolved_paths)
 
 
-
-def to_article_only_config(config: BaseConfig) -> BaseConfig:
-    """
-    Return a config variant that uses only article embeddings.
-
-    :param config: Base config to adapt.
-    :return: Config with entity embeddings disabled.
-    """
-    return replace(
-        config,
-        embeddings=replace(
-            config.embeddings,
-            use_entity_embeddings=False,
-        ),
-    )
-
-
-
-
-def _with_corpora_dir(config: BaseConfig, corpora_dir_name: str) -> BaseConfig:
-    """
-    Return a config variant with train/test CSVs from selected corpora directory.
-
-    :param config: Base config to adapt.
-    :param corpora_dir_name: Subdirectory under ``DATA_ROOT`` containing corpora CSV files.
-    :return: Config with updated corpora CSV and wdId mapping paths.
-    """
-    return replace(
-        config,
-        paths=replace(
-            config.paths,
-            train_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-train-entities.csv',
-            test_csv=f'{DATA_ROOT}/{corpora_dir_name}/all-corpora-test-entities.csv',
-            wdid_mapping_tsv=f'{DATA_ROOT}/{corpora_dir_name}/wdId_mapping.tsv',
-        ),
-    )
-
-
-def to_article_config_filtred_dataset(config: BaseConfig, corpora_dir: str) -> BaseConfig:
-    config = replace(
-        config,
-        embeddings=replace(
-            config.embeddings,
-            use_entity_embeddings=False,
-        )
-    )
-    return _with_corpora_dir(config=config, corpora_dir_name=corpora_dir)
-
-
-def to_debug_config(config: BaseConfig) -> BaseConfig:
-    """
-    Return a minimal config variant for fast local debugging.
-
-    :param config: Base config to adapt.
-    :return: Config pointing to ``data/debug`` with reduced training parameters.
-    """
-    config = _with_corpora_dir(config=config, corpora_dir_name='debug')
-    return replace(
-        config,
-        training=replace(config.training, epochs=5),
-        cv=replace(config.cv, folds=2),
-        debug=False,
-    )
-
-
-def to_downsample_nl_noordhollandsdagblad_033(config: BaseConfig) -> BaseConfig:
-    """
-    Return config variant with train downsampling for ``nl_noordhollandsdagblad``.
-
-    :param config: Base config to adapt.
-    :return: Config with deterministic per-corpus downsampling enabled.
-    """
-    return replace(
-        config,
-        downsample_corpora={'nl_noordhollandsdagblad': 0.33},
-    )
+def _config_map() -> dict[str, BaseConfig]:
+    """Return supported config instances."""
+    return {
+        'debug': DebugConfig(),
+        'wpentities': WpEntitiesConfig(),
+        'article_only': ArticleOnlyConfig(),
+    }
 
 
 def get_config(config_name: str) -> BaseConfig:
@@ -218,35 +204,18 @@ def get_config(config_name: str) -> BaseConfig:
 
     Supported names:
     - ``debug``: minimal config loading from ``data/debug`` for fast local testing.
-    - ``base``: entity-enhanced default setup (gold-chrono-per-dataset).
+    - ``wpentities``: entity-enhanced default setup (gold-chrono-per-dataset).
     - ``article_only``: article embeddings only (entity embeddings disabled).
-    - ``entities_origin_filtred``: entity-enhanced with ``origin-corpora-filtred`` inputs.
-    - ``entities_chrono_global``: entity-enhanced with ``chrono-corpora-global`` inputs.
-    - ``entities_chrono_per_dataset``: entity-enhanced with ``chrono-corpora-per-dataset`` inputs.
-    - ``downsample_nl_noordhollandsdagblad_033``: downsample ``nl_noordhollandsdagblad`` train to 33%.
 
     :param config_name: Config variant name.
     :return: Selected config object.
     :raises ValueError: If ``config_name`` is unknown.
     """
     name = config_name.strip().lower()
-    if name == 'debug':
-        return to_debug_config(config=BaseConfig())
-    if name == 'base':
-        return BaseConfig()
-    if name == 'article_only':
-        return to_article_only_config(config=BaseConfig())
-    if name == 'entities_origin_filtred':
-        return _with_corpora_dir(config=BaseConfig(), corpora_dir_name='origin-corpora-filtred')
-    if name == 'entities_chrono_global':
-        return _with_corpora_dir(config=BaseConfig(), corpora_dir_name='chrono-corpora-global')
-    if name == 'entities_chrono_per_dataset':
-        return _with_corpora_dir(config=BaseConfig(), corpora_dir_name='chrono-corpora-per-dataset')
-    if name == 'article_only_filtred':
-        return to_article_config_filtred_dataset(config=BaseConfig(), corpora_dir='origin-corpora-filtred')
-    if name == 'downsample_nl_noordhollandsdagblad_033':
-        return to_downsample_nl_noordhollandsdagblad_033(config=BaseConfig())
-    raise ValueError(f'Unsupported config_name: {config_name}')
+    config_map = _config_map()
+    if name not in config_map:
+        raise ValueError(f'Unsupported config_name: {config_name}')
+    return config_map[name]
 
 
 def list_config_names() -> tuple[str, ...]:
@@ -257,13 +226,8 @@ def list_config_names() -> tuple[str, ...]:
     """
     return (
         'debug',
-        'base',
+        'wpentities',
         'article_only',
-        'entities_origin_filtred',
-        'entities_chrono_global',
-        'entities_chrono_per_dataset',
-        'article_only_filtred',
-        'downsample_nl_noordhollandsdagblad_033',
     )
 
 
