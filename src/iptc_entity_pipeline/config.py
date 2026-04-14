@@ -153,16 +153,7 @@ class ArticleOnlyConfig(BaseConfig):
     """Article-only configuration without entity embeddings."""
 
     embeddings: EmbeddingConfig = field(
-        default_factory=lambda: EmbeddingConfig(
-            article_embedding_backend='origin_service',
-            article_model_name='paraphrase-multilingual-MiniLM-L12-v2-300-0.3',
-            article_embedding_dim=384,
-            embed_svc_url='http://tau.g:5533',
-            entity_lang='en',
-            use_entity_embeddings=False,
-            combine_method='concat',
-            entity_pooling='sum',
-        )
+        default_factory=lambda: replace(EmbeddingConfig(), use_entity_embeddings=False)
     )
 
 
@@ -175,43 +166,12 @@ class DebugConfig(BaseConfig):
             train_csv=f'{DATA_ROOT}/debug/all-corpora-train-entities.csv',
             test_csv=f'{DATA_ROOT}/debug/all-corpora-test-entities.csv',
             wdid_mapping_tsv=f'{DATA_ROOT}/debug/wdId_mapping.tsv',
-            article_embeddings_dir=f'{DATA_ROOT}/article_embeddings',
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/WikidataProject',
-            downsampling_order_cache_json=f'{DATA_ROOT}/downsampling_order_cache.json',
-            removed_cat_ids=['20000419'],
         )
     )
-    model: ModelConfig = field(
-        default_factory=lambda: ModelConfig(
-            hidden_dim=1024,
-            dropouts1=0.1,
-            dropouts2=0.3,
-        )
-    )
-    training: TrainingConfig = field(
-        default_factory=lambda: TrainingConfig(
-            epochs=5,
-            batch_size=100,
-            optimizer_name='adam',
-            learning_rate=0.00037,
-            lr_scheduler_name='stepLR',
-            step_size=1,
-            gamma=1,
-            loss_name='bceWithLogitsLoss',
-            early_stopping_patience=6,
-            early_stopping_min_delta=0.000000001,
-        )
-    )
-    hyperparam_space: HyperparamSpace = field(
-        default_factory=lambda: HyperparamSpace(
-            hidden_dims=[1024],
-            dropouts1=[0.1],
-            dropouts2=[0.3],
-            batch_sizes=[100],
-            learning_rates=[0.00037],
-        )
-    )
-    cv: CvConfig = field(default_factory=lambda: CvConfig(folds=2, random_seed=43))
+    model: ModelConfig = field(default_factory=lambda: replace(ModelConfig(), dropouts1=0.1))
+    training: TrainingConfig = field(default_factory=lambda: replace(TrainingConfig(), epochs=5))
+    hyperparam_space: HyperparamSpace = field(default_factory=lambda: replace(HyperparamSpace(), dropouts1=[0.1]))
+    cv: CvConfig = field(default_factory=lambda: replace(CvConfig(), folds=2))
     debug: bool = False
 
 

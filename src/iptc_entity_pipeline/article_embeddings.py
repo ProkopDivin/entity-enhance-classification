@@ -107,73 +107,41 @@ class ArticleEmbeddingProvider:
         :param corpus: Corpus of documents with ``id``.
         :return: Summary with total, cached, missing and computed article counts.
         """
-        total_docs = len(corpus)
-        LOGGER.info('Checking article embedding cache for corpus_size=%s', total_docs)
+        total = len(corpus)
+        LOGGER.info('Checking article embedding cache for corpus_size=%s', total)
         missing_docs = [doc for doc in corpus if not self._path_for_article(article_id=doc.id).is_file()]
-        cached_docs = total_docs - len(missing_docs)
-        if not missing_docs:
-            LOGGER.info(
-                'Article embeddings prepared for %s/%s articles (computed=0, cached=%s)',
-                total_docs,
-                total_docs,
-                cached_docs,
-            )
-            return EmbeddingCacheStats(
-                total_docs=int(total_docs),
-                cached_docs=int(cached_docs),
-                missing_docs=0,
-                computed_docs=0,
-            )
+        cached = total - len(missing_docs)
+        computed = len(missing_docs)
 
-        LOGGER.info('Found %s missing article embeddings', len(missing_docs))
+        if missing_docs:
+            LOGGER.info('Found %s missing article embeddings', computed)
+            self._compute_missing(docs=missing_docs)
+
+        LOGGER.info(
+            'Article embeddings prepared for %s/%s articles (computed=%s, cached=%s)',
+            total, total, computed, cached,
+        )
+        return EmbeddingCacheStats(total_docs=total, cached_docs=cached, missing_docs=computed, computed_docs=computed)
+
+    def _compute_missing(self, *, docs: Sequence[Any]) -> None:
+        """Dispatch missing-embedding computation to the configured backend."""
         if self._backend == 'origin_service':
-            self._compute_cache_embeddings(docs=missing_docs)
-            LOGGER.info(
-                'Article embeddings prepared for %s/%s articles (computed=%s, cached=%s)',
-                total_docs,
-                total_docs,
-                len(missing_docs),
-                cached_docs,
-            )
-            return EmbeddingCacheStats(
-                total_docs=int(total_docs),
-                cached_docs=int(cached_docs),
-                missing_docs=int(len(missing_docs)),
-                computed_docs=int(len(missing_docs)),
-            )
+            self._compute_cache_embeddings(docs=docs)
+        elif self._backend == 'local_sentence_transformers':
+            self._compute_local_embeddings(docs=docs)
+        else:
+            raise ValueError(f'Unsupported article embedding backend: {self._backend}')
 
-        if self._backend == 'local_sentence_transformers':
-            missing_total = len(missing_docs)
-            from iptc_entity_pipeline.data_loading import get_article_text
+    def _compute_local_embeddings(self, *, docs: Sequence[Any]) -> None:
+        from iptc_entity_pipeline.data_loading import get_article_text
 
-            for idx, doc in enumerate(missing_docs, start=1):
-                _ = self.get_embedding(article_id=doc.id, article_text=get_article_text(doc), article_doc=doc)
-                if idx % 1000 == 0:
-                    LOGGER.info(
-                        'Computed and cached article embeddings for %s/%s missing articles',
-                        idx,
-                        missing_total,
-                    )
-            LOGGER.info(
-                'Computed and cached article embeddings for %s/%s missing articles',
-                missing_total,
-                missing_total,
-            )
-            LOGGER.info(
-                'Article embeddings prepared for %s/%s articles (computed=%s, cached=%s)',
-                total_docs,
-                total_docs,
-                missing_total,
-                cached_docs,
-            )
-            return EmbeddingCacheStats(
-                total_docs=int(total_docs),
-                cached_docs=int(cached_docs),
-                missing_docs=int(missing_total),
-                computed_docs=int(missing_total),
-            )
-
-        raise ValueError(f'Unsupported article embedding backend: {self._backend}')
+        total = len(docs)
+        LOGGER.info('Computing and caching %s missing article embeddings (local)', total)
+        for idx, doc in enumerate(docs, start=1):
+            self.get_embedding(article_id=doc.id, article_text=get_article_text(doc), article_doc=doc)
+            if idx % 1000 == 0:
+                LOGGER.info('Computed and cached article embeddings for %s/%s missing articles', idx, total)
+        LOGGER.info('Computed and cached article embeddings for %s/%s missing articles', total, total)
 
     def get_embedding(self, *, article_id: str, article_text: str, article_doc: Any | None = None) -> np.ndarray:
         """
