@@ -66,10 +66,10 @@ def report_cv_outputs(*, task: Task, logger: Any, trials_df: Any, folds_df: Any,
     task.upload_artifact('cv_dev_summary_dataframe', artifact_object=cv_dev_df)
 
 
-def log_stage(*, task: Task, message: str, logging_config: Mapping[str, Any]) -> None:
+def log_stage(*, task: Task, message: str, print_logs: bool) -> None:
     """Log pipeline stage both to logger and ClearML task text output."""
     LOGGER.info(message)
-    task.get_logger().report_text(message, print_console=bool(logging_config['print_logs']))
+    task.get_logger().report_text(message, print_console=print_logs)
 
 
 def _scatter_xy(data: Sequence[float]) -> Any:

@@ -1,10 +1,17 @@
 """Configuration dataclasses for the IPTC entity-enhanced pipeline."""
 
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
+from itertools import product
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
+
+
+def config_from_dict(cls, d: Mapping[str, Any]):
+    """Reconstruct a frozen dataclass from a dict, ignoring unknown keys."""
+    valid_keys = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in d.items() if k in valid_keys})
 
 
 @dataclass(frozen=True)
@@ -36,21 +43,21 @@ class EmbeddingConfig:
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Model architecture parameters."""
+    """Scalar model architecture parameters for a single training run."""
 
-    hidden_dim: list[int] = field(default_factory=lambda: [1024])
-    dropouts1: list[float] = field(default_factory=lambda: [0.0])
-    dropouts2: list[float] = field(default_factory=lambda: [0.3])
+    hidden_dim: int = 1024
+    dropouts1: float = 0.0
+    dropouts2: float = 0.3
 
 
 @dataclass(frozen=True)
 class TrainingConfig:
-    """Training loop parameters."""
+    """Scalar training loop parameters for a single training run."""
 
     epochs: int = 100
-    batch_size: list[int] = field(default_factory=lambda: [100])
+    batch_size: int = 100
     optimizer_name: str = 'adam'
-    learning_rate: list[float] = field(default_factory=lambda: [0.00037])
+    learning_rate: float = 0.00037
     lr_scheduler_name: str = 'stepLR'
     step_size: int = 1
     gamma: float = 1
@@ -59,6 +66,37 @@ class TrainingConfig:
     # without improvement, and restores the best weights.
     early_stopping_patience: int = 6
     early_stopping_min_delta: float = 0.000000001
+
+
+@dataclass(frozen=True)
+class HyperparamSpace:
+    """Grid-search space for tunable hyperparameters.
+
+    Each list field defines candidate values to try.  Use
+    :meth:`iter_combinations` to expand the full Cartesian product.
+    """
+
+    hidden_dims: list[int] = field(default_factory=lambda: [1024])
+    dropouts1: list[float] = field(default_factory=lambda: [0.0])
+    dropouts2: list[float] = field(default_factory=lambda: [0.3])
+    batch_sizes: list[int] = field(default_factory=lambda: [100])
+    learning_rates: list[float] = field(default_factory=lambda: [0.00037])
+
+    def iter_combinations(
+        self, base_training: TrainingConfig,
+    ) -> list[tuple[ModelConfig, TrainingConfig]]:
+        """Expand grid into all ``(ModelConfig, TrainingConfig)`` combinations.
+
+        :param base_training: Base training config whose non-grid fields are preserved.
+        :return: List of ``(ModelConfig, TrainingConfig)`` tuples.
+        """
+        combos: list[tuple[ModelConfig, TrainingConfig]] = []
+        for hd, d1, d2 in product(self.hidden_dims, self.dropouts1, self.dropouts2):
+            for bs, lr in product(self.batch_sizes, self.learning_rates):
+                model_cfg = ModelConfig(hidden_dim=hd, dropouts1=d1, dropouts2=d2)
+                train_cfg = replace(base_training, batch_size=bs, learning_rate=lr)
+                combos.append((model_cfg, train_cfg))
+        return combos
 
 
 @dataclass(frozen=True)
@@ -73,20 +111,12 @@ class EvaluationConfig:
     base_probabilities_csv: str = ''
 
 
-
 @dataclass(frozen=True)
 class CvConfig:
     """Cross-validation setup."""
 
     folds: int = 5
     random_seed: int = 43
-
-
-@dataclass(frozen=True)
-class LoggingConfig:
-    """Logging behavior for ClearML components."""
-
-    print_logs: bool = True
 
 
 @dataclass(frozen=True)
@@ -99,9 +129,10 @@ class BaseConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     cv: CvConfig = field(default_factory=CvConfig)
-    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    hyperparam_space: HyperparamSpace = field(default_factory=HyperparamSpace)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
+    print_logs: bool = True
     debug: bool = True
 
     def to_clearml_mapping(self) -> dict[str, Any]:
@@ -130,7 +161,6 @@ class ArticleOnlyConfig(BaseConfig):
             entity_pooling='sum',
         )
     )
-    
 
 
 @dataclass(frozen=True)
@@ -150,23 +180,32 @@ class DebugConfig(BaseConfig):
     )
     model: ModelConfig = field(
         default_factory=lambda: ModelConfig(
-            hidden_dim=[1024],
-            dropouts1=[0.1],
-            dropouts2=[0.3],
+            hidden_dim=1024,
+            dropouts1=0.1,
+            dropouts2=0.3,
         )
     )
     training: TrainingConfig = field(
         default_factory=lambda: TrainingConfig(
             epochs=5,
-            batch_size=[100],
+            batch_size=100,
             optimizer_name='adam',
-            learning_rate=[0.00037],
+            learning_rate=0.00037,
             lr_scheduler_name='stepLR',
             step_size=1,
             gamma=1,
             loss_name='bceWithLogitsLoss',
             early_stopping_patience=6,
             early_stopping_min_delta=0.000000001,
+        )
+    )
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: HyperparamSpace(
+            hidden_dims=[1024],
+            dropouts1=[0.1],
+            dropouts2=[0.3],
+            batch_sizes=[100],
+            learning_rates=[0.00037],
         )
     )
     cv: CvConfig = field(default_factory=lambda: CvConfig(folds=2, random_seed=43))
@@ -233,4 +272,3 @@ def list_config_names() -> tuple[str, ...]:
 
 # Backward compatibility alias for older imports.
 PipelineConfig = BaseConfig
-

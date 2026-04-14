@@ -11,7 +11,18 @@ from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider, EmbeddingCacheStats
-from iptc_entity_pipeline.config import BaseConfig, resolve_paths
+from iptc_entity_pipeline.config import (
+    BaseConfig,
+    CvConfig,
+    EmbeddingConfig,
+    EvaluationConfig,
+    HyperparamSpace,
+    ModelConfig,
+    PathsConfig,
+    TrainingConfig,
+    config_from_dict,
+    resolve_paths,
+)
 from iptc_entity_pipeline.data_loading import (
     attach_entities_to_corpus,
     get_article_text,
@@ -42,9 +53,7 @@ from iptc_entity_pipeline.reporting import (
 from iptc_entity_pipeline.training import (
     CvFoldCurves,
     combo_params_json,
-    get_eval_config,
     get_obj_row,
-    iter_param_grid,
     train_model,
 )
 
@@ -112,16 +121,19 @@ def load_data(
     downsample_corpora: Mapping[str, float] | None = None,
 ):
     """Load normalized corpora with linked entities attached to each document."""
+    from iptc_entity_pipeline.config import PathsConfig, config_from_dict
+
+    paths = config_from_dict(PathsConfig, paths_config)
     corpora = load_and_normalize_corpora(
-        train_csv=paths_config['train_csv'],
-        test_csv=paths_config['test_csv'],
-        removed_cat_ids=paths_config['removed_cat_ids'],
+        train_csv=paths.train_csv,
+        test_csv=paths.test_csv,
+        removed_cat_ids=paths.removed_cat_ids,
         downsample_corpora=downsample_corpora or {},
-        downsampling_order_cache_json=paths_config.get('downsampling_order_cache_json'),
+        downsampling_order_cache_json=paths.downsampling_order_cache_json,
     )
-    wdid_mapping = load_wdid_mapping(wdid_mapping_tsv=paths_config['wdid_mapping_tsv'])
-    attach_entities_to_corpus(corpus=corpora.train, csv_path=paths_config['train_csv'], wdid_mapping=wdid_mapping)
-    attach_entities_to_corpus(corpus=corpora.test, csv_path=paths_config['test_csv'], wdid_mapping=wdid_mapping)
+    wdid_mapping = load_wdid_mapping(wdid_mapping_tsv=paths.wdid_mapping_tsv)
+    attach_entities_to_corpus(corpus=corpora.train, csv_path=paths.train_csv, wdid_mapping=wdid_mapping)
+    attach_entities_to_corpus(corpus=corpora.test, csv_path=paths.test_csv, wdid_mapping=wdid_mapping)
     return corpora
 
 
@@ -138,13 +150,17 @@ def prepare_article_embeddings(
     """Precompute and cache missing article embeddings for all corpora."""
     from dataclasses import asdict
 
+    from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
+
     logger = logging.getLogger(__name__)
+    paths = config_from_dict(PathsConfig, paths_config)
+    emb = config_from_dict(EmbeddingConfig, embedding_config)
     article_provider = ArticleEmbeddingProvider(
-        embeddings_dir=paths_config['article_embeddings_dir'],
-        model_name=embedding_config['article_model_name'],
-        backend=embedding_config['article_embedding_backend'],
-        embed_svc_url=embedding_config['embed_svc_url'],
-        embedding_dim=embedding_config['article_embedding_dim'],
+        embeddings_dir=paths.article_embeddings_dir,
+        model_name=emb.article_model_name,
+        backend=emb.article_embedding_backend,
+        embed_svc_url=emb.embed_svc_url,
+        embedding_dim=emb.article_embedding_dim,
     )
 
     train_stats = article_provider.recompute_embeddings(corpus=corpora.train)
@@ -179,19 +195,21 @@ def link_embeddings_and_build_datasets(
 ):
     """Prepare entity coverage, link embeddings, and build EmbeddingDataset objects."""
     from iptc_entity_pipeline.clearml_pipeline import DatasetBundle, EntityEmbeddingStats
+    from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
     logger = logging.getLogger(__name__)
     logger.info('Initializing providers for merged entity preparation + linking step')
+    paths = config_from_dict(PathsConfig, paths_config)
+    emb = config_from_dict(EmbeddingConfig, embedding_config)
     article_provider = ArticleEmbeddingProvider(
-        embeddings_dir=paths_config['article_embeddings_dir'],
-        model_name=embedding_config['article_model_name'],
-        backend=embedding_config['article_embedding_backend'],
-        embed_svc_url=embedding_config['embed_svc_url'],
-        embedding_dim=embedding_config['article_embedding_dim'],
+        embeddings_dir=paths.article_embeddings_dir,
+        model_name=emb.article_model_name,
+        backend=emb.article_embedding_backend,
+        embed_svc_url=emb.embed_svc_url,
+        embedding_dim=emb.article_embedding_dim,
     )
-    use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
 
-    if not use_entity_embeddings:
+    if not emb.use_entity_embeddings:
         def build_article_only_matrix(*, split_corpus, split_name: str) -> np.ndarray:
             rows: list[np.ndarray] = []
             total_docs = len(split_corpus)
@@ -227,15 +245,15 @@ def link_embeddings_and_build_datasets(
         )
 
     entity_store = EntityEmbeddingStore(
-        root_dir=paths_config['entity_embeddings_dir'],
-        lang=embedding_config['entity_lang'],
+        root_dir=paths.entity_embeddings_dir,
+        lang=emb.entity_lang,
     )
     pooling = SumEntityPooling()
     builder = FeatureBuilder(
         article_embedding_provider=article_provider,
         entity_embedding_store=entity_store,
         pooling_strategy=pooling,
-        combine_method=embedding_config['combine_method'],
+        combine_method=emb.combine_method,
     )
 
     unique_wdids: set[str] = set()
@@ -290,43 +308,6 @@ def link_embeddings_and_build_datasets(
 
 
 @PipelineDecorator.component(
-    return_values=['trainedModel'],
-    execution_queue='iptc_entity_tasks',
-    task_type=TaskTypes.training,
-)
-def train_classification_model(
-    trainData,
-    devData,
-    featureDim: int,
-    model_config: Mapping[str, Any],
-    training_config: Mapping[str, Any],
-    logging_config: Mapping[str, Any],
-):
-    """Create and train classification model as a dedicated pipeline step."""
-    scalar_model_config = {
-        'hidden_dim': int(model_config['hidden_dim'][0]),
-        'dropouts1': float(model_config['dropouts1'][0]),
-        'dropouts2': float(model_config['dropouts2'][0]),
-    }
-    scalar_training_config = dict(training_config)
-    scalar_training_config.update(
-        {
-            'batch_size': int(training_config['batch_size'][0]),
-            'learning_rate': float(training_config['learning_rate'][0]),
-        }
-    )
-    result = train_model(
-        train_data=trainData,
-        dev_data=devData,
-        feature_dim=featureDim,
-        model_config=scalar_model_config,
-        training_config=scalar_training_config,
-        logging_config=logging_config,
-    )
-    return result.model
-
-
-@PipelineDecorator.component(
     return_values=['cvResult'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.training,
@@ -334,47 +315,60 @@ def train_classification_model(
 def run_cv(
     trainData,
     featureDim: int,
-    model_config: Mapping[str, Any],
+    hyperparam_space_config: Mapping[str, Any],
     training_config: Mapping[str, Any],
     evaluation_config: Mapping[str, Any],
     cv_config: Mapping[str, Any],
     objective_corpora: str,
-    logging_config: Mapping[str, Any],
+    print_logs: bool = True,
     debug: bool = False,
 ):
     """Run mandatory CV over train and select best hyperparameter combination."""
+    from dataclasses import asdict
+
     import pandas as pd
     from iptc_entity_pipeline.clearml_pipeline import CvResult, FoldScores
+    from iptc_entity_pipeline.config import (
+        CvConfig,
+        EvaluationConfig,
+        HyperparamSpace,
+        ModelConfig,
+        TrainingConfig,
+        config_from_dict,
+    )
     from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 
     task = Task.current_task()
     logger = task.get_logger()
-    cv_folds = int(cv_config['folds'])
-    cv_random_seed = int(cv_config['random_seed'])
+
+    space = config_from_dict(HyperparamSpace, hyperparam_space_config)
+    base_training = config_from_dict(TrainingConfig, training_config)
+    eval_cfg = config_from_dict(EvaluationConfig, evaluation_config)
+    cv_cfg = config_from_dict(CvConfig, cv_config)
+
     x_full = to_numpy_array(matrix_like=trainData.X)
     y_full = (
         to_numpy_array(matrix_like=trainData.Y)
         if hasattr(trainData, 'Y')
         else build_multilabel_targets(corpus=trainData.corpus)
     )
-    eval_cfg = get_eval_config(evaluation_config=evaluation_config)
-    combinations = iter_param_grid(
-        model_config=model_config,
-        training_config=training_config,
-    )
+
+    combinations = space.iter_combinations(base_training=base_training)
     fold_rows: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
     best_trial: dict[str, Any] | None = None
+    best_combo: tuple[ModelConfig, TrainingConfig] | None = None
     best_fold_curves: tuple[CvFoldCurves, ...] = ()
-    for combo_idx, (combo_model_config, combo_training_config) in enumerate(combinations, start=1):
+
+    for combo_idx, (combo_model_cfg, combo_train_cfg) in enumerate(combinations, start=1):
         params_json = combo_params_json(
-            model_config=combo_model_config,
-            training_config=combo_training_config,
+            model_config=combo_model_cfg,
+            training_config=combo_train_cfg,
         )
         cv_splitter = MultilabelStratifiedKFold(
-            n_splits=cv_folds,
+            n_splits=cv_cfg.folds,
             shuffle=True,
-            random_state=cv_random_seed,
+            random_state=cv_cfg.random_seed,
         )
         fold_scores = FoldScores()
         combo_fold_curves: list[CvFoldCurves] = []
@@ -385,16 +379,16 @@ def run_cv(
                 train_data=fit_data,
                 dev_data=val_data,
                 feature_dim=featureDim,
-                model_config=combo_model_config,
-                training_config=combo_training_config,
-                logging_config=logging_config,
+                model_config=combo_model_cfg,
+                training_config=combo_train_cfg,
+                print_logs=print_logs,
             )
             model = train_result.model
             dev_loss = train_result.final_dev_loss
             df_corpora_fold, _ = evaluateModel(
                 model=model,
                 evalData=val_data,
-                evaluationConfig=eval_cfg,
+                evaluation_config=eval_cfg,
                 customThresholds=None,
             )
             micro_row = (
@@ -403,7 +397,7 @@ def run_cv(
                 else get_obj_row(
                     df_corpora=df_corpora_fold,
                     objective_corpora=objective_corpora,
-                    averaging_type=eval_cfg['averagingType'],
+                    averaging_type=eval_cfg.averaging_type,
                 )
             )
             fold_scores.loss.append(dev_loss)
@@ -451,13 +445,13 @@ def run_cv(
         trial_rows.append(trial_row)
         if best_trial is None or trial_row['F1_mean'] > best_trial['F1_mean']:
             best_trial = trial_row
+            best_combo = (combo_model_cfg, combo_train_cfg)
             best_fold_curves = tuple(combo_fold_curves)
 
-    if best_trial is None:
+    if best_trial is None or best_combo is None:
         raise ValueError('No CV trial results were produced.')
     trials_df = pd.DataFrame(trial_rows).sort_values(by='F1_mean', ascending=False).reset_index(drop=True)
     folds_df = pd.DataFrame(fold_rows)
-    best_params = json.loads(best_trial['params'])
     cv_dev_df = pd.DataFrame(
         [
             {
@@ -478,18 +472,7 @@ def run_cv(
     report_cv_outputs(task=task, logger=logger, trials_df=trials_df, folds_df=folds_df, cv_dev_df=cv_dev_df)
     report_cv_fold_curve_charts(logger=logger, fold_curves=best_fold_curves)
 
-    best_model_config = {
-        'hidden_dim': int(best_params['hidden_dim']),
-        'dropouts1': float(best_params['dropouts1']),
-        'dropouts2': float(best_params['dropouts2']),
-    }
-    best_training_config = dict(training_config)
-    best_training_config.update(
-        {
-            'batch_size': int(best_params['batch_size']),
-            'learning_rate': float(best_params['learning_rate']),
-        }
-    )
+    best_model_cfg, best_train_cfg = best_combo
     objective_metrics = {
         'Loss_mean': float(best_trial['Loss_mean']),
         'Loss_std': float(best_trial['Loss_std']),
@@ -503,8 +486,8 @@ def run_cv(
     }
     return CvResult(
         cv_dev_df=cv_dev_df,
-        best_model_config=best_model_config,
-        best_training_config=best_training_config,
+        best_model_config=asdict(best_model_cfg),
+        best_training_config=asdict(best_train_cfg),
         objective_metrics=objective_metrics,
     )
 
@@ -519,15 +502,20 @@ def train_best(
     feature_dim: int,
     best_model_config: Mapping[str, Any],
     training_config: Mapping[str, Any],
-    logging_config: Mapping[str, Any],
+    print_logs: bool = True,
 ):
+    """Train final model on full train set with best hyperparams from CV."""
+    from iptc_entity_pipeline.config import ModelConfig, TrainingConfig, config_from_dict
+
+    model_cfg = config_from_dict(ModelConfig, best_model_config)
+    train_cfg = config_from_dict(TrainingConfig, training_config)
     result = train_model(
         train_data=train_data,
         dev_data=test_data,
         feature_dim=feature_dim,
-        model_config=best_model_config,
-        training_config=training_config,
-        logging_config=logging_config,
+        model_config=model_cfg,
+        training_config=train_cfg,
+        print_logs=print_logs,
     )
     task = Task.current_task()
     logger = task.get_logger()
@@ -544,6 +532,7 @@ def eval_final(
     cvDevDf,
     testData,
     evaluation_config: Mapping[str, Any],
+    embedding_config: Mapping[str, Any],
     objective_corpora: str,
     config_name: str,
     config_mapping: Mapping[str, Any],
@@ -555,19 +544,21 @@ def eval_final(
     import pandas as pd
     from geneea.catlib.model.model import filterLabels
     from iptc_entity_pipeline.clearml_pipeline import EvalResult
+    from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig, config_from_dict
 
     task = Task.current_task()
     logger = task.get_logger()
-    eval_cfg = get_eval_config(evaluation_config=evaluation_config)
+    eval_cfg = config_from_dict(EvaluationConfig, evaluation_config)
+    emb_cfg = config_from_dict(EmbeddingConfig, embedding_config)
     df_corpora_test, df_classes_test, pred_scores = evaluateModel(
         model=trainedModel,
         evalData=testData,
-        evaluationConfig=eval_cfg,
+        evaluation_config=eval_cfg,
         customThresholds=None,
         returnPredictions=True,
     )
 
-    objective_row_name = f'All-{eval_cfg["averagingType"]}'
+    objective_row_name = f'All-{eval_cfg.averaging_type}'
     if objective_corpora in cvDevDf.index:
         row_cv = cvDevDf.loc[objective_corpora].to_dict()
     else:
@@ -597,7 +588,7 @@ def eval_final(
 
     def build_predictions_dataframe(*, dataset) -> pd.DataFrame:
         pred_labels = [
-            filterLabels(dc, thr=eval_cfg['thresholdEval'], thrByLabel=None, keepWgh=False)
+            filterLabels(dc, thr=eval_cfg.threshold_eval, thrByLabel=None, keepWgh=False)
             for dc in pred_scores
         ]
         rows = []
@@ -626,6 +617,8 @@ def eval_final(
         model=trainedModel,
         test_data=testData,
         pred_scores=pred_scores,
+        evaluation_config=eval_cfg,
+        embedding_config=emb_cfg,
         config_mapping=config_mapping,
         config_name=config_name,
         feature_dim=feature_dim,
@@ -640,8 +633,8 @@ def eval_final(
     task.upload_artifact(
         'evaluation_thresholds',
         artifact_object={
-            'threshold_predict': eval_cfg['thresholdPredict'],
-            'threshold_eval': eval_cfg['thresholdEval'],
+            'threshold_predict': eval_cfg.threshold_predict,
+            'threshold_eval': eval_cfg.threshold_eval,
             'objective_corpora': objective_corpora,
             'objective_row_name': objective_row_name,
         },
@@ -651,22 +644,22 @@ def eval_final(
     task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
 
     comparison_cfg = config_mapping.get('evaluation_comparison') or config_mapping.get('comparison') or {}
-    evaluation_comparison_cfg = dict(evaluation_config) if isinstance(evaluation_config, Mapping) else {}
-    merged_comparison_cfg = {**evaluation_comparison_cfg, **comparison_cfg}
-    base_probabilities_csv = str(merged_comparison_cfg.get('base_probabilities_csv', '')).strip()
+    base_probabilities_csv = str(
+        comparison_cfg.get('base_probabilities_csv', '') or eval_cfg.base_probabilities_csv
+    ).strip()
     comparison_result = None
     if base_probabilities_csv:
         comparison_result = compare_runs(
             current_probabilities=save_paths.probabilities_csv_path,
             base_probabilities=base_probabilities_csv,
             gold_data=testData,
-            threshold_eval=float(eval_cfg['thresholdEval']),
-            averaging_type=str(eval_cfg['averagingType']),
-            top_n=int(merged_comparison_cfg.get('top_n', 20)),
-            only_diff=bool(merged_comparison_cfg.get('only_diff', False)),
+            threshold_eval=eval_cfg.threshold_eval,
+            averaging_type=eval_cfg.averaging_type,
+            top_n=int(comparison_cfg.get('top_n', 20)),
+            only_diff=bool(comparison_cfg.get('only_diff', False)),
             output_path=build_output_path(
-                output_root=str(merged_comparison_cfg.get('output_root', 'results/comparisons')),
-                config_name=str(merged_comparison_cfg.get('config_name', config_name)),
+                output_root=str(comparison_cfg.get('output_root', 'results/comparisons')),
+                config_name=str(comparison_cfg.get('config_name', config_name)),
             ),
         )
         logger.report_table(
@@ -736,20 +729,20 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
 
     paths_config = config_mapping['paths']
     embedding_config = config_mapping['embeddings']
-    model_config = config_mapping['model']
     training_config = config_mapping['training']
     evaluation_config = config_mapping['evaluation']
     cv_config = config_mapping.get('cv', {'folds': 5, 'random_seed': 43})
-    logging_config = config_mapping['logging']
+    hyperparam_space_config = config_mapping['hyperparam_space']
     objective_corpora = config_mapping['objective_corpora']
     downsample_corpora = config_mapping.get('downsample_corpora', {})
     use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
+    print_logs = bool(config_mapping.get('print_logs', True))
     debug = bool(config_mapping.get('debug', False))
 
     log_stage(
         task=task,
         message='Stage 1/6: Loading corpora and article-to-entity mapping',
-        logging_config=logging_config,
+        print_logs=print_logs,
     )
     corpora = load_data(
         paths_config=paths_config,
@@ -758,7 +751,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     log_stage(
         task=task,
         message='Stage 2/6: Preparing article embeddings (train/test)',
-        logging_config=logging_config,
+        print_logs=print_logs,
     )
     article_embedding_stats = prepare_article_embeddings(
         corpora=corpora,
@@ -774,7 +767,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
             if use_entity_embeddings
             else 'Stage 3/6: Building article-only datasets (entity embeddings disabled)'
         ),
-        logging_config=logging_config,
+        print_logs=print_logs,
     )
     dataset_bundle = link_embeddings_and_build_datasets(
         corpora=corpora,
@@ -785,18 +778,18 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
 
     log_stage(
         task=task,
-        message=f'Stage 4/6: Running mandatory {cv_config["folds"]}-fold cross-validation on train',
-        logging_config=logging_config,
+        message=f'Stage 4/6: Running mandatory {cv_config.get("folds", 5)}-fold cross-validation on train',
+        print_logs=print_logs,
     )
     cv_result = run_cv(
         trainData=dataset_bundle.train_data,
         featureDim=dataset_bundle.feature_dim,
-        model_config=model_config,
+        hyperparam_space_config=hyperparam_space_config,
         training_config=training_config,
         evaluation_config=evaluation_config,
         cv_config=cv_config,
         objective_corpora=objective_corpora,
-        logging_config=logging_config,
+        print_logs=print_logs,
         debug=debug,
     )
     task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result.objective_metrics))
@@ -804,28 +797,28 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     log_stage(
         task=task,
         message='Stage 5/6: Training final model on full train (validation=test)',
-        logging_config=logging_config,
+        print_logs=print_logs,
     )
-    final_training_config = dict(cv_result.best_training_config)
     trained_model = train_best(
         train_data=dataset_bundle.train_data,
         test_data=dataset_bundle.test_data,
         feature_dim=dataset_bundle.feature_dim,
         best_model_config=cv_result.best_model_config,
-        training_config=final_training_config,
-        logging_config=logging_config,
+        training_config=cv_result.best_training_config,
+        print_logs=print_logs,
     )
 
     log_stage(
         task=task,
         message='Stage 6/6: Evaluating final model on test',
-        logging_config=logging_config,
+        print_logs=print_logs,
     )
     eval_result = eval_final(
         trainedModel=trained_model,
         cvDevDf=cv_result.cv_dev_df,
         testData=dataset_bundle.test_data,
         evaluation_config=evaluation_config,
+        embedding_config=embedding_config,
         objective_corpora=objective_corpora,
         config_name=config_name,
         config_mapping=config_mapping,
@@ -838,7 +831,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         row_cv = eval_result.dev_corpora_df.loc[objective_row_name].to_dict()
     else:
         row_cv = eval_result.dev_corpora_df.iloc[0].to_dict()
-        
+
     report_eval_scalars(
         logger=logger,
         title='Cross Validation Results',
@@ -852,7 +845,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
             title='Cross Validation Results',
             iteration=0,
         )
-  
+
     report_eval_scalars(
         logger=logger,
         title='Test Evaluation Results',
@@ -875,7 +868,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     log_stage(
         task=task,
         message='Pipeline finished: metrics, tables, and artifacts uploaded',
-        logging_config=logging_config,
+        print_logs=print_logs,
     )
 
 
