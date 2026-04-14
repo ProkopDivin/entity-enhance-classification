@@ -12,6 +12,8 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from clearml import Task
 
+from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -59,11 +61,25 @@ def save_final_model_outputs(
     model: Any,
     test_data: Any,
     pred_scores: Sequence[Any],
+    evaluation_config: EvaluationConfig,
+    embedding_config: EmbeddingConfig,
     config_mapping: Mapping[str, Any],
     config_name: str,
     feature_dim: int,
 ) -> SavedModelPaths:
-    """Save final model bundle and test probability CSV to disk and ClearML."""
+    """
+    Save final model bundle and test probability CSV to disk and ClearML.
+
+    :param model: Trained model.
+    :param test_data: Test dataset.
+    :param pred_scores: Prediction scores for each test document.
+    :param evaluation_config: Typed evaluation config.
+    :param embedding_config: Typed embedding config.
+    :param config_mapping: Full serialized config dict (written to JSON as-is).
+    :param config_name: Config variant name.
+    :param feature_dim: Input feature dimensionality.
+    :return: Paths to all saved artifacts.
+    """
     import yaml
 
     from iptc_entity_pipeline.evaluate import get_iptc_topics
@@ -86,7 +102,6 @@ def save_final_model_outputs(
     test_embeddings_path = output_dir / 'test_embeddings.tsv'
     test_data.saveEmbeds(str(test_embeddings_path))
 
-    threshold_eval = float(config_mapping['evaluation']['threshold_eval'])
     probabilities_df = build_probability_dataframe(
         dataset=test_data,
         pred_scores=pred_scores,
@@ -97,10 +112,10 @@ def save_final_model_outputs(
     selected_cat_ids = list(getattr(model, 'catList', []))
     config_data = {
         'testEmbeddingPath': str(test_embeddings_path),
-        'embedSvcModelId': str(config_mapping['embeddings']['article_model_name']),
+        'embedSvcModelId': embedding_config.article_model_name,
         'embedDim': int(feature_dim),
         'nnModelPath': str(model_path),
-        'threshold': threshold_eval,
+        'threshold': evaluation_config.threshold_eval,
         'thresholdByTopic': {},
         'selectedTopics': [get_cat_name(cat_id=cat_id) for cat_id in selected_cat_ids],
     }

@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
+from iptc_entity_pipeline.config import EvaluationConfig
+
 
 @dataclass
 class EpochStats:
@@ -393,7 +395,7 @@ def trainClassificationModel(
 def evaluateModel(
     model: NeuralCategModel,
     evalData: EmbeddingDataset,
-    evaluationConfig: Mapping[str, Any],
+    evaluation_config: EvaluationConfig,
     customThresholds: Optional[Mapping[str, float]] = None,
     *,
     returnPredictions: bool = False,
@@ -406,24 +408,26 @@ def evaluateModel(
 
     :param model: Trained model.
     :param evalData: Evaluation dataset.
-    :param evaluationConfig: Evaluation settings.
+    :param evaluation_config: Typed evaluation settings.
     :param customThresholds: Optional per-label thresholds.
     :param returnPredictions: Whether to also return raw prediction scores.
     :return: Corpora/class tables, optionally with raw prediction scores.
     """
+    from dataclasses import asdict
+
     from iptc_entity_pipeline.evaluate import evaluate_predictions
 
-    Task.current_task().connect(evaluationConfig, name='evaluationConfig')
+    Task.current_task().connect(asdict(evaluation_config), name='evaluationConfig')
 
-    predictions = model.classifyDataset(evalData, thr=evaluationConfig['thresholdPredict'], returnScores=True)
+    predictions = model.classifyDataset(evalData, thr=evaluation_config.threshold_predict, returnScores=True)
     df_corpora, df_classes = evaluate_predictions(
         pred_wgh_cats=predictions,
         eval_corpus=evalData.corpus,
-        thr=evaluationConfig['thresholdEval'],
+        thr=evaluation_config.threshold_eval,
         cat_to_thr=customThresholds,
-        per_corpus=evaluationConfig['perCorpus'],
-        per_class=evaluationConfig['perClass'],
-        averaging_type=evaluationConfig['averagingType'],
+        per_corpus=evaluation_config.per_corpus,
+        per_class=evaluation_config.per_class,
+        averaging_type=evaluation_config.averaging_type,
     )
     if returnPredictions:
         return df_corpora, df_classes, predictions
