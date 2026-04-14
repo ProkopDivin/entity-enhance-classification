@@ -22,6 +22,7 @@ from iptc_entity_pipeline.data_loading import (
 )
 from iptc_entity_pipeline.dataset_builder import build_embedding_dataset, build_multilabel_targets
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
+from iptc_entity_pipeline.evaluation_comparison import build_output_path, compare_runs
 from iptc_entity_pipeline.feature_builder import FeatureBuilder
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.pooling import SumEntityPooling
@@ -112,17 +113,6 @@ def link_embeddings_and_build_datasets(
         embed_svc_url=embedding_config['embed_svc_url'],
         embedding_dim=embedding_config['article_embedding_dim'],
     )
-    entity_store = EntityEmbeddingStore(
-        root_dir=paths_config['entity_embeddings_dir'],
-        lang=embedding_config['entity_lang'],
-    )
-    pooling = SumEntityPooling()
-    builder = FeatureBuilder(
-        article_embedding_provider=article_provider,
-        entity_embedding_store=entity_store,
-        pooling_strategy=pooling,
-        combine_method=embedding_config['combine_method'],
-    )
     use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
 
     if not use_entity_embeddings:
@@ -160,6 +150,18 @@ def link_embeddings_and_build_datasets(
             'missing_embeddings': 0,
         }
         return train_data, test_data, feature_dim, entity_embedding_stats
+
+    entity_store = EntityEmbeddingStore(
+        root_dir=paths_config['entity_embeddings_dir'],
+        lang=embedding_config['entity_lang'],
+    )
+    pooling = SumEntityPooling()
+    builder = FeatureBuilder(
+        article_embedding_provider=article_provider,
+        entity_embedding_store=entity_store,
+        pooling_strategy=pooling,
+        combine_method=embedding_config['combine_method'],
+    )
 
     unique_wdids: set[str] = set()
     for corpus in [corpora.train, corpora.test]:
@@ -536,12 +538,6 @@ def eval_final(
     results_dir = Path('results')
     results_dir.mkdir(parents=True, exist_ok=True)
     excel_path = results_dir / f'final_evaluation_tables_{sanitized_config_name}.xlsx'
-    with pd.ExcelWriter(excel_path) as writer:
-        cvDevDf.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
-        df_corpora_test.to_excel(excel_writer=writer, sheet_name='test_corpora')
-        df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
-    logger.report_text(f'Saved final evaluation tables to {excel_path}')
-
     save_paths = utils.save_final_model_outputs(
         model=trainedModel,
         test_data=testData,
@@ -570,6 +566,64 @@ def eval_final(
     task.upload_artifact('Corpora Dataframe', artifact_object=df_corpora_test)
     task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
 
+    comparison_cfg = config_mapping.get('evaluation_comparison') or config_mapping.get('comparison') or {}
+    evaluation_comparison_cfg = dict(evaluation_config) if isinstance(evaluation_config, Mapping) else {}
+    merged_comparison_cfg = {**evaluation_comparison_cfg, **comparison_cfg}
+    base_probabilities_csv = str(merged_comparison_cfg.get('base_probabilities_csv', '')).strip()
+    comparison_result = None
+    if base_probabilities_csv:
+        comparison_result = compare_runs(
+            current_probabilities=save_paths['probabilities_csv_path'],
+            base_probabilities=base_probabilities_csv,
+            gold_data=testData,
+            threshold_eval=float(eval_cfg['thresholdEval']),
+            averaging_type=str(eval_cfg['averagingType']),
+            top_n=int(merged_comparison_cfg.get('top_n', 20)),
+            only_diff=bool(merged_comparison_cfg.get('only_diff', False)),
+            output_path=build_output_path(
+                output_root=str(merged_comparison_cfg.get('output_root', 'results/comparisons')),
+                config_name=str(merged_comparison_cfg.get('config_name', config_name)),
+            ),
+        )
+        logger.report_table(
+            title='Evaluation Comparison',
+            series='Summary',
+            iteration=0,
+            table_plot=comparison_result.summary_comparison,
+        )
+        logger.report_table(
+            title='Evaluation Comparison',
+            series='Corpora Comparison',
+            iteration=0,
+            table_plot=comparison_result.corpora_comparison,
+        )
+        logger.report_table(
+            title='Evaluation Comparison',
+            series='Classes Comparison',
+            iteration=0,
+            table_plot=comparison_result.classes_comparison,
+        )
+        task.upload_artifact('evaluation_comparison_summary', artifact_object=comparison_result.summary_comparison)
+        task.upload_artifact('evaluation_comparison_classes', artifact_object=comparison_result.classes_comparison)
+        task.upload_artifact('evaluation_comparison_corpora', artifact_object=comparison_result.corpora_comparison)
+        if comparison_result.excel_path is not None:
+            task.upload_artifact('evaluation_comparison_xlsx', artifact_object=str(comparison_result.excel_path))
+
+    with pd.ExcelWriter(excel_path) as writer:
+        cvDevDf.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
+        df_corpora_test.to_excel(excel_writer=writer, sheet_name='test_corpora')
+        df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
+        if comparison_result is not None:
+            comparison_result.corpora_comparison.to_excel(excel_writer=writer, sheet_name='comparison_corpora', index=False)
+            comparison_result.classes_comparison.to_excel(excel_writer=writer, sheet_name='comparison_classes', index=False)
+            comparison_result.summary_comparison.to_excel(excel_writer=writer, sheet_name='comparison_summary', index=False)
+            comparison_result.top_improved_categories.to_excel(excel_writer=writer, sheet_name='comparison_top_up', index=False)
+            comparison_result.top_degraded_categories.to_excel(excel_writer=writer, sheet_name='comparison_top_down', index=False)
+            comparison_result.hamming_loss_comparison.to_excel(excel_writer=writer, sheet_name='comparison_hamming', index=False)
+            comparison_result.pr_auc_per_class.to_excel(excel_writer=writer, sheet_name='comparison_pr_auc', index=False)
+            comparison_result.pr_auc_summary.to_excel(excel_writer=writer, sheet_name='comparison_pr_auc_sum', index=False)
+    logger.report_text(f'Saved final evaluation tables to {excel_path}')
+
     objective_metrics = (
         df_corpora_test.loc[objective_corpora].to_dict()
         if objective_corpora in df_corpora_test.index
@@ -588,7 +642,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     """Execute full v1 training and evaluation pipeline."""
     task = Task.current_task()
     task.connect(config_mapping, name='pipelineConfig')
-    config_name = str(config_mapping.get('config_name', 'base'))
+    config_name = str(config_mapping.get('config_name', 'wpentities'))
     task.add_tags([config_name])
 
     paths_config = config_mapping['paths']
@@ -738,7 +792,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
 
 def run_pipeline(
     config: Optional[BaseConfig] = None,
-    config_name: str = 'base',
+    config_name: str = 'wpentities',
     is_local: bool = False,
 ) -> Tuple[BaseConfig, Mapping[str, Any]]:
     """
