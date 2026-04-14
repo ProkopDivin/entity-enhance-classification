@@ -13,11 +13,9 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from clearml import Task
-from geneea.catlib.data import Corpus
 from geneea.catlib.model.nnet import NeuralCategModel
 from geneea.catlib.vec.dataset import EmbeddingDataset
 from geneea.catlib.vec.vectorizer import Vectorizer
-from geneea.evaluation.utils import AvgData, ClassData
 
 
 def createClassificationModel(
@@ -389,7 +387,10 @@ def evaluateModel(
     returnPredictions: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame] | Tuple[pd.DataFrame, pd.DataFrame, Any]:
     """
-    Legacy evaluation implementation copied from original pipeline.
+    Legacy evaluation entry point.
+
+    Delegates to :func:`evaluate.evaluate_predictions` for the actual metric
+    computation while preserving the original function signature.
 
     :param model: Trained model.
     :param evalData: Evaluation dataset.
@@ -398,181 +399,20 @@ def evaluateModel(
     :param returnPredictions: Whether to also return raw prediction scores.
     :return: Corpora/class tables, optionally with raw prediction scores.
     """
-    from geneea.catlib.model.model import LabelT, WghLabels, filterLabels
-    from geneea.evaluation import utils as evalutil
-    from geneea.mediacats import iptc
+    from iptc_entity_pipeline.evaluate import evaluate_predictions
 
     Task.current_task().connect(evaluationConfig, name='evaluationConfig')
-    iptcCats = iptc.IptcTopics.load()
-
-    def isDecentLabel(stats: ClassData) -> bool:
-        return stats.precision >= 0.6 and stats.fmeasure(beta=0.4) >= 0.5 and stats.trueCnt >= 10
-
-    def getCatName(catId: str) -> str:
-        return iptcCats.getCategory(catId).getLongName(abbreviate=True, shorten=True)
-
-    def normalizeCategories(predCats: List[List[str]]) -> List[List[str]]:
-        GLOB_WARMING_CAT_ID = '20000419'
-        REMOVED_CAT_IDS = frozenset([GLOB_WARMING_CAT_ID])
-        newPredCats = [iptcCats.normalizeCategories([iptcCats.getCategory(c) for c in cs]) for cs in predCats]
-        return [sorted(c.id for c in cs if c.id not in REMOVED_CAT_IDS) for cs in newPredCats]
-
-    def update_statistics(
-        statistics: Dict[str, List],
-        data_count: int,
-        stats: ClassData | AvgData,
-        digits: int = 3,
-    ) -> None:
-        statistics['Data Count'].append(data_count)
-        statistics['Precision'].append(round(stats.precision, digits))
-        statistics['Recall'].append(round(stats.recall, digits))
-        statistics['F1'].append(round(stats.fmeasure(beta=1), digits))
-
-    def update_labels(
-        statistics: Dict[str, List],
-        zeroLabelDocsSc: int,
-        predCatsSc: List[List[str]],
-        decentLabelsSc: List[str],
-    ) -> None:
-        statistics['Docs No Labels'].append(round(zeroLabelDocsSc / len(predCatsSc), 3))
-        statistics['Decent Labels'].append(len(decentLabelsSc))
-
-    def evaluateCorpuses(
-        predWghCats: Union[List[List[LabelT]], List[WghLabels]],
-        evalCorpus: Corpus,
-        thr: float,
-        catToThr: Optional[Mapping[str, float]] = None,
-        perCorpus: bool = True,
-        averagingType: Literal['datapoint', 'micro', 'macro'] = 'datapoint',
-    ) -> pd.DataFrame:
-        def prepare_stats(subData: Corpus, predCatsSc: List[List[str]], averagingType: str):
-            avgTypes = ['datapoint', 'macro', 'micro']
-            avgStatsSc, microStats, indivStatsSc = evalutil.multiStats(goldVals=[d.cats for d in subData], predVals=predCatsSc)
-            stats = None
-            if averagingType == 'datapoint':
-                stats = avgStatsSc
-            elif averagingType == 'micro':
-                stats = microStats
-            elif averagingType == 'macro':
-                macroStats = AvgData.empty()
-                for cat in indivStats:
-                    classData = indivStats[cat]
-                    macroStats.update(prec=classData.precision, recall=classData.recall)
-                stats = macroStats
-            if averagingType not in avgTypes:
-                raise ValueError(f'Incorect averagingType, currenttype: {averagingType}, schould be one of these: {avgTypes}')
-
-            zeroLabelDocsSc = sum(1 for cs in predCatsSc if not cs)
-            decentLabelsSc = [name for name, stats in indivStatsSc.items() if isDecentLabel(stats)]
-            return (avgStatsSc.cnt, stats, zeroLabelDocsSc, decentLabelsSc)
-
-        predCats = [filterLabels(dc, thr=thr, thrByLabel=catToThr, keepWgh=False) for dc in predWghCats]
-        predCats = normalizeCategories(predCats)
-
-        statistics = {
-            'Data Count': [],
-            'Precision': [],
-            'Recall': [],
-            'F1': [],
-            'Docs No Labels': [],
-            'Decent Labels': [],
-        }
-        corporaNames = []
-        if perCorpus:
-            corporaNames = sorted({d.metadata['corpusName'] for d in evalCorpus})
-            for corpusName in corporaNames:
-                mask = [d.metadata['corpusName'] == corpusName for d in evalCorpus]
-                subData = evalCorpus.filterByBools(mask)
-                predCatsSc = [cs for (inSc, cs) in zip(mask, predCats) if inSc]
-                if not len(subData) == len(predCatsSc):
-                    raise ValueError(
-                        f'length of subData is {len(subData)} but it should be equal to length of predCatsSc {len(predCatsSc)}'
-                    )
-                count, stats, zeroLabelDocsSc, decentLabelsSc = prepare_stats(subData, predCatsSc, averagingType)
-                update_statistics(statistics, count, stats, digits=3)
-                update_labels(statistics, zeroLabelDocsSc, predCatsSc, decentLabelsSc)
-        
-        for stat in statistics.keys():
-            statistics[stat].append(pd.Series(statistics[stat], dtype=float).mean())
-        corporaNames.append('All-macro')
-            
-        macroStats = {}
-        goldVals = [d.cats for d in evalCorpus]
-        avgStats, microStats, indivStats = evalutil.multiStats(goldVals=goldVals, predVals=predCats)
-        decentLabels = [name for name, stats in indivStats.items() if isDecentLabel(stats)]
-        zeroLabelDocs = sum(1 for cs in predCats if not cs)
-        update_statistics(statistics, avgStats.cnt, microStats)
-        update_labels(statistics, zeroLabelDocs, predCats, decentLabels)
-        corporaNames.append('All-micro')
-        macroStats = AvgData.empty()
-        for cat in indivStats:
-            classData = indivStats[cat]
-            macroStats.update(prec=classData.precision, recall=classData.recall)
-        update_statistics(statistics, avgStats.cnt, avgStats)
-        update_labels(statistics, zeroLabelDocs, predCats, decentLabels)
-        corporaNames.append('All-datapoint')
-
-        df = pd.DataFrame(data=statistics)
-        df.index = corporaNames
-        df.index.name = 'Corpus Name'
-        return df
-
-    def evaluateClasses(
-        predWghCats: List[List[LabelT]] | List[WghLabels],
-        evalCorpus: Corpus,
-        thr: float,
-        catToThr: Mapping[str, float],
-        perClass: bool = True,
-    ) -> pd.DataFrame:
-        predCats = [filterLabels(dc, thr=thr, thrByLabel=catToThr, keepWgh=False) for dc in predWghCats]
-        predCats = normalizeCategories(predCats)
-
-        statistics = {'Data Count': [], 'Precision': [], 'Recall': [], 'F1': []}
-        categoryNames = []
-        if perClass:
-            categories = evalCorpus.catList
-            categoryNames = ['"' + getCatName(c) + '"' for c in categories]
-            for category in categories:
-                predCatsSc = [1 if category in cs else 0 for cs in predCats]
-                goldValsSc = [1 if category in doc.cats else 0 for doc in evalCorpus]
-                classToData, _, _ = evalutil.classStats(trueVals=goldValsSc, predVals=predCatsSc)
-                classificationStats = classToData[1]
-                update_statistics(statistics, sum(goldValsSc), classificationStats)
-
-        gold_vals = [d.cats for d in evalCorpus]
-        avgStats, microStats, classStats = evalutil.multiStats(goldVals=gold_vals, predVals=predCats)
-        update_statistics(statistics, avgStats.cnt, microStats)
-        categoryNames.append('All - micro avg')
-        macroAvg = AvgData.empty()
-        for cat in classStats:
-            classData = classStats[cat]
-            macroAvg.update(prec=classData.precision, recall=classData.recall)
-        update_statistics(statistics, avgStats.cnt, macroAvg)
-        categoryNames.append('All - macro avg')
-        update_statistics(statistics, avgStats.cnt, avgStats)
-        categoryNames.append('All - datapoint avg')
-
-        df = pd.DataFrame(data=statistics)
-        df.index = categoryNames
-        df.index.name = 'IPTC Category'
-        return df
 
     predictions = model.classifyDataset(evalData, thr=evaluationConfig['thresholdPredict'], returnScores=True)
-    dfCorpora = evaluateCorpuses(
-        predictions,
-        evalData.corpus,
+    df_corpora, df_classes = evaluate_predictions(
+        pred_wgh_cats=predictions,
+        eval_corpus=evalData.corpus,
         thr=evaluationConfig['thresholdEval'],
-        catToThr=customThresholds,
-        perCorpus=evaluationConfig['perCorpus'],
-        averagingType=evaluationConfig['averagingType'],
-    )
-    dfClasses = evaluateClasses(
-        predictions,
-        evalData.corpus,
-        thr=evaluationConfig['thresholdEval'],
-        catToThr=customThresholds,
-        perClass=evaluationConfig['perClass'],
+        cat_to_thr=customThresholds,
+        per_corpus=evaluationConfig['perCorpus'],
+        per_class=evaluationConfig['perClass'],
+        averaging_type=evaluationConfig['averagingType'],
     )
     if returnPredictions:
-        return dfCorpora, dfClasses, predictions
-    return dfCorpora, dfClasses
+        return df_corpora, df_classes, predictions
+    return df_corpora, df_classes
