@@ -7,7 +7,6 @@ import logging
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -19,6 +18,8 @@ if __package__ is None or __package__ == '':
     if str(src_root) not in sys.path:
         sys.path.insert(0, str(src_root))
 
+from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, get_iptc_topics
+
 LOG = logging.getLogger(__name__)
 
 AGG_CLASS_ROWS = frozenset({'All - micro avg', 'All - macro avg', 'All - datapoint avg'})
@@ -28,7 +29,6 @@ SUMMARY_ROWS = {
     'micro_over_labels': ('classes', 'All - micro avg'),
 }
 PR_AUC_AGG = 'macro'
-REMOVED_CAT_IDS = frozenset({'20000419'})
 
 
 @dataclass(frozen=True)
@@ -224,10 +224,12 @@ def rebuild_run(
     averaging_type: str,
 ) -> RunEval:
     """Rebuild legacy corpora/classes tables from probabilities and cached gold labels."""
+    from iptc_entity_pipeline.evaluate import evaluate_predictions
+
     aligned_df = gold_map.align_prob_df(prob_df=prob_df)
     eval_corpus = build_eval_corpus(aligned_df=aligned_df)
     pred_scores = build_pred_scores(df=aligned_df)
-    corpora_df, classes_df = build_eval_tables(
+    corpora_df, classes_df = evaluate_predictions(
         pred_wgh_cats=pred_scores,
         eval_corpus=eval_corpus,
         thr=threshold_eval,
@@ -237,175 +239,6 @@ def rebuild_run(
         averaging_type=averaging_type,
     )
     return RunEval(aligned_df=aligned_df, corpora_df=corpora_df, classes_df=classes_df)
-
-
-def build_eval_tables(
-    *,
-    pred_wgh_cats: list[Any],
-    eval_corpus: Any,
-    thr: float,
-    cat_to_thr: Mapping[str, float] | None = None,
-    per_corpus: bool = True,
-    per_class: bool = True,
-    averaging_type: str = 'datapoint',
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build corpora and class tables with the legacy evaluation logic."""
-    from geneea.catlib.model.model import filterLabels
-    from geneea.evaluation import utils as evalutil
-    from geneea.evaluation.utils import AvgData, ClassData
-
-    iptc_topics = get_iptc_topics()
-
-    def is_decent_label(stats: ClassData) -> bool:
-        return stats.precision >= 0.6 and stats.fmeasure(beta=0.4) >= 0.5 and stats.trueCnt >= 10
-
-    def get_cat_name(cat_id: str) -> str:
-        return iptc_topics.getCategory(cat_id).getLongName(abbreviate=True, shorten=True)
-
-    def norm_pred_cats(pred_cats: list[list[str]]) -> list[list[str]]:
-        norm_cats = [iptc_topics.normalizeCategories([iptc_topics.getCategory(cat) for cat in cats]) for cats in pred_cats]
-        return [sorted(cat.id for cat in cats if cat.id not in REMOVED_CAT_IDS) for cats in norm_cats]
-
-    def update_stats(
-        *,
-        stats_map: dict[str, list[Any]],
-        data_count: int,
-        stats: ClassData | AvgData,
-        digits: int = 3,
-    ) -> None:
-        stats_map['Data Count'].append(data_count)
-        stats_map['Precision'].append(round(stats.precision, digits))
-        stats_map['Recall'].append(round(stats.recall, digits))
-        stats_map['F1'].append(round(stats.fmeasure(beta=1), digits))
-
-    def update_label_stats(
-        *,
-        stats_map: dict[str, list[Any]],
-        zero_label_docs: int,
-        pred_cats: list[list[str]],
-        decent_labels: list[str],
-    ) -> None:
-        stats_map['Docs No Labels'].append(round(zero_label_docs / len(pred_cats), 3))
-        stats_map['Decent Labels'].append(len(decent_labels))
-
-    pred_cats = [filterLabels(doc_cats, thr=thr, thrByLabel=cat_to_thr, keepWgh=False) for doc_cats in pred_wgh_cats]
-    pred_cats = norm_pred_cats(pred_cats)
-
-    def build_corpora_df() -> pd.DataFrame:
-        def prepare_stats(*, sub_data: Any, sub_pred_cats: list[list[str]]) -> tuple[int, Any, int, list[str]]:
-            avg_stats, micro_stats, indiv_stats = evalutil.multiStats(
-                goldVals=[doc.cats for doc in sub_data],
-                predVals=sub_pred_cats,
-            )
-            if averaging_type == 'datapoint':
-                stats = avg_stats
-            elif averaging_type == 'micro':
-                stats = micro_stats
-            elif averaging_type == 'macro':
-                stats = AvgData.empty()
-                for cat in indiv_stats:
-                    class_data = indiv_stats[cat]
-                    stats.update(prec=class_data.precision, recall=class_data.recall)
-            else:
-                raise ValueError(f'Incorrect averaging_type={averaging_type}')
-            zero_label_docs = sum(1 for cats in sub_pred_cats if not cats)
-            decent_labels = [name for name, stats in indiv_stats.items() if is_decent_label(stats)]
-            return avg_stats.cnt, stats, zero_label_docs, decent_labels
-
-        stats_map: dict[str, list[Any]] = {
-            'Data Count': [],
-            'Precision': [],
-            'Recall': [],
-            'F1': [],
-            'Docs No Labels': [],
-            'Decent Labels': [],
-        }
-        corpora_names: list[str] = []
-        if per_corpus:
-            corpora_names = sorted({doc.metadata['corpusName'] for doc in eval_corpus})
-            for corpus_name in corpora_names:
-                mask = [doc.metadata['corpusName'] == corpus_name for doc in eval_corpus]
-                sub_data = eval_corpus.filterByBools(mask)
-                sub_pred_cats = [cats for in_scope, cats in zip(mask, pred_cats) if in_scope]
-                count, stats, zero_label_docs, decent_labels = prepare_stats(
-                    sub_data=sub_data,
-                    sub_pred_cats=sub_pred_cats,
-                )
-                update_stats(stats_map=stats_map, data_count=count, stats=stats)
-                update_label_stats(
-                    stats_map=stats_map,
-                    zero_label_docs=zero_label_docs,
-                    pred_cats=sub_pred_cats,
-                    decent_labels=decent_labels,
-                )
-
-        for stat_name in stats_map:
-            stats_map[stat_name].append(pd.Series(stats_map[stat_name], dtype=float).mean())
-        corpora_names.append('All-macro')
-
-        gold_vals = [doc.cats for doc in eval_corpus]
-        avg_stats, micro_stats, indiv_stats = evalutil.multiStats(goldVals=gold_vals, predVals=pred_cats)
-        decent_labels = [name for name, stats in indiv_stats.items() if is_decent_label(stats)]
-        zero_label_docs = sum(1 for cats in pred_cats if not cats)
-        update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=micro_stats)
-        update_label_stats(
-            stats_map=stats_map,
-            zero_label_docs=zero_label_docs,
-            pred_cats=pred_cats,
-            decent_labels=decent_labels,
-        )
-        corpora_names.append('All-micro')
-
-        macro_stats = AvgData.empty()
-        for cat in indiv_stats:
-            class_data = indiv_stats[cat]
-            macro_stats.update(prec=class_data.precision, recall=class_data.recall)
-        update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=avg_stats)
-        update_label_stats(
-            stats_map=stats_map,
-            zero_label_docs=zero_label_docs,
-            pred_cats=pred_cats,
-            decent_labels=decent_labels,
-        )
-        corpora_names.append('All-datapoint')
-
-        df = pd.DataFrame(data=stats_map)
-        df.index = corpora_names
-        df.index.name = 'Corpus Name'
-        return df
-
-    def build_classes_df() -> pd.DataFrame:
-        stats_map: dict[str, list[Any]] = {'Data Count': [], 'Precision': [], 'Recall': [], 'F1': []}
-        category_names: list[str] = []
-        if per_class:
-            categories = eval_corpus.catList
-            category_names = ['"' + get_cat_name(category) + '"' for category in categories]
-            for category in categories:
-                pred_vals = [1 if category in cats else 0 for cats in pred_cats]
-                gold_vals = [1 if category in doc.cats else 0 for doc in eval_corpus]
-                class_to_data, _, _ = evalutil.classStats(trueVals=gold_vals, predVals=pred_vals)
-                update_stats(stats_map=stats_map, data_count=sum(gold_vals), stats=class_to_data[1])
-
-        gold_vals = [doc.cats for doc in eval_corpus]
-        avg_stats, micro_stats, class_stats = evalutil.multiStats(goldVals=gold_vals, predVals=pred_cats)
-        update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=micro_stats)
-        category_names.append('All - micro avg')
-
-        macro_avg = AvgData.empty()
-        for cat in class_stats:
-            class_data = class_stats[cat]
-            macro_avg.update(prec=class_data.precision, recall=class_data.recall)
-        update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=macro_avg)
-        category_names.append('All - macro avg')
-        update_stats(stats_map=stats_map, data_count=avg_stats.cnt, stats=avg_stats)
-        category_names.append('All - datapoint avg')
-
-        df = pd.DataFrame(data=stats_map)
-        df.index = category_names
-        df.index.name = 'IPTC Category'
-        return df
-
-    return build_corpora_df(), build_classes_df()
 
 
 def load_prob_df(*, probabilities: str | Path | pd.DataFrame) -> pd.DataFrame:
@@ -519,14 +352,6 @@ def parse_gold_cats(value: Any) -> tuple[str, ...]:
     else:
         raise TypeError(f'Unsupported gold category value type: {type(value)}')
     return tuple(sorted(norm_cat_ids(cat_ids=cat_ids)))
-
-
-@lru_cache(maxsize=1)
-def get_iptc_topics() -> Any:
-    """Load IPTC topic metadata once per process."""
-    from geneea.mediacats import iptc
-
-    return iptc.IptcTopics.load()
 
 
 def norm_cat_ids(*, cat_ids: Sequence[str]) -> list[str]:
