@@ -83,8 +83,7 @@ def _build_dataset_with_targets(
     cat_list: Sequence[str] | None = None,
 ) -> Any:
     embedding_dataset_cls = _require_embedding_dataset_cls()
-    if cat_list is not None:
-        _set_corpus_cat_list(corpus=corpus, cat_list=cat_list)
+    setattr(corpus, 'catList', list(cat_list))
     x_tensor = torch.as_tensor(x_matrix, dtype=torch.float32)
     y_tensor = torch.as_tensor(y_matrix, dtype=torch.float32)
     return embedding_dataset_cls(corpus, x_tensor, y_tensor)

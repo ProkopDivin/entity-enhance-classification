@@ -13,6 +13,7 @@ import numpy as np
 from clearml import Task
 
 from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig
+from iptc_entity_pipeline.data_loading import sanitize_name
 
 LOGGER = logging.getLogger(__name__)
 
@@ -52,10 +53,6 @@ def build_probability_dataframe(
     return pd.DataFrame(rows)
 
 
-def _sanitize_name(*, value: str) -> str:
-    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '_' for ch in value)
-
-
 def save_final_model_outputs(
     *,
     model: Any,
@@ -87,13 +84,13 @@ def save_final_model_outputs(
     def get_cat_name(*, cat_id: str) -> str:
         try:
             return get_iptc_topics().getCategory(cat_id).getLongName(abbreviate=True, shorten=True)
-        except Exception:
+        except KeyError:
             return cat_id
 
     task = Task.current_task()
     logger = task.get_logger()
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_dir = Path('results') / 'saved_models' / f'{_sanitize_name(value=config_name)}_{timestamp}'
+    output_dir = Path('results') / 'saved_models' / f'{sanitize_name(value=config_name)}_{timestamp}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model_path = output_dir / 'model.nn.bin'

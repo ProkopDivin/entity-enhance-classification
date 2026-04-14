@@ -18,6 +18,7 @@ if __package__ is None or __package__ == '':
     if str(src_root) not in sys.path:
         sys.path.insert(0, str(src_root))
 
+from iptc_entity_pipeline.data_loading import sanitize_name
 from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, get_iptc_topics
 
 LOG = logging.getLogger(__name__)
@@ -328,8 +329,8 @@ def gold_df_from_dataset(*, dataset: Any) -> pd.DataFrame:
 def gold_df_from_corpus_csv(*, gold_path: Path) -> pd.DataFrame:
     """Load and normalize gold labels from a legacy corpus CSV."""
     from geneea.catlib.data import Corpus
-    import csv
-    csv.field_size_limit(100000000)
+    from iptc_entity_pipeline.data_loading import _ensure_csv_field_limit
+    _ensure_csv_field_limit()
     rows = [
         {
             'article_id': str(doc.id),
@@ -658,11 +659,6 @@ def build_output_path(*, output_root: str | Path, config_name: str) -> Path:
     safe_name = sanitize_name(value=config_name)
     output_dir = Path(output_root) / f'{safe_name}_{timestamp}'
     return output_dir / f'evaluation_comparison_{safe_name}.xlsx'
-
-
-def sanitize_name(*, value: str) -> str:
-    """Sanitize user-provided names for filesystem output."""
-    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '_' for ch in value)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
