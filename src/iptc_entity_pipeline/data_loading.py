@@ -13,9 +13,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from iptc_entity_pipeline.utils import DocWithEntities
+from geneea.catlib.data import Doc  # type: ignore
 
 LOGGER = logging.getLogger(__name__)
+
+
+class DocWithEntities(Doc):
+    """Doc subclass allowing a mutable ``entities`` attribute."""
+
+    @classmethod
+    def from_doc(cls, *, doc: Doc, entities: Sequence[Any]) -> 'DocWithEntities':
+        """Create enriched doc copy with attached entities."""
+        enriched = cls._make(doc)
+        enriched.entities = list(entities)
+        return enriched
 
 
 @dataclass(frozen=True)

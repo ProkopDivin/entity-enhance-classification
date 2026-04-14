@@ -10,7 +10,6 @@ import numpy as np
 from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
-import iptc_entity_pipeline.utils as utils
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
 from iptc_entity_pipeline.config import BaseConfig, resolve_paths
 from iptc_entity_pipeline.data_loading import (
@@ -20,12 +19,34 @@ from iptc_entity_pipeline.data_loading import (
     load_and_normalize_corpora,
     load_wdid_mapping,
 )
-from iptc_entity_pipeline.dataset_builder import build_embedding_dataset, build_multilabel_targets
+from iptc_entity_pipeline.dataset_builder import (
+    build_embedding_dataset,
+    build_multilabel_targets,
+    slice_dataset,
+    to_numpy_array,
+)
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.evaluation_comparison import build_output_path, compare_runs
 from iptc_entity_pipeline.feature_builder import FeatureBuilder
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
+from iptc_entity_pipeline.model_io import save_final_model_outputs
 from iptc_entity_pipeline.pooling import SumEntityPooling
+from iptc_entity_pipeline.reporting import (
+    log_stage,
+    report_cv_fold_curve_charts,
+    report_cv_outputs,
+    report_cv_std_scalars,
+    report_eval_scalars,
+    report_train_test_curve_charts,
+)
+from iptc_entity_pipeline.training import (
+    CvFoldCurves,
+    combo_params_json,
+    get_eval_config,
+    get_obj_row,
+    iter_param_grid,
+    train_model,
+)
 
 
 
@@ -235,7 +256,7 @@ def train_classification_model(
             'learning_rate': float(training_config['learning_rate'][0]),
         }
     )
-    result = utils.train_model(
+    result = train_model(
         train_data=trainData,
         dev_data=devData,
         feature_dim=featureDim,
@@ -270,23 +291,23 @@ def run_cv(
     logger = task.get_logger()
     cv_folds = int(cv_config['folds'])
     cv_random_seed = int(cv_config['random_seed'])
-    x_full = utils.to_numpy_array(matrix_like=trainData.X)
+    x_full = to_numpy_array(matrix_like=trainData.X)
     y_full = (
-        utils.to_numpy_array(matrix_like=trainData.Y)
+        to_numpy_array(matrix_like=trainData.Y)
         if hasattr(trainData, 'Y')
         else build_multilabel_targets(corpus=trainData.corpus)
     )
-    eval_cfg = utils.get_eval_config(evaluation_config=evaluation_config)
-    combinations = utils.iter_param_grid(
+    eval_cfg = get_eval_config(evaluation_config=evaluation_config)
+    combinations = iter_param_grid(
         model_config=model_config,
         training_config=training_config,
     )
     fold_rows: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
     best_trial: dict[str, Any] | None = None
-    best_fold_curves: tuple[utils.CvFoldCurves, ...] = ()
+    best_fold_curves: tuple[CvFoldCurves, ...] = ()
     for combo_idx, (combo_model_config, combo_training_config) in enumerate(combinations, start=1):
-        params_json = utils.combo_params_json(
+        params_json = combo_params_json(
             model_config=combo_model_config,
             training_config=combo_training_config,
         )
@@ -302,11 +323,11 @@ def run_cv(
             'Recall': [],
             'F1': [],
         }
-        combo_fold_curves: list[utils.CvFoldCurves] = []
+        combo_fold_curves: list[CvFoldCurves] = []
         for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
-            fit_data = utils.slice_dataset(dataset=trainData, indices=fit_indices.tolist())
-            val_data = utils.slice_dataset(dataset=trainData, indices=val_indices.tolist())
-            train_result = utils.train_model(
+            fit_data = slice_dataset(dataset=trainData, indices=fit_indices.tolist())
+            val_data = slice_dataset(dataset=trainData, indices=val_indices.tolist())
+            train_result = train_model(
                 train_data=fit_data,
                 dev_data=val_data,
                 feature_dim=featureDim,
@@ -325,7 +346,7 @@ def run_cv(
             micro_row = (
                 df_corpora_fold.loc['All-micro'].to_dict()
                 if 'All-micro' in df_corpora_fold.index
-                else utils.get_obj_row(
+                else get_obj_row(
                     df_corpora=df_corpora_fold,
                     objective_corpora=objective_corpora,
                     averaging_type=eval_cfg['averagingType'],
@@ -336,7 +357,7 @@ def run_cv(
             for metric_name in ('Precision', 'Recall', 'F1'):
                 fold_scores[metric_name].append(float(micro_row[metric_name]))
             combo_fold_curves.append(
-                utils.CvFoldCurves(
+                CvFoldCurves(
                     fold_id=fold_idx,
                     train_loss_per_epoch=train_result.train_loss_per_epoch,
                     dev_loss_per_epoch=train_result.dev_loss_per_epoch,
@@ -399,8 +420,8 @@ def run_cv(
         ],
     )
 
-    utils.report_cv_outputs(task=task, logger=logger, trials_df=trials_df, folds_df=folds_df, cv_dev_df=cv_dev_df)
-    utils.report_cv_fold_curve_charts(logger=logger, fold_curves=best_fold_curves)
+    report_cv_outputs(task=task, logger=logger, trials_df=trials_df, folds_df=folds_df, cv_dev_df=cv_dev_df)
+    report_cv_fold_curve_charts(logger=logger, fold_curves=best_fold_curves)
 
     best_model_config = {
         'hidden_dim': int(best_params['hidden_dim']),
@@ -440,7 +461,7 @@ def train_best(
     training_config: Mapping[str, Any],
     logging_config: Mapping[str, Any],
 ):
-    result = utils.train_model(
+    result = train_model(
         train_data=train_data,
         dev_data=test_data,
         feature_dim=feature_dim,
@@ -450,7 +471,7 @@ def train_best(
     )
     task = Task.current_task()
     logger = task.get_logger()
-    utils.report_train_test_curve_charts(logger=logger, result=result)
+    report_train_test_curve_charts(logger=logger, result=result)
     return result.model
 
 @PipelineDecorator.component(
@@ -474,7 +495,7 @@ def eval_final(
 
     task = Task.current_task()
     logger = task.get_logger()
-    eval_cfg = utils.get_eval_config(evaluation_config=evaluation_config)
+    eval_cfg = get_eval_config(evaluation_config=evaluation_config)
     df_corpora_test, df_classes_test, pred_scores = evaluateModel(
         model=trainedModel,
         evalData=testData,
@@ -488,22 +509,22 @@ def eval_final(
         row_cv = cvDevDf.loc[objective_corpora].to_dict()
     else:
         row_cv = cvDevDf.iloc[0].to_dict()
-    utils.report_eval_scalars(logger=logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
+    report_eval_scalars(logger=logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
     if 'Precision_std' in row_cv:
-        utils.report_cv_std_scalars(
+        report_cv_std_scalars(
             logger=logger,
             row=row_cv,
             title='Dev Cross Validation Mean Results',
             iteration=0,
         )
     row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
-    utils.report_eval_scalars(logger=logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
+    report_eval_scalars(logger=logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
     if 'All-micro' in df_corpora_test.index:
         row_micro_test = df_corpora_test.loc['All-micro'].to_dict()
-        utils.report_eval_scalars(logger=logger, title='Test Evaluation Results (micro)', row=row_micro_test, iteration=0)
+        report_eval_scalars(logger=logger, title='Test Evaluation Results (micro)', row=row_micro_test, iteration=0)
     if objective_corpora in df_corpora_test.index:
         row_objective_test = df_corpora_test.loc[objective_corpora].to_dict()
-        utils.report_eval_scalars(logger=logger, title='Objective Test Evaluation Results', row=row_objective_test, iteration=0)
+        report_eval_scalars(logger=logger, title='Objective Test Evaluation Results', row=row_objective_test, iteration=0)
     else:
         logging.getLogger(__name__).warning(
             'Requested objective_corpora "%s" not found in test corpus index; available=%s',
@@ -538,7 +559,7 @@ def eval_final(
     results_dir = Path('results')
     results_dir.mkdir(parents=True, exist_ok=True)
     excel_path = results_dir / f'final_evaluation_tables_{sanitized_config_name}.xlsx'
-    save_paths = utils.save_final_model_outputs(
+    save_paths = save_final_model_outputs(
         model=trainedModel,
         test_data=testData,
         pred_scores=pred_scores,
@@ -657,7 +678,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
     debug = bool(config_mapping.get('debug', False))
 
-    utils.log_stage(
+    log_stage(
         task=task,
         message='Stage 1/6: Loading corpora and article-to-entity mapping',
         logging_config=logging_config,
@@ -666,7 +687,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         paths_config=paths_config,
         downsample_corpora=downsample_corpora,
     )
-    utils.log_stage(
+    log_stage(
         task=task,
         message='Stage 2/6: Preparing article embeddings (train/test)',
         logging_config=logging_config,
@@ -678,7 +699,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
     task.upload_artifact('article_embedding_stats', artifact_object=dict(article_embedding_stats))
 
-    utils.log_stage(
+    log_stage(
         task=task,
         message=(
             'Stage 3/6: Preparing entity embeddings, linking, and building datasets'
@@ -694,7 +715,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
     task.upload_artifact('entity_embedding_stats', artifact_object=dict(entity_embedding_stats))
 
-    utils.log_stage(
+    log_stage(
         task=task,
         message=f'Stage 4/6: Running mandatory {cv_config["folds"]}-fold cross-validation on train',
         logging_config=logging_config,
@@ -712,7 +733,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
     task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_objective_metrics))
 
-    utils.log_stage(
+    log_stage(
         task=task,
         message='Stage 5/6: Training final model on full train (validation=test)',
         logging_config=logging_config,
@@ -727,7 +748,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         logging_config=logging_config,
     )
 
-    utils.log_stage(
+    log_stage(
         task=task,
         message='Stage 6/6: Evaluating final model on test',
         logging_config=logging_config,
@@ -750,28 +771,28 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     else:
         row_cv = df_corpora_dev.iloc[0].to_dict()
         
-    utils.report_eval_scalars(
+    report_eval_scalars(
         logger=logger,
         title='Cross Validation Results',
         row=row_cv,
         iteration=0,
     )
     if 'Precision_std' in row_cv:
-        utils.report_cv_std_scalars(
+        report_cv_std_scalars(
             logger=logger,
             row=row_cv,
             title='Cross Validation Results',
             iteration=0,
         )
   
-    utils.report_eval_scalars(
+    report_eval_scalars(
         logger=logger,
         title='Test Evaluation Results',
         row=objective_metrics,
         iteration=0,
     )
     if 'All-micro' in df_corpora_test.index:
-        utils.report_eval_scalars(
+        report_eval_scalars(
             logger=logger,
             title='Test Evaluation Results (micro)',
             row=df_corpora_test.loc['All-micro'].to_dict(),
@@ -783,7 +804,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     task.upload_artifact('dev_corpora_dataframe', artifact_object=df_corpora_dev)
     task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
     task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
-    utils.log_stage(
+    log_stage(
         task=task,
         message='Pipeline finished: metrics, tables, and artifacts uploaded',
         logging_config=logging_config,
