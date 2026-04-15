@@ -36,6 +36,7 @@ class EmbeddingConfig:
     article_embedding_dim: int = 384
     embed_svc_url: str = 'http://tau.g:5533'
     entity_lang: str = 'en'
+    entity_langs: tuple[str, ...] = ()
     use_entity_embeddings: bool = True
     combine_method: str = 'concat'
     entity_pooling: str = 'sum'
@@ -76,9 +77,9 @@ class HyperparamSpace:
     :meth:`iter_combinations` to expand the full Cartesian product.
     """
 
-    hidden_dims: tuple[int, ...] = (1024,)
-    dropouts1: tuple[float, ...] = (0.0,)
-    dropouts2: tuple[float, ...] = (0.3,)
+    hidden_dims: tuple[int, ...] = (100, 384, 1024, 2048, 4096, 8192),           
+    dropouts1: tuple[float, ...] = (0.0, 0.1),
+    dropouts2: tuple[float, ...] = (0.0, 0.1, 0.3, 0.5),
     batch_sizes: tuple[int, ...] = (100,)
     learning_rates: tuple[float, ...] = (0.00037,)
 
@@ -137,6 +138,7 @@ class BaseConfig:
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
     debug: bool = True
+    
 
     def to_clearml_mapping(self) -> dict[str, Any]:
         """Convert dataclasses to serializable mapping."""
@@ -146,15 +148,7 @@ class BaseConfig:
 @dataclass(frozen=True)
 class WpEntitiesConfig(BaseConfig):
     """Default entity-enhanced configuration."""
-    hyperparam_space: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(100, 384, 1024, 2048, 4096, 8192),
-            dropouts1=(0.0, 0.1),
-            dropouts2=(0.0, 0.1, 0.3, 0.5),
-            learning_rates=(0.00037,),
-        )
-    )
+
 
 
 @dataclass(frozen=True)
@@ -164,15 +158,7 @@ class ArticleOnlyConfig(BaseConfig):
     embeddings: EmbeddingConfig = field(
         default_factory=lambda: replace(EmbeddingConfig(), use_entity_embeddings=False)
     )
-    hyperparam_space: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(100, 384, 1024, 2048, 4096, 8192),
-            dropouts1=(0.0, 0.1),
-            dropouts2=(0.0, 0.1, 0.3, 0.5),
-            learning_rates=(0.00037,),
-        )
-    )
+
 
 
 @dataclass(frozen=True)
@@ -188,9 +174,55 @@ class DebugConfig(BaseConfig):
     )
     model: ModelConfig = field(default_factory=lambda: replace(ModelConfig(), dropouts1=0.1))
     training: TrainingConfig = field(default_factory=lambda: replace(TrainingConfig(), epochs=5))
-    hyperparam_space: HyperparamSpace = field(default_factory=lambda: replace(HyperparamSpace(), dropouts1=(0.1,)))
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(100, ),
+            dropouts1=(0.0,),
+            dropouts2=(0.0,),
+            learning_rates=(0.00037,),
+        )
+    )
     cv: CvConfig = field(default_factory=lambda: replace(CvConfig(), folds=2))
     debug: bool = False
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+
+@dataclass(frozen=True)
+class WPEntitiesEnDeConfig(BaseConfig):
+    """Entity-enhanced configuration with English and German entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de')))
+
+
+@dataclass(frozen=True)
+class WPEntitiesEnEsConfig(BaseConfig):
+    """Entity-enhanced configuration with English and Spanish entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'es')))
+
+
+@dataclass(frozen=True)
+class WPEntitiesEnNlConfig(BaseConfig):
+    """Entity-enhanced configuration with English and Dutch entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'nl')))
+
+
+@dataclass(frozen=True)
+class WPEntitiesEnFrConfig(BaseConfig):
+    """Entity-enhanced configuration with English and French entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'fr')))
+
+
+@dataclass(frozen=True)
+class WPEntitiesEnCsConfig(BaseConfig):
+    """Entity-enhanced configuration with English and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'cs')))
+
+
+@dataclass(frozen=True)
+class WPEntitiesAllLangsConfig(BaseConfig):
+    """Entity-enhanced configuration with all supported entity embedding languages."""
+    embeddings: EmbeddingConfig = field(
+        default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'es', 'nl', 'fr', 'cs'))
+    )
 
 
 def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
@@ -215,6 +247,12 @@ def _config_map() -> dict[str, BaseConfig]:
         'debug': DebugConfig(),
         'wpentities': WpEntitiesConfig(),
         'article_only': ArticleOnlyConfig(),
+        'wpentities_en_de': WPEntitiesEnDeConfig(),
+        'wpentities_en_es': WPEntitiesEnEsConfig(),
+        'wpentities_en_nl': WPEntitiesEnNlConfig(),
+        'wpentities_en_fr': WPEntitiesEnFrConfig(),
+        'wpentities_en_cs': WPEntitiesEnCsConfig(),
+        'wpentities_all_langs': WPEntitiesAllLangsConfig(),
     }
 
 
@@ -248,6 +286,12 @@ def list_config_names() -> tuple[str, ...]:
         'debug',
         'wpentities',
         'article_only',
+        'wpentities_en_de',
+        'wpentities_en_es',
+        'wpentities_en_nl',
+        'wpentities_en_fr',
+        'wpentities_en_cs',
+        'wpentities_all_langs',
     )
 
 
