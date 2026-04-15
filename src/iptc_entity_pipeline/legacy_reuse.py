@@ -6,6 +6,9 @@ Source provenance:
   trainClassificationModel, evaluateModel.
 """
 
+# CamelCase names are preserved intentionally in this module to match the
+# original legacy implementation and reduce behavior drift during migration.
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

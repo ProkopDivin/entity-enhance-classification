@@ -78,7 +78,7 @@ class FeatureBuilder:
                     entity_embeddings.append(entity_embedding)
                 else:
                     missing_wdids.append(wdid)
-                    continue
+                    
             total_found_embeddings += len(entity_embeddings)
             total_missing_embeddings += len(missing_wdids)
             unique_missing_wdids_all.update(missing_wdids)
