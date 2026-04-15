@@ -67,14 +67,6 @@ def build_embedding_dataset(*, corpus: Any, x_matrix: np.ndarray) -> Any:
     y_tensor = torch.as_tensor(y_matrix, dtype=torch.float32)
     return EmbeddingDataset(corpus, x_tensor, y_tensor)
 
-
-def _set_corpus_cat_list(*, corpus: Any, cat_list: Sequence[str]) -> None:
-    try:
-        setattr(corpus, 'catList', list(cat_list))
-    except Exception:
-        LOGGER.warning('Unable to set corpus.catList explicitly, keeping corpus defaults')
-
-
 def _build_dataset_with_targets(
     *,
     corpus: Any,
@@ -83,7 +75,7 @@ def _build_dataset_with_targets(
     cat_list: Sequence[str] | None = None,
 ) -> Any:
     embedding_dataset_cls = _require_embedding_dataset_cls()
-    setattr(corpus, 'catList', list(cat_list))
+    setattr(corpus, 'catList', list(cat_list)) # TODO: finf out if this is not stupid 
     x_tensor = torch.as_tensor(x_matrix, dtype=torch.float32)
     y_tensor = torch.as_tensor(y_matrix, dtype=torch.float32)
     return embedding_dataset_cls(corpus, x_tensor, y_tensor)

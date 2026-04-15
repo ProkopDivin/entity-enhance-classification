@@ -311,8 +311,8 @@ def link_embeddings_and_build_datasets(
     task_type=TaskTypes.training,
 )
 def run_cv(
-    trainData,
-    featureDim: int,
+    train_data,
+    feature_dim: int,
     hyperparam_space_config: Mapping[str, Any],
     training_config: Mapping[str, Any],
     evaluation_config: Mapping[str, Any],
@@ -344,11 +344,11 @@ def run_cv(
     eval_cfg = config_from_dict(EvaluationConfig, evaluation_config)
     cv_cfg = config_from_dict(CvConfig, cv_config)
 
-    x_full = to_numpy_array(matrix_like=trainData.X)
+    x_full = to_numpy_array(matrix_like=train_data.X)
     y_full = (
-        to_numpy_array(matrix_like=trainData.Y)
-        if hasattr(trainData, 'Y')
-        else build_multilabel_targets(corpus=trainData.corpus)
+        to_numpy_array(matrix_like=train_data.Y)
+        if hasattr(train_data, 'Y')
+        else build_multilabel_targets(corpus=train_data.corpus)
     )
 
     combinations = space.iter_combinations(base_training=base_training)
@@ -371,12 +371,12 @@ def run_cv(
         fold_scores = FoldScores()
         combo_fold_curves: list[CvFoldCurves] = []
         for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
-            fit_data = slice_dataset(dataset=trainData, indices=fit_indices.tolist())
-            val_data = slice_dataset(dataset=trainData, indices=val_indices.tolist())
+            fit_data = slice_dataset(dataset=train_data, indices=fit_indices.tolist())
+            val_data = slice_dataset(dataset=train_data, indices=val_indices.tolist())
             train_result = train_model(
                 train_data=fit_data,
                 dev_data=val_data,
-                feature_dim=featureDim,
+                feature_dim=feature_dim,
                 model_config=combo_model_cfg,
                 training_config=combo_train_cfg,
                 print_logs=print_logs,
@@ -526,9 +526,9 @@ def train_best(
     task_type=TaskTypes.testing,
 )
 def eval_final(
-    trainedModel,
-    cvDevDf,
-    testData,
+    trained_model,
+    cv_dev_df,
+    test_data,
     evaluation_config: Mapping[str, Any],
     embedding_config: Mapping[str, Any],
     objective_corpora: str,
@@ -549,18 +549,18 @@ def eval_final(
     eval_cfg = config_from_dict(EvaluationConfig, evaluation_config)
     emb_cfg = config_from_dict(EmbeddingConfig, embedding_config)
     df_corpora_test, df_classes_test, pred_scores = evaluateModel(
-        model=trainedModel,
-        evalData=testData,
+        model=trained_model,
+        evalData=test_data,
         evaluation_config=eval_cfg,
         customThresholds=None,
         returnPredictions=True,
     )
 
     objective_row_name = f'All-{eval_cfg.averaging_type}'
-    if objective_corpora in cvDevDf.index:
-        row_cv = cvDevDf.loc[objective_corpora].to_dict()
+    if objective_corpora in cv_dev_df.index:
+        row_cv = cv_dev_df.loc[objective_corpora].to_dict()
     else:
-        row_cv = cvDevDf.iloc[0].to_dict()
+        row_cv = cv_dev_df.iloc[0].to_dict()
     report_eval_scalars(logger=logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
     if 'Precision_std' in row_cv:
         report_cv_std_scalars(
@@ -601,9 +601,9 @@ def eval_final(
             )
         return pd.DataFrame(rows)
 
-    test_predictions_df = build_predictions_dataframe(dataset=testData)
+    test_predictions_df = build_predictions_dataframe(dataset=test_data)
 
-    logger.report_table(title='Cross Validation Summary', series='Mean+Std', iteration=0, table_plot=cvDevDf)
+    logger.report_table(title='Cross Validation Summary', series='Mean+Std', iteration=0, table_plot=cv_dev_df)
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
@@ -611,8 +611,8 @@ def eval_final(
     results_dir.mkdir(parents=True, exist_ok=True)
     excel_path = results_dir / f'final_evaluation_tables_{sanitize_name(value=config_name)}.xlsx'
     save_paths = save_final_model_outputs(
-        model=trainedModel,
-        test_data=testData,
+        model=trained_model,
+        test_data=test_data,
         pred_scores=pred_scores,
         evaluation_config=eval_cfg,
         embedding_config=emb_cfg,
@@ -621,7 +621,7 @@ def eval_final(
         feature_dim=feature_dim,
     )
 
-    task.upload_artifact('dev_corpora_dataframe', artifact_object=cvDevDf)
+    task.upload_artifact('dev_corpora_dataframe', artifact_object=cv_dev_df)
     task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
     task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
     task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
@@ -649,7 +649,7 @@ def eval_final(
         comparison_result = compare_runs(
             current_probabilities=save_paths.probabilities_csv_path,
             base_probabilities=base_probabilities_csv,
-            gold_data=testData,
+            gold_data=test_data,
             threshold_eval=eval_cfg.threshold_eval,
             averaging_type=eval_cfg.averaging_type,
             top_n=int(comparison_cfg.get('top_n', 20)),
@@ -684,7 +684,7 @@ def eval_final(
             task.upload_artifact('evaluation_comparison_xlsx', artifact_object=str(comparison_result.excel_path))
 
     with pd.ExcelWriter(excel_path) as writer:
-        cvDevDf.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
+        cv_dev_df.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
         df_corpora_test.to_excel(excel_writer=writer, sheet_name='test_corpora')
         df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
         if comparison_result is not None:
@@ -704,7 +704,7 @@ def eval_final(
         else row_all_test
     )
     return EvalResult(
-        dev_corpora_df=cvDevDf,
+        dev_corpora_df=cv_dev_df,
         test_corpora_df=df_corpora_test,
         test_classes_df=df_classes_test,
         objective_metrics=objective_metrics,
@@ -779,8 +779,8 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         print_logs=print_logs,
     )
     cv_result = run_cv(
-        trainData=dataset_bundle.train_data,
-        featureDim=dataset_bundle.feature_dim,
+        train_data=dataset_bundle.train_data,
+        feature_dim=dataset_bundle.feature_dim,
         hyperparam_space_config=hyperparam_space_config,
         training_config=training_config,
         evaluation_config=evaluation_config,
@@ -811,9 +811,9 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         print_logs=print_logs,
     )
     eval_result = eval_final(
-        trainedModel=trained_model,
-        cvDevDf=cv_result.cv_dev_df,
-        testData=dataset_bundle.test_data,
+        trained_model=trained_model,
+        cv_dev_df=cv_result.cv_dev_df,
+        test_data=dataset_bundle.test_data,
         evaluation_config=evaluation_config,
         embedding_config=embedding_config,
         objective_corpora=objective_corpora,
