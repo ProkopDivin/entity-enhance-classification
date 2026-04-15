@@ -13,7 +13,7 @@ def config_from_dict(cls, d: Mapping[str, Any]):
     valid_keys = {f.name for f in fields(cls)}
     return cls(**{k: v for k, v in d.items() if k in valid_keys})
 
-
+    
 @dataclass(frozen=True)
 class PathsConfig:
     """Filesystem paths for data and artifacts."""
@@ -76,11 +76,11 @@ class HyperparamSpace:
     :meth:`iter_combinations` to expand the full Cartesian product.
     """
 
-    hidden_dims: list[int] = field(default_factory=lambda: [1024])
-    dropouts1: list[float] = field(default_factory=lambda: [0.0])
-    dropouts2: list[float] = field(default_factory=lambda: [0.3])
-    batch_sizes: list[int] = field(default_factory=lambda: [100])
-    learning_rates: list[float] = field(default_factory=lambda: [0.00037])
+    hidden_dims: tuple[int, ...] = (1024,)
+    dropouts1: tuple[float, ...] = (0.0,)
+    dropouts2: tuple[float, ...] = (0.3,)
+    batch_sizes: tuple[int, ...] = (100,)
+    learning_rates: tuple[float, ...] = (0.00037,)
 
     def iter_combinations(
         self, base_training: TrainingConfig,
@@ -146,6 +146,15 @@ class BaseConfig:
 @dataclass(frozen=True)
 class WpEntitiesConfig(BaseConfig):
     """Default entity-enhanced configuration."""
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(100, 384, 1024, 2048, 4096, 8192),
+            dropouts1=(0.0, 0.1),
+            dropouts2=(0.0, 0.1, 0.3, 0.5),
+            learning_rates=(0.00037,),
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -154,6 +163,15 @@ class ArticleOnlyConfig(BaseConfig):
 
     embeddings: EmbeddingConfig = field(
         default_factory=lambda: replace(EmbeddingConfig(), use_entity_embeddings=False)
+    )
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(100, 384, 1024, 2048, 4096, 8192),
+            dropouts1=(0.0, 0.1),
+            dropouts2=(0.0, 0.1, 0.3, 0.5),
+            learning_rates=(0.00037,),
+        )
     )
 
 
@@ -170,7 +188,7 @@ class DebugConfig(BaseConfig):
     )
     model: ModelConfig = field(default_factory=lambda: replace(ModelConfig(), dropouts1=0.1))
     training: TrainingConfig = field(default_factory=lambda: replace(TrainingConfig(), epochs=5))
-    hyperparam_space: HyperparamSpace = field(default_factory=lambda: replace(HyperparamSpace(), dropouts1=[0.1]))
+    hyperparam_space: HyperparamSpace = field(default_factory=lambda: replace(HyperparamSpace(), dropouts1=(0.1,)))
     cv: CvConfig = field(default_factory=lambda: replace(CvConfig(), folds=2))
     debug: bool = False
 
