@@ -245,9 +245,11 @@ def link_embeddings_and_build_datasets(
             entity_embedding_stats=entity_embedding_stats,
         )
 
+    selected_langs = tuple(emb.entity_langs) if emb.entity_langs else (emb.entity_lang,)
+    logger.info('Using entity embedding languages=%s', selected_langs)
     entity_store = EntityEmbeddingStore(
         root_dir=paths.entity_embeddings_dir,
-        lang=emb.entity_lang,
+        langs=selected_langs,
     )
     pooling = SumEntityPooling()
     builder = FeatureBuilder(
