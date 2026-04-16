@@ -437,6 +437,18 @@ def run_cv(
     )
 
     combinations = space.iter_combinations(base_training=base_training)
+    total_combinations = len(combinations)
+    trainings_per_combo = 1 if debug else cv_cfg.folds
+    total_trainings = total_combinations * trainings_per_combo
+    completed_trainings = 0
+    cv_plan_message = (
+        'CV hyperparameter search plan: '
+        f'combinations={total_combinations} '
+        f'folds_per_combination={trainings_per_combo} '
+        f'total_model_trains={total_trainings}'
+    )
+    logging.getLogger(__name__).info(cv_plan_message)
+    logger.report_text(cv_plan_message, print_console=True)
     fold_rows: list[dict[str, Any]] = []
     trial_rows: list[dict[str, Any]] = []
     best_trial: dict[str, Any] | None = None
@@ -466,6 +478,15 @@ def run_cv(
                 training_config=combo_train_cfg,
                 print_logs=print_logs,
             )
+            completed_trainings += 1
+            training_progress_message = (
+                'CV training progress: '
+                f'trained_models={completed_trainings}/{total_trainings} '
+                f'combination={combo_idx}/{total_combinations} '
+                f'fold={fold_idx}/{trainings_per_combo}'
+            )
+            logging.getLogger(__name__).info(training_progress_message)
+            logger.report_text(training_progress_message, print_console=True)
             model = train_result.model
             dev_loss = train_result.final_dev_loss
             df_corpora_fold, _ = evaluateModel(
