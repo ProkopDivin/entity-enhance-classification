@@ -9,7 +9,7 @@ import numpy as np
 from clearml import Task
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
-from iptc_entity_pipeline.data_loading import get_article_text, get_doc_weighted_wdids
+from iptc_entity_pipeline.data_loading import get_article_text, get_doc_wdid_mention_counts, get_doc_weighted_wdids
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.pooling import EntityPoolingStrategy
 
@@ -25,13 +25,17 @@ class FeatureBuilder:
         article_embedding_provider: ArticleEmbeddingProvider,
         entity_embedding_store: EntityEmbeddingStore,
         pooling_strategy: EntityPoolingStrategy,
+        entity_weight_source: str = 'relevance_split',
         combine_method: str = 'concat',
     ) -> None:
         if combine_method != 'concat':
             raise ValueError(f'Unsupported v1 combine method: {combine_method}')
+        if entity_weight_source not in {'relevance_split', 'mention_count'}:
+            raise ValueError(f'Unsupported entity weight source: {entity_weight_source}')
         self._article_embedding_provider = article_embedding_provider
         self._entity_embedding_store = entity_embedding_store
         self._pooling_strategy = pooling_strategy
+        self._entity_weight_source = entity_weight_source
         self._combine_method = combine_method
 
     def build_features_for_corpus(
@@ -66,7 +70,10 @@ class FeatureBuilder:
                 article_text=get_article_text(doc),
                 article_doc=doc,
             )
-            weighted_wdids = get_doc_weighted_wdids(doc)
+            if self._entity_weight_source == 'mention_count':
+                weighted_wdids = get_doc_wdid_mention_counts(doc)
+            else:
+                weighted_wdids = get_doc_weighted_wdids(doc)
             wdids = [wd_id for wd_id, _ in weighted_wdids]
             if not wdids:
                 LOGGER.warning('No linked entities for article_id=%s', doc.id)

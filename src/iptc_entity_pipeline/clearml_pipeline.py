@@ -263,12 +263,14 @@ def link_embeddings_and_build_datasets(
         root_dir=paths.entity_embeddings_dir,
         langs=selected_langs,
     )
+    entity_weight_source = 'relevance_split'
     if emb.entity_pooling == 'weighted_mean':
         pooling = WeightedMeanEntityPooling()
         logger.info('Using relevance-weighted entity pooling (normalized weighted mean)')
     elif emb.entity_pooling == 'weighted_sum':
         pooling = WeightedSumEntityPooling()
-        logger.info('Using relevance-weighted entity pooling (normalized weighted sum)')
+        entity_weight_source = 'mention_count'
+        logger.info('Using mention-weighted entity pooling (weighted sum)')
     elif emb.entity_pooling == 'mean':
         pooling = MeanEntityPooling()
         logger.info('Using unweighted entity pooling (mean)')
@@ -281,6 +283,7 @@ def link_embeddings_and_build_datasets(
         article_embedding_provider=article_provider,
         entity_embedding_store=entity_store,
         pooling_strategy=pooling,
+        entity_weight_source=entity_weight_source,
         combine_method=emb.combine_method,
     )
 

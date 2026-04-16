@@ -391,6 +391,24 @@ def get_doc_weighted_wdids(doc: Any) -> list[tuple[str, float]]:
     return weighted_wdids
 
 
+def get_doc_wdid_mention_counts(doc: Any) -> list[tuple[str, float]]:
+    """
+    Extract ``(wdId, mention_count)`` pairs from ``doc.entities``.
+
+    Mention count is the number of linked-entity occurrences mapped to each wdId
+    within one document.
+
+    :param doc: Corpus document with attached :class:`LinkedEntity` objects.
+    :return: List of ``(wdId, mention_count)`` pairs.
+    """
+    mention_counts: dict[str, float] = {}
+    for ent in getattr(doc, 'entities', []):
+        wd_ids = tuple(getattr(ent, 'wd_ids', ()))
+        for wd_id in wd_ids:
+            mention_counts[wd_id] = mention_counts.get(wd_id, 0.0) + 1.0
+    return list(mention_counts.items())
+
+
 def get_article_text(doc: Any) -> str:
     """
     Compose deterministic text used for fallback article embeddings.
