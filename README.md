@@ -135,7 +135,9 @@ Run new worker(agent)
 ```sh
     env CLEARML_AGENT_SKIP_PIP_VENV_INSTALL=/home/prokop/Git/entity-enhance-classification/venv/bin/python  clearml-agent daemon --queue iptc_entity_tasks --detached
 ```
-
+```sh
+    env CLEARML_AGENT_SKIP_PIP_VENV_INSTALL=/home/prokop/Git/entity-enhance-classification/venv/bin/python  clearml-agent daemon --queue iptc_entity_pipeline --detached
+```
 ### 3.A To kill agent use:
    ```sh
    clearml-agent daemon --stop
