@@ -86,7 +86,7 @@ class WeightedMeanEntityPooling(EntityPoolingStrategy):
         return (np.sum(weighted_embeddings, axis=0, dtype=np.float32) / total_weight).astype(np.float32)
 
 class WeightedSumEntityPooling(EntityPoolingStrategy):
-    """Pool entity vectors using a normalized weighted sum."""
+    """Pool entity vectors using a weighted sum."""
 
     def pool(
         self,

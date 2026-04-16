@@ -511,7 +511,20 @@ class WPEntitiesMentionWeightedSumConfig(BaseConfig):
             entity_pooling='weighted_sum',
         )
     )
-	
+
+
+@dataclass(frozen=True)
+class WPEntitiesRelevanceWeightedSumConfig(BaseConfig):
+    """Entity-enhanced configuration with relevance-weighted sum pooling enabled."""
+
+    embeddings: EmbeddingConfig = field(
+        default_factory=lambda: replace(
+            EmbeddingConfig(),
+            entity_pooling='weighted_sum_relevance',
+        )
+    )
+
+
 def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
     """Return a config with absolute paths resolved from ``root_dir``."""
     root_path = Path(root_dir)
@@ -534,6 +547,7 @@ def _config_map() -> dict[str, BaseConfig]:
         'debug': DebugConfig(),
         'wpentities': WpEntitiesConfig(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanConfig(),
+        'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumConfig(),
         'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
         'wpentities_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
         'wpentities_mean': WPEntitiesMeanConfig(),
