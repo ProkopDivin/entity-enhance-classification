@@ -177,15 +177,16 @@ class DebugConfig(BaseConfig):
     hyperparam_space: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
-            hidden_dims=(100, ),
-            dropouts1=(0.0,),
-            dropouts2=(0.0,),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
             learning_rates=(0.00037,),
         )
     )
     cv: CvConfig = field(default_factory=lambda: replace(CvConfig(), folds=2))
     debug: bool = False
-    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+
+
 
 @dataclass(frozen=True)
 class WPEntitiesEnDeConfig(BaseConfig):
