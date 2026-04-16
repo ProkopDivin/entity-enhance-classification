@@ -9,7 +9,7 @@ import numpy as np
 from clearml import Task
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
-from iptc_entity_pipeline.data_loading import get_article_text, get_doc_wdids
+from iptc_entity_pipeline.data_loading import get_article_text, get_doc_weighted_wdids
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.pooling import EntityPoolingStrategy
 
@@ -66,19 +66,22 @@ class FeatureBuilder:
                 article_text=get_article_text(doc),
                 article_doc=doc,
             )
-            wdids = get_doc_wdids(doc)
+            weighted_wdids = get_doc_weighted_wdids(doc)
+            wdids = [wd_id for wd_id, _ in weighted_wdids]
             if not wdids:
                 LOGGER.warning('No linked entities for article_id=%s', doc.id)
             unique_requested_wdids.update(wdids)
-            entity_embeddings = []
+            entity_embeddings: list[np.ndarray] = []
+            entity_weights: list[float] = []
             missing_wdids: list[str] = []
-            for wdid in wdids:
+            for wdid, weight in weighted_wdids:
                 entity_embedding = self._entity_embedding_store.get_entity_embedding(wdid=wdid)
                 if entity_embedding is not None:
                     entity_embeddings.append(entity_embedding)
+                    entity_weights.append(weight)
                 else:
                     missing_wdids.append(wdid)
-                    
+
             total_found_embeddings += len(entity_embeddings)
             total_missing_embeddings += len(missing_wdids)
             unique_missing_wdids_all.update(missing_wdids)
@@ -89,7 +92,11 @@ class FeatureBuilder:
                     doc.id,
                     ', '.join(unique_missing_wdids),
                 )
-            pooled_entity = self._pooling_strategy.pool(entity_embeddings=entity_embeddings, embedding_dim=entity_dim)
+            pooled_entity = self._pooling_strategy.pool(
+                entity_embeddings=entity_embeddings,
+                embedding_dim=entity_dim,
+                weights=entity_weights,
+            )
             row = np.concatenate([article_embedding, pooled_entity]).astype(np.float32)
             rows.append(row)
 

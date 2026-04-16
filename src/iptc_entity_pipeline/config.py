@@ -40,7 +40,7 @@ class EmbeddingConfig:
     entity_relevance_threshold: float = 0.0
     use_entity_embeddings: bool = True
     combine_method: str = 'concat'
-    entity_pooling: str = 'sum'
+    entity_pooling: str = 'weighted_mean'
 
 
 @dataclass(frozen=True)

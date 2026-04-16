@@ -365,6 +365,26 @@ def get_doc_wdids(doc: Any) -> list[str]:
     return [wd_id for ent in getattr(doc, 'entities', []) for wd_id in ent.wd_ids]
 
 
+def get_doc_weighted_wdids(doc: Any) -> list[tuple[str, float]]:
+    """
+    Extract ``(wdId, weight)`` pairs from ``doc.entities``.
+
+    When one linked entity maps to multiple wdIds, its relevance is split evenly
+    across all mapped wdIds.
+
+    :param doc: Corpus document with attached :class:`LinkedEntity` objects.
+    :return: List of ``(wdId, weight)`` pairs.
+    """
+    weighted_wdids: list[tuple[str, float]] = []
+    for ent in getattr(doc, 'entities', []):
+        wd_ids = tuple(getattr(ent, 'wd_ids', ()))
+        if not wd_ids:
+            continue
+        weight = float(getattr(ent, 'relevance', 0.0)) / len(wd_ids)
+        weighted_wdids.extend((wd_id, weight) for wd_id in wd_ids)
+    return weighted_wdids
+
+
 def get_article_text(doc: Any) -> str:
     """
     Compose deterministic text used for fallback article embeddings.
