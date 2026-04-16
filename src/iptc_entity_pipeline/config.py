@@ -502,13 +502,12 @@ class WPEntitiesRelTH999(BaseConfig):
     
 
 @dataclass(frozen=True)
-class WPEntitiesWeightedSumConfig(BaseConfig):
-    """Entity-enhanced configuration with relevance-weighted sum pooling enabled."""
+class WPEntitiesMentionWeightedSumConfig(BaseConfig):
+    """Entity-enhanced configuration with mention-weighted sum pooling enabled."""
 
     embeddings: EmbeddingConfig = field(
         default_factory=lambda: replace(
             EmbeddingConfig(),
-            use_entity_relevance_weights=True,
             entity_pooling='weighted_sum',
         )
     )
@@ -535,7 +534,8 @@ def _config_map() -> dict[str, BaseConfig]:
         'debug': DebugConfig(),
         'wpentities': WpEntitiesConfig(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanConfig(),
-        'wpentities_weighted_sum': WPEntitiesWeightedSumConfig(),
+        'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
+        'wpentities_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
         'wpentities_mean': WPEntitiesMeanConfig(),
         'article_only': ArticleOnlyConfig(),
         'wpentities_en_de': WPEntitiesEnDeConfig(),
