@@ -43,6 +43,7 @@ class FeatureBuilder:
         *,
         corpus: Any,
         ensure_article_embeddings: bool = False,
+        clearml_logger: Any | None = None,
     ) -> np.ndarray:
         """
         Build feature matrix for all docs in a corpus.
@@ -51,6 +52,7 @@ class FeatureBuilder:
 
         :param corpus: ``geneea.catlib.data.Corpus`` object with entities attached to each doc.
         :param ensure_article_embeddings: If ``True``, precompute missing article embeddings for the corpus.
+        :param clearml_logger: Optional ClearML task logger used to report summary text.
         :return: Feature matrix of shape ``[docs, article_dim + entity_dim]``.
         """
         if ensure_article_embeddings:
@@ -129,9 +131,12 @@ class FeatureBuilder:
         LOGGER.info(
             final_stats_message,
         )
-        task = Task.current_task()
-        if task is not None:
-            task.get_logger().report_text(final_stats_message, print_console=True)
+        if clearml_logger is not None:
+            clearml_logger.report_text(final_stats_message, print_console=True)
+        else:
+            task = Task.current_task()
+            if task is not None:
+                task.get_logger().report_text(final_stats_message, print_console=True)
 
         return np.vstack(rows)
 
