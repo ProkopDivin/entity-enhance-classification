@@ -68,7 +68,7 @@ class TrainingConfig:
     # 0 = disabled. When > 0, monitors dev loss, stops after this many epochs
     # without improvement, and restores the best weights.
     early_stopping_patience: int = 5
-    early_stopping_min_delta: float = 0.00001
+    early_stopping_min_delta: float = 0.000000001
 
 
 @dataclass(frozen=True)
