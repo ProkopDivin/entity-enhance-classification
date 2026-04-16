@@ -137,7 +137,7 @@ class BaseConfig:
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
-    debug: bool = True
+    debug: bool = False
     
 
     def to_clearml_mapping(self) -> dict[str, Any]:
