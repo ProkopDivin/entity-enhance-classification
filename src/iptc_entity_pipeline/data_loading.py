@@ -287,6 +287,7 @@ def attach_entities_to_corpus(
     corpus: Any,
     csv_path: str,
     wdid_mapping: Mapping[str, Sequence[str]],
+    min_relevance: float = 0.0,
 ) -> None:
     """
     Parse entities from CSV and attach resolved :class:`LinkedEntity` objects to each doc.
@@ -297,6 +298,7 @@ def attach_entities_to_corpus(
     :param corpus: Corpus whose documents will be enriched in-place.
     :param csv_path: Path to a corpus CSV containing an ``entities`` JSON column.
     :param wdid_mapping: Pre-loaded gkbId-to-wdId mapping from :func:`load_wdid_mapping`.
+    :param min_relevance: Minimum entity relevance (inclusive) required for attachment.
     """
     _ensure_csv_field_limit()
     article_entities: dict[str, list[LinkedEntity]] = {}
@@ -322,7 +324,19 @@ def attach_entities_to_corpus(
                     if not gkb_id:
                         continue
                     wd_ids = tuple(wdid_mapping.get(gkb_id, ()))
-                    relevance = float(ent.get('relevance', 0.0))
+                    relevance_raw = ent.get('relevance', 0.0)
+                    try:
+                        relevance = float(relevance_raw)
+                    except (TypeError, ValueError):
+                        LOGGER.warning(
+                            'Invalid entity relevance, using fallback value: article_id=%s gkb_id=%s relevance=%r',
+                            article_id,
+                            gkb_id,
+                            relevance_raw,
+                        )
+                        relevance = 0.0
+                    if relevance < min_relevance:
+                        continue
                     linked.append(LinkedEntity(gkb_id=gkb_id, wd_ids=wd_ids, relevance=relevance))
             if linked:
                 article_entities[article_id] = linked

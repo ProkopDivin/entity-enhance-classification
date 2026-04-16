@@ -37,6 +37,7 @@ class EmbeddingConfig:
     embed_svc_url: str = 'http://tau.g:5533'
     entity_lang: str = 'en'
     entity_langs: tuple[str, ...] = ()
+    entity_relevance_threshold: float = 0.0
     use_entity_embeddings: bool = True
     combine_method: str = 'concat'
     entity_pooling: str = 'sum'
@@ -65,8 +66,8 @@ class TrainingConfig:
     loss_name: str = 'bceWithLogitsLoss'
     # 0 = disabled. When > 0, monitors dev loss, stops after this many epochs
     # without improvement, and restores the best weights.
-    early_stopping_patience: int = 6
-    early_stopping_min_delta: float = 0.000000001
+    early_stopping_patience: int = 5
+    early_stopping_min_delta: float = 0.00001
 
 
 @dataclass(frozen=True)
@@ -77,9 +78,9 @@ class HyperparamSpace:
     :meth:`iter_combinations` to expand the full Cartesian product.
     """
 
-    hidden_dims: tuple[int, ...] = (100, 384, 1024, 2048, 4096, 8192),           
-    dropouts1: tuple[float, ...] = (0.0, 0.1),
-    dropouts2: tuple[float, ...] = (0.0, 0.1, 0.3, 0.5),
+    hidden_dims: tuple[int, ...] = (100, 384, 1024, 2048, 4096, 8192)
+    dropouts1: tuple[float, ...] = (0.0),
+    dropouts2: tuple[float, ...] = (0.0, 0.1, 0.3, 0.5)
     batch_sizes: tuple[int, ...] = (100,)
     learning_rates: tuple[float, ...] = (0.00037,)
 
@@ -137,7 +138,7 @@ class BaseConfig:
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
-    debug: bool = True
+    debug: bool = False
     
 
     def to_clearml_mapping(self) -> dict[str, Any]:
@@ -225,6 +226,13 @@ class WPEntitiesAllLangsConfig(BaseConfig):
     )
 
 
+@dataclass(frozen=True)
+class WPEntitiesRelTH(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 0.0)
+    debug: bool = field(default_factory=lambda: True)   
+    
 def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
     """Return a config with absolute paths resolved from ``root_dir``."""
     root_path = Path(root_dir)
@@ -253,6 +261,7 @@ def _config_map() -> dict[str, BaseConfig]:
         'wpentities_en_fr': WPEntitiesEnFrConfig(),
         'wpentities_en_cs': WPEntitiesEnCsConfig(),
         'wpentities_all_langs': WPEntitiesAllLangsConfig(),
+        'wpentities_rel_th': WPEntitiesRelTH(),
     }
 
 
@@ -282,17 +291,7 @@ def list_config_names() -> tuple[str, ...]:
 
     :return: Tuple of supported config names.
     """
-    return (
-        'debug',
-        'wpentities',
-        'article_only',
-        'wpentities_en_de',
-        'wpentities_en_es',
-        'wpentities_en_nl',
-        'wpentities_en_fr',
-        'wpentities_en_cs',
-        'wpentities_all_langs',
-    )
+    return _config_map().keys()
 
 
 # Backward compatibility alias for older imports.
