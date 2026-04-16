@@ -42,7 +42,7 @@ from iptc_entity_pipeline.evaluation_comparison import build_output_path, compar
 from iptc_entity_pipeline.feature_builder import FeatureBuilder
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.model_io import save_final_model_outputs
-from iptc_entity_pipeline.pooling import SumEntityPooling
+from iptc_entity_pipeline.pooling import SumEntityPooling, WeightedMeanEntityPooling
 from iptc_entity_pipeline.reporting import (
     log_stage,
     report_cv_fold_curve_charts,
@@ -263,7 +263,12 @@ def link_embeddings_and_build_datasets(
         root_dir=paths.entity_embeddings_dir,
         langs=selected_langs,
     )
-    pooling = SumEntityPooling()
+    if emb.entity_pooling == 'sum':
+        pooling = SumEntityPooling()
+    elif emb.entity_pooling == 'weighted_mean':
+        pooling = WeightedMeanEntityPooling()
+    else:
+        raise ValueError(f'Unsupported entity_pooling: {emb.entity_pooling}')
     builder = FeatureBuilder(
         article_embedding_provider=article_provider,
         entity_embedding_store=entity_store,
