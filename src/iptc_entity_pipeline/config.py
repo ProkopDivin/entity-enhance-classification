@@ -139,6 +139,7 @@ class BaseConfig:
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
+    upload_artifacts: bool = False
     debug: bool = True
     
 

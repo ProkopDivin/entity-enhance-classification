@@ -57,13 +57,22 @@ def report_cv_std_scalars(
     )
 
 
-def report_cv_outputs(*, task: Task, logger: Any, trials_df: Any, folds_df: Any, cv_dev_df: Any) -> None:
+def report_cv_outputs(
+    *,
+    task: Task,
+    logger: Any,
+    trials_df: Any,
+    folds_df: Any,
+    cv_dev_df: Any,
+    upload_artifacts: bool = False,
+) -> None:
     """Report CV tables and upload all frames as artifacts."""
     logger.report_table(title='Cross Validation', series='Folds', iteration=0, table_plot=folds_df)
     logger.report_table(title='Cross Validation', series='Cross Validation Results', iteration=0, table_plot=trials_df)
-    task.upload_artifact('cv_trials_dataframe', artifact_object=trials_df)
-    task.upload_artifact('cv_folds_dataframe', artifact_object=folds_df)
-    task.upload_artifact('cv_dev_summary_dataframe', artifact_object=cv_dev_df)
+    if upload_artifacts:
+        task.upload_artifact('cv_trials_dataframe', artifact_object=trials_df)
+        task.upload_artifact('cv_folds_dataframe', artifact_object=folds_df)
+        task.upload_artifact('cv_dev_summary_dataframe', artifact_object=cv_dev_df)
 
 
 def log_stage(*, task: Task, message: str, print_logs: bool) -> None:
