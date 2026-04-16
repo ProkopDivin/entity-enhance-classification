@@ -364,11 +364,13 @@ def link_embeddings_and_build_datasets(
     x_train = builder.build_features_for_corpus(
         corpus=corpora.train,
         ensure_article_embeddings=False,
+        clearml_logger=task.get_logger() if task is not None else None,
     )
     logger.info('Building linked features for test corpus (%s articles)', len(corpora.test))
     x_test = builder.build_features_for_corpus(
         corpus=corpora.test,
         ensure_article_embeddings=False,
+        clearml_logger=task.get_logger() if task is not None else None,
     )
 
     train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
