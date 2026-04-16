@@ -79,7 +79,7 @@ class HyperparamSpace:
     """
 
     hidden_dims: tuple[int, ...] = (100, 384, 1024, 2048, 4096, 8192)
-    dropouts1: tuple[float, ...] = (0.0),
+    dropouts1: tuple[float, ...] = (0.0,)
     dropouts2: tuple[float, ...] = (0.0, 0.1, 0.3, 0.5)
     batch_sizes: tuple[int, ...] = (100,)
     learning_rates: tuple[float, ...] = (0.00037,)
@@ -178,15 +178,16 @@ class DebugConfig(BaseConfig):
     hyperparam_space: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
-            hidden_dims=(100, ),
-            dropouts1=(0.0,),
-            dropouts2=(0.0,),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
             learning_rates=(0.00037,),
         )
     )
     cv: CvConfig = field(default_factory=lambda: replace(CvConfig(), folds=2))
     debug: bool = False
-    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+
+
 
 @dataclass(frozen=True)
 class WPEntitiesEnDeConfig(BaseConfig):
@@ -231,7 +232,168 @@ class WPEntitiesRelTH(BaseConfig):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
     relevance_threshold: float = field(default_factory=lambda: 0.0)
-    debug: bool = field(default_factory=lambda: True)   
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH5(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 5.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH10(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 10.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH20(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 20.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH30(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 30.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH40(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 40.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+    
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH50(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 50.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+    
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH60(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 60.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+    
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH70(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 70.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
+    
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH80(BaseConfig):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'cs')))
+    relevance_threshold: float = field(default_factory=lambda: 80.0)
+    debug: bool = field(default_factory=lambda: True)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            learning_rates=(0.00037,),
+        )
+    )   
     
 def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
     """Return a config with absolute paths resolved from ``root_dir``."""
@@ -262,6 +424,15 @@ def _config_map() -> dict[str, BaseConfig]:
         'wpentities_en_cs': WPEntitiesEnCsConfig(),
         'wpentities_all_langs': WPEntitiesAllLangsConfig(),
         'wpentities_rel_th': WPEntitiesRelTH(),
+        'wpentities_rel_th_5': WPEntitiesRelTH5(),
+        'wpentities_rel_th_10': WPEntitiesRelTH10(),
+        'wpentities_rel_th_20': WPEntitiesRelTH20(),
+        'wpentities_rel_th_30': WPEntitiesRelTH30(),
+        'wpentities_rel_th_40': WPEntitiesRelTH40(),
+        'wpentities_rel_th_50': WPEntitiesRelTH50(),
+        'wpentities_rel_th_60': WPEntitiesRelTH60(),
+        'wpentities_rel_th_70': WPEntitiesRelTH70(),
+        'wpentities_rel_th_80': WPEntitiesRelTH80(),
     }
 
 
