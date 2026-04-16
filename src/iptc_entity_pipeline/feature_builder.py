@@ -106,12 +106,14 @@ class FeatureBuilder:
 
         unique_total_entities = len(unique_requested_wdids)
         unique_missing_entities = len(unique_missing_wdids_all)
+        indexed_embedding_files = self._entity_embedding_store.indexed_file_count()
         avg_missing_per_article = (total_missing_embeddings / total_docs) if total_docs else 0.0
         avg_found_per_article = (total_found_embeddings / total_docs) if total_docs else 0.0
         final_stats_message = (
             'Entity embedding final stats: '
             f'unique_missing={unique_missing_entities} '
             f'unique_total={unique_total_entities} '
+            f'indexed_embedding_files={indexed_embedding_files} '
             f'missing_ratio='
             f'{((unique_missing_entities / unique_total_entities) if unique_total_entities else 0.0):.4f} '
             f'avg_missing_per_article={avg_missing_per_article:.4f} '
