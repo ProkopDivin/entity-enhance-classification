@@ -18,7 +18,12 @@ class EntityEmbeddingStore:
     File pattern (v1): ``{wdid}_{lang}_{chunk}.npy``.
     """
 
-    def __init__(self, *, root_dir: str, langs: tuple[str, ...] | str = ('en',)) -> None:
+    def __init__(
+        self,
+        *,
+        root_dir: str,
+        langs: tuple[str, ...] | str = ('en',),
+    ) -> None:
         self._root_dir = Path(root_dir)
         raw_langs = (langs,) if isinstance(langs, str) else langs
         normalized_langs = tuple(dict.fromkeys(lang.strip() for lang in raw_langs if lang and lang.strip()))
@@ -26,6 +31,7 @@ class EntityEmbeddingStore:
         self._cache: dict[str, np.ndarray | None] = {}
         self._wdid_lang_to_paths: dict[str, dict[str, list[Path]]] = {}
         self._sample_path: Path | None = None
+        self._indexed_file_count = 0
         self._index_built = False
 
     def _chunk_paths(self, *, wdid: str, lang: str) -> list[Path]:
@@ -33,30 +39,37 @@ class EntityEmbeddingStore:
         by_lang = self._wdid_lang_to_paths.get(wdid, {})
         return by_lang.get(lang, [])
 
+    @staticmethod
+    def _parse_stem(*, stem: str) -> tuple[str, str] | None:
+        parts = stem.rsplit('_', maxsplit=2)
+        if len(parts) != 3:
+            return None
+        wdid, lang, _chunk = parts
+        if not wdid or not lang:
+            return None
+        return wdid, lang
+
     def _ensure_index(self) -> None:
         if self._index_built:
             return
 
         LOGGER.info('Scanning entity embedding files in %s for languages=%s', self._root_dir, self._langs)
         wdid_lang_to_paths: dict[str, dict[str, list[Path]]] = defaultdict(lambda: defaultdict(list))
+        selected_langs = set(self._langs)
         sample_path: Path | None = None
         file_count = 0
-        for lang in self._langs:
-            pattern = f'*_{lang}_*.npy'
-            for path in self._root_dir.glob(pattern):
-                file_count += 1
-                if file_count % 10000 == 0:
-                    LOGGER.info('Indexed %s entity embedding files so far', file_count)
+        for path in self._root_dir.glob('*.npy'):
+            file_count += 1
+            if file_count % 10000 == 0:
+                LOGGER.info('Indexed %s entity embedding files so far', file_count)
+            parsed = self._parse_stem(stem=path.stem)
+            if parsed is None:
+                continue
+            wdid, lang = parsed
+            if lang in selected_langs:
+                wdid_lang_to_paths[wdid][lang].append(path)
                 if sample_path is None:
                     sample_path = path
-                stem = path.stem
-                split_suffix = f'_{lang}_'
-                if split_suffix not in stem:
-                    continue
-                wdid = stem.split(split_suffix, maxsplit=1)[0]
-                if not wdid:
-                    continue
-                wdid_lang_to_paths[wdid][lang].append(path)
 
         for by_lang in wdid_lang_to_paths.values():
             for paths in by_lang.values():
@@ -73,6 +86,7 @@ class EntityEmbeddingStore:
             for by_lang in self._wdid_lang_to_paths.values()
             for paths in by_lang.values()
         )
+        self._indexed_file_count = indexed_file_count
         LOGGER.info(
             'Indexed entity embedding files once: entities=%s files=%s',
             len(self._wdid_lang_to_paths),
@@ -89,21 +103,25 @@ class EntityEmbeddingStore:
         if wdid in self._cache:
             return self._cache[wdid]
 
-        per_lang_embeddings: list[np.ndarray] = []
+        chunks_all_langs: list[np.ndarray] = []
         for lang in self._langs:
             chunk_paths = self._chunk_paths(wdid=wdid, lang=lang)
             if not chunk_paths:
                 continue
-            chunks = [np.asarray(np.load(path), dtype=np.float32) for path in chunk_paths]
-            per_lang_embeddings.append(np.mean(np.vstack(chunks), axis=0, dtype=np.float32))
+            chunks_all_langs.extend(np.asarray(np.load(path), dtype=np.float32) for path in chunk_paths)
 
-        if not per_lang_embeddings:
+        if not chunks_all_langs:
             self._cache[wdid] = None
             return None
 
-        embedding = np.mean(np.vstack(per_lang_embeddings), axis=0, dtype=np.float32)
+        embedding = np.mean(np.vstack(chunks_all_langs), axis=0, dtype=np.float32)
         self._cache[wdid] = embedding
         return embedding
+
+    def indexed_file_count(self) -> int:
+        """Return number of indexed entity embedding files for configured languages."""
+        self._ensure_index()
+        return int(self._indexed_file_count)
 
     def infer_embedding_dim(self) -> int:
         """

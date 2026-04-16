@@ -146,9 +146,22 @@ class BaseConfig:
         """Convert dataclasses to serializable mapping."""
         return asdict(self)
 
+@dataclass(frozen=True)
+class BaseConfigWithHPO(BaseConfig):
+    """Base configuration with hyperparameter space."""
+    debug: bool = field(default_factory=lambda: False)
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(384, 1024, 2048, 4096, 8192,),
+            dropouts1=(0.1,),
+            dropouts2=(0.0, 0.3, 0.5,),
+            learning_rates=(0.00037,),
+        )
+    ) 
 
 @dataclass(frozen=True)
-class WpEntitiesConfig(BaseConfig):
+class WpEntitiesConfig(BaseConfigWithHPO):
     """Default entity-enhanced configuration."""
 
 @dataclass(frozen=True)
@@ -174,7 +187,7 @@ class WPEntitiesWeightedMeanConfig(BaseConfig):
 
 
 @dataclass(frozen=True)
-class ArticleOnlyConfig(BaseConfig):
+class ArticleOnlyConfig(BaseConfigWithHPO):
     """Article-only configuration without entity embeddings."""
 
     embeddings: EmbeddingConfig = field(

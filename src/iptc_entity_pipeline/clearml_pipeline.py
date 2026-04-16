@@ -263,7 +263,6 @@ def link_embeddings_and_build_datasets(
         root_dir=paths.entity_embeddings_dir,
         langs=selected_langs,
     )
-    use_relevance_pooling = emb.use_entity_relevance_weights or emb.entity_pooling == 'weighted_mean'
     if emb.entity_pooling == 'weighted_mean':
         pooling = WeightedMeanEntityPooling()
         logger.info('Using relevance-weighted entity pooling (normalized weighted mean)')
