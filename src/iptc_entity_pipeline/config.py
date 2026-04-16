@@ -175,7 +175,7 @@ class WPEntitiesMeanConfig(BaseConfig):
 
 
 @dataclass(frozen=True)
-class WPEntitiesWeightedMeanConfig(BaseConfig):
+class WPEntitiesWeightedMeanConfig(BaseConfigWithHPO):
     """Entity-enhanced config with relevance-weighted mean pooling enabled."""
 
     embeddings: EmbeddingConfig = field(
@@ -237,7 +237,7 @@ class WPEntitiesEnEsConfig(BaseConfig):
 
 
 @dataclass(frozen=True)
-class WPEntitiesEnNlConfig(BaseConfig):
+class WPEntitiesEnNlConfig(BaseConfigWithHPO):
     """Entity-enhanced configuration with English and Dutch entity embeddings."""
     embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'nl')))
 
@@ -255,7 +255,7 @@ class WPEntitiesEnCsConfig(BaseConfig):
 
 
 @dataclass(frozen=True)
-class WPEntitiesAllLangsConfig(BaseConfig):
+class WPEntitiesAllLangsConfig(BaseConfigWithHPO):
     """Entity-enhanced configuration with all supported entity embedding languages."""
     embeddings: EmbeddingConfig = field(
         default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'es', 'nl', 'fr', 'cs'))
@@ -326,7 +326,7 @@ class WPEntitiesRelTH3(BaseConfig):
     )   
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH5(BaseConfig):
+class WPEntitiesRelTH5(BaseConfigWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     embeddings: EmbeddingConfig = field(
         default_factory=lambda: replace(
@@ -435,7 +435,16 @@ class WPEntitiesRelTH13(BaseConfig):
         )
     )   
     
-    
+
+@dataclass(frozen=True)
+class WPEntitiesNlConfig(BaseConfigWithHPO):
+    """Entity-enhanced configuration with English and Dutch entity embeddings."""
+    embeddings: EmbeddingConfig = field(
+        default_factory=lambda: replace(
+            EmbeddingConfig(),
+            entity_langs=('nl',),
+        )
+    )
     
 @dataclass(frozen=True)
 class WPEntitiesRelTH15(BaseConfig):
@@ -503,7 +512,7 @@ class WPEntitiesRelTH999(BaseConfig):
     
 
 @dataclass(frozen=True)
-class WPEntitiesMentionWeightedSumConfig(BaseConfig):
+class WPEntitiesMentionWeightedSumConfig(BaseConfigWithHPO):
     """Entity-enhanced configuration with mention-weighted sum pooling enabled."""
 
     embeddings: EmbeddingConfig = field(
@@ -515,7 +524,7 @@ class WPEntitiesMentionWeightedSumConfig(BaseConfig):
 
 
 @dataclass(frozen=True)
-class WPEntitiesRelevanceWeightedSumConfig(BaseConfig):
+class WPEntitiesRelevanceWeightedSumConfig(BaseConfigWithHPO):
     """Entity-enhanced configuration with relevance-weighted sum pooling enabled."""
 
     embeddings: EmbeddingConfig = field(
@@ -546,30 +555,35 @@ def _config_map() -> dict[str, BaseConfig]:
     """Return supported config instances."""
     return {
         'debug': DebugConfig(),
+        'article_only': ArticleOnlyConfig(),
         'wpentities': WpEntitiesConfig(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanConfig(),
         'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumConfig(),
         'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
-        'wpentities_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
-        'wpentities_mean': WPEntitiesMeanConfig(),
-        'article_only': ArticleOnlyConfig(),
-        'wpentities_en_de': WPEntitiesEnDeConfig(),
-        'wpentities_en_es': WPEntitiesEnEsConfig(),
         'wpentities_en_nl': WPEntitiesEnNlConfig(),
-        'wpentities_en_fr': WPEntitiesEnFrConfig(),
-        'wpentities_en_cs': WPEntitiesEnCsConfig(),
+        'wpentities_nl': WPEntitiesNlConfig(),
         'wpentities_all_langs': WPEntitiesAllLangsConfig(),
-        'wpentities_rel_th': WPEntitiesRelTH(),
-        'wpentities_rel_th_1': WPEntitiesRelTH1(),
-        'wpentities_rel_th_3': WPEntitiesRelTH3(),
         'wpentities_rel_th_5': WPEntitiesRelTH5(),
-        'wpentities_rel_th_7': WPEntitiesRelTH7(),
-        'wpentities_rel_th_9': WPEntitiesRelTH9(),
-        'wpentities_rel_th_11': WPEntitiesRelTH11(),
-        'wpentities_rel_th_13': WPEntitiesRelTH13(),
-        'wpentities_rel_th_15': WPEntitiesRelTH15(),
-        'wpentities_rel_th_17': WPEntitiesRelTH17(),
-        'wpentities_rel_th_999': WPEntitiesRelTH999(),
+        #'wpentities_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
+        #'wpentities_mean': WPEntitiesMeanConfig(),
+
+        #'wpentities_en_de': WPEntitiesEnDeConfig(),
+        #'wpentities_en_es': WPEntitiesEnEsConfig(),
+        
+        #'wpentities_en_fr': WPEntitiesEnFrConfig(),
+        #'wpentities_en_cs': WPEntitiesEnCsConfig(),
+        
+        #'wpentities_rel_th': WPEntitiesRelTH(),
+        #'wpentities_rel_th_1': WPEntitiesRelTH1(),
+        #'wpentities_rel_th_3': WPEntitiesRelTH3(),
+        
+        #'wpentities_rel_th_7': WPEntitiesRelTH7(),
+        #'wpentities_rel_th_9': WPEntitiesRelTH9(),
+        #'wpentities_rel_th_11': WPEntitiesRelTH11(),
+        #'wpentities_rel_th_13': WPEntitiesRelTH13(),
+        #'wpentities_rel_th_15': WPEntitiesRelTH15(),
+        #'wpentities_rel_th_17': WPEntitiesRelTH17(),
+        #'wpentities_rel_th_999': WPEntitiesRelTH999(),
     }
 
 
