@@ -155,7 +155,7 @@ class BaseConfigWithHPO(BaseConfig):
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(384, 1024, 2048, 4096, 8192,),
-            dropouts1=(0.1,),
+            dropouts1=(0.0,),
             dropouts2=(0.0, 0.3, 0.5,),
             learning_rates=(0.00037,),
         )
@@ -214,7 +214,7 @@ class DebugConfig(BaseConfig):
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
-            dropouts1=(0.1,),
+            dropouts1=(0.0,),
             dropouts2=(0.0, 0.3, 0.5, ),
             learning_rates=(0.00037,),
         )
