@@ -324,7 +324,13 @@ def attach_entities_to_corpus(
                     if not gkb_id:
                         continue
                     wd_ids = tuple(wdid_mapping.get(gkb_id, ()))
-                    relevance_raw = ent.get('relevance', 0.0)
+                    relevance_raw = ent.get('relevance', None)
+                    if relevance_raw is None:
+                        feats_raw = ent.get('feats', {})
+                        if isinstance(feats_raw, Mapping):
+                            relevance_raw = feats_raw.get('relevance', 0.0)
+                        else:
+                            relevance_raw = 0.0
                     try:
                         relevance = float(relevance_raw)
                     except (TypeError, ValueError):
