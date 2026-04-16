@@ -59,6 +59,20 @@ from iptc_entity_pipeline.training import (
 )
 
 
+def configure_component_logging(*, level: int = logging.INFO) -> None:
+    """Ensure component worker processes emit INFO logs to console."""
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=level, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+        return
+
+    if root_logger.level > level:
+        root_logger.setLevel(level)
+    for handler in root_logger.handlers:
+        if handler.level > level:
+            handler.setLevel(level)
+
+
 @dataclass(frozen=True)
 class EntityEmbeddingStats:
     """Coverage statistics for entity embeddings linked to a corpus."""
@@ -125,6 +139,7 @@ def load_data(
     """Load normalized corpora with linked entities attached to each document."""
     from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
+    configure_component_logging()
     paths = config_from_dict(PathsConfig, paths_config)
     emb = config_from_dict(EmbeddingConfig, embedding_config)
     corpora = load_and_normalize_corpora(
@@ -165,6 +180,7 @@ def prepare_article_embeddings(
 
     from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
+    configure_component_logging()
     logger = logging.getLogger(__name__)
     paths = config_from_dict(PathsConfig, paths_config)
     emb = config_from_dict(EmbeddingConfig, embedding_config)
@@ -210,6 +226,7 @@ def link_embeddings_and_build_datasets(
     from iptc_entity_pipeline.clearml_pipeline import DatasetBundle, EntityEmbeddingStats
     from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
+    configure_component_logging()
     logger = logging.getLogger(__name__)
     logger.info('Initializing providers for merged entity preparation + linking step')
     paths = config_from_dict(PathsConfig, paths_config)
@@ -271,6 +288,10 @@ def link_embeddings_and_build_datasets(
         pooling = WeightedSumEntityPooling()
         entity_weight_source = 'mention_count'
         logger.info('Using mention-weighted entity pooling (weighted sum)')
+    elif emb.entity_pooling == 'weighted_sum_relevance':
+        pooling = WeightedSumEntityPooling()
+        entity_weight_source = 'relevance_split'
+        logger.info('Using relevance-weighted entity pooling (weighted sum)')
     elif emb.entity_pooling == 'mean':
         pooling = MeanEntityPooling()
         logger.info('Using unweighted entity pooling (mean)')
@@ -380,6 +401,7 @@ def run_cv(
     )
     from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 
+    configure_component_logging()
     task = Task.current_task()
     logger = task.get_logger()
 
@@ -549,6 +571,7 @@ def train_best(
     """Train final model on full train set with best hyperparams from CV."""
     from iptc_entity_pipeline.config import ModelConfig, TrainingConfig, config_from_dict
 
+    configure_component_logging()
     model_cfg = config_from_dict(ModelConfig, best_model_config)
     train_cfg = config_from_dict(TrainingConfig, training_config)
     result = train_model(
@@ -588,6 +611,7 @@ def eval_final(
     from iptc_entity_pipeline.clearml_pipeline import EvalResult
     from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig, config_from_dict
 
+    configure_component_logging()
     task = Task.current_task()
     logger = task.get_logger()
     eval_cfg = config_from_dict(EvaluationConfig, evaluation_config)
@@ -763,6 +787,7 @@ def eval_final(
 )
 def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     """Execute full v1 training and evaluation pipeline."""
+    configure_component_logging()
     task = Task.current_task()
     task.connect(config_mapping, name='pipelineConfig')
     config_name = str(config_mapping.get('config_name', 'wpentities'))
