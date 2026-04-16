@@ -18,9 +18,10 @@ class EntityEmbeddingStore:
     File pattern (v1): ``{wdid}_{lang}_{chunk}.npy``.
     """
 
-    def __init__(self, *, root_dir: str, langs: tuple[str, ...] = ('en',)) -> None:
+    def __init__(self, *, root_dir: str, langs: tuple[str, ...] | str = ('en',)) -> None:
         self._root_dir = Path(root_dir)
-        normalized_langs = tuple(dict.fromkeys(lang.strip() for lang in langs if lang and lang.strip()))
+        raw_langs = (langs,) if isinstance(langs, str) else langs
+        normalized_langs = tuple(dict.fromkeys(lang.strip() for lang in raw_langs if lang and lang.strip()))
         self._langs = normalized_langs if normalized_langs else ('en',)
         self._cache: dict[str, np.ndarray | None] = {}
         self._wdid_lang_to_paths: dict[str, dict[str, list[Path]]] = {}

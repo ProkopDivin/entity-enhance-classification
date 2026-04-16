@@ -42,7 +42,7 @@ from iptc_entity_pipeline.evaluation_comparison import build_output_path, compar
 from iptc_entity_pipeline.feature_builder import FeatureBuilder
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.model_io import save_final_model_outputs
-from iptc_entity_pipeline.pooling import SumEntityPooling, WeightedMeanEntityPooling
+from iptc_entity_pipeline.pooling import MeanEntityPooling, SumEntityPooling, WeightedMeanEntityPooling, WeightedSumEntityPooling
 from iptc_entity_pipeline.reporting import (
     log_stage,
     report_cv_fold_curve_charts,
@@ -263,10 +263,19 @@ def link_embeddings_and_build_datasets(
         root_dir=paths.entity_embeddings_dir,
         langs=selected_langs,
     )
-    if emb.entity_pooling == 'sum':
-        pooling = SumEntityPooling()
-    elif emb.entity_pooling == 'weighted_mean':
+    use_relevance_pooling = emb.use_entity_relevance_weights or emb.entity_pooling == 'weighted_mean'
+    if emb.entity_pooling == 'weighted_mean':
         pooling = WeightedMeanEntityPooling()
+        logger.info('Using relevance-weighted entity pooling (normalized weighted mean)')
+    elif emb.entity_pooling == 'weighted_sum':
+        pooling = WeightedSumEntityPooling()
+        logger.info('Using relevance-weighted entity pooling (normalized weighted sum)')
+    elif emb.entity_pooling == 'mean':
+        pooling = MeanEntityPooling()
+        logger.info('Using unweighted entity pooling (mean)')
+    elif emb.entity_pooling == 'sum':
+        pooling = SumEntityPooling()
+        logger.info('Using unweighted entity pooling (sum)')
     else:
         raise ValueError(f'Unsupported entity_pooling: {emb.entity_pooling}')
     builder = FeatureBuilder(
@@ -295,6 +304,20 @@ def link_embeddings_and_build_datasets(
             logger.info('Prepared entity embeddings for %s/%s linked entities', idx, total_wdids)
 
     entity_dim = int(entity_store.infer_embedding_dim())
+    linked_ratio = (found_cnt / total_wdids) if total_wdids else 0.0
+    summary_message = (
+        'Entity linking summary: '
+        f'linked_unique={total_wdids} '
+        f'linked_with_embedding={found_cnt} '
+        f'unlinked_missing_embedding={missing_cnt} '
+        f'coverage={linked_ratio:.4f} '
+        f'entity_dim={entity_dim}'
+    )
+    logger.info(summary_message)
+    task = Task.current_task()
+    if task is not None:
+        task.get_logger().report_text(summary_message, print_console=True)
+
     entity_embedding_stats = EntityEmbeddingStats(
         entity_dim=entity_dim,
         linked_unique_wdids=int(total_wdids),
