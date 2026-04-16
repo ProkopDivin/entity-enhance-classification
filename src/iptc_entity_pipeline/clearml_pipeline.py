@@ -119,12 +119,14 @@ class FoldScores:
 )
 def load_data(
     paths_config: Mapping[str, Any],
+    embedding_config: Mapping[str, Any],
     downsample_corpora: Mapping[str, float] | None = None,
 ):
     """Load normalized corpora with linked entities attached to each document."""
-    from iptc_entity_pipeline.config import PathsConfig, config_from_dict
+    from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
     paths = config_from_dict(PathsConfig, paths_config)
+    emb = config_from_dict(EmbeddingConfig, embedding_config)
     corpora = load_and_normalize_corpora(
         train_csv=paths.train_csv,
         test_csv=paths.test_csv,
@@ -133,8 +135,18 @@ def load_data(
         downsampling_order_cache_json=paths.downsampling_order_cache_json,
     )
     wdid_mapping = load_wdid_mapping(wdid_mapping_tsv=paths.wdid_mapping_tsv)
-    attach_entities_to_corpus(corpus=corpora.train, csv_path=paths.train_csv, wdid_mapping=wdid_mapping)
-    attach_entities_to_corpus(corpus=corpora.test, csv_path=paths.test_csv, wdid_mapping=wdid_mapping)
+    attach_entities_to_corpus(
+        corpus=corpora.train,
+        csv_path=paths.train_csv,
+        wdid_mapping=wdid_mapping,
+        min_relevance=emb.entity_relevance_threshold,
+    )
+    attach_entities_to_corpus(
+        corpus=corpora.test,
+        csv_path=paths.test_csv,
+        wdid_mapping=wdid_mapping,
+        min_relevance=emb.entity_relevance_threshold,
+    )
     return corpora
 
 
@@ -717,7 +729,7 @@ def eval_final(
     name='iptc-entity-enhanced-v1',
     project='iptc/EntityEnhanced',
     version='0.1',
-    pipeline_execution_queue='iptc_entity_tasks',
+    pipeline_execution_queue='iptc_entity_pipeline',
 )
 def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     """Execute full v1 training and evaluation pipeline."""
@@ -745,6 +757,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
     corpora = load_data(
         paths_config=paths_config,
+        embedding_config=embedding_config,
         downsample_corpora=downsample_corpora,
     )
     log_stage(
