@@ -78,7 +78,7 @@ class HyperparamSpace:
     """
 
     hidden_dims: tuple[int, ...] = (100, 384, 1024, 2048, 4096, 8192),           
-    dropouts1: tuple[float, ...] = (0.0, 0.1),
+    dropouts1: tuple[float, ...] = (0.0,),
     dropouts2: tuple[float, ...] = (0.0, 0.1, 0.3, 0.5),
     batch_sizes: tuple[int, ...] = (100,)
     learning_rates: tuple[float, ...] = (0.00037,)
