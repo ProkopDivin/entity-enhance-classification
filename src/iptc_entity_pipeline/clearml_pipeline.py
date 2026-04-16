@@ -139,7 +139,11 @@ def load_data(
     """Load normalized corpora with linked entities attached to each document."""
     from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
-    configure_component_logging()
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    elif root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
     paths = config_from_dict(PathsConfig, paths_config)
     emb = config_from_dict(EmbeddingConfig, embedding_config)
     corpora = load_and_normalize_corpora(
@@ -180,7 +184,11 @@ def prepare_article_embeddings(
 
     from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
-    configure_component_logging()
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    elif root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
     logger = logging.getLogger(__name__)
     paths = config_from_dict(PathsConfig, paths_config)
     emb = config_from_dict(EmbeddingConfig, embedding_config)
@@ -226,7 +234,11 @@ def link_embeddings_and_build_datasets(
     from iptc_entity_pipeline.clearml_pipeline import DatasetBundle, EntityEmbeddingStats
     from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
-    configure_component_logging()
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    elif root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
     logger = logging.getLogger(__name__)
     logger.info('Initializing providers for merged entity preparation + linking step')
     paths = config_from_dict(PathsConfig, paths_config)
@@ -385,6 +397,7 @@ def run_cv(
     objective_corpora: str,
     print_logs: bool = True,
     debug: bool = False,
+    upload_artifacts: bool = False,
 ):
     """Run mandatory CV over train and select best hyperparameter combination."""
     from dataclasses import asdict
@@ -401,7 +414,11 @@ def run_cv(
     )
     from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 
-    configure_component_logging()
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    elif root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
     task = Task.current_task()
     logger = task.get_logger()
 
@@ -533,7 +550,14 @@ def run_cv(
         ],
     )
 
-    report_cv_outputs(task=task, logger=logger, trials_df=trials_df, folds_df=folds_df, cv_dev_df=cv_dev_df)
+    report_cv_outputs(
+        task=task,
+        logger=logger,
+        trials_df=trials_df,
+        folds_df=folds_df,
+        cv_dev_df=cv_dev_df,
+        upload_artifacts=upload_artifacts,
+    )
     report_cv_fold_curve_charts(logger=logger, fold_curves=best_fold_curves)
 
     best_model_cfg, best_train_cfg = best_combo
@@ -571,7 +595,11 @@ def train_best(
     """Train final model on full train set with best hyperparams from CV."""
     from iptc_entity_pipeline.config import ModelConfig, TrainingConfig, config_from_dict
 
-    configure_component_logging()
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    elif root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
     model_cfg = config_from_dict(ModelConfig, best_model_config)
     train_cfg = config_from_dict(TrainingConfig, training_config)
     result = train_model(
@@ -602,16 +630,19 @@ def eval_final(
     config_name: str,
     config_mapping: Mapping[str, Any],
     feature_dim: int,
+    upload_artifacts: bool = False,
 ):
     """Evaluate final model on test and persist CV dev summary with mean/std."""
-    from dataclasses import asdict
-
     import pandas as pd
     from geneea.catlib.model.model import filterLabels
     from iptc_entity_pipeline.clearml_pipeline import EvalResult
     from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig, config_from_dict
 
-    configure_component_logging()
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    elif root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
     task = Task.current_task()
     logger = task.get_logger()
     eval_cfg = config_from_dict(EvaluationConfig, evaluation_config)
@@ -687,26 +718,28 @@ def eval_final(
         config_mapping=config_mapping,
         config_name=config_name,
         feature_dim=feature_dim,
+        upload_artifacts=upload_artifacts,
     )
 
-    task.upload_artifact('dev_corpora_dataframe', artifact_object=cv_dev_df)
-    task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
-    task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
-    task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
-    task.upload_artifact('test_article_predictions', artifact_object=test_predictions_df)
-    task.upload_artifact('saved_model_paths', artifact_object=asdict(save_paths))
-    task.upload_artifact(
-        'evaluation_thresholds',
-        artifact_object={
-            'threshold_predict': eval_cfg.threshold_predict,
-            'threshold_eval': eval_cfg.threshold_eval,
-            'objective_corpora': objective_corpora,
-            'objective_row_name': objective_row_name,
-        },
-    )
-    # Compatibility aliases kept to match naming from baseline runs.
-    task.upload_artifact('Corpora Dataframe', artifact_object=df_corpora_test)
-    task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
+    if upload_artifacts:
+        task.upload_artifact('dev_corpora_dataframe', artifact_object=cv_dev_df)
+        task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
+        task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
+        task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
+        task.upload_artifact('test_article_predictions', artifact_object=test_predictions_df)
+        task.upload_artifact('saved_model_paths', artifact_object=asdict(save_paths))
+        task.upload_artifact(
+            'evaluation_thresholds',
+            artifact_object={
+                'threshold_predict': eval_cfg.threshold_predict,
+                'threshold_eval': eval_cfg.threshold_eval,
+                'objective_corpora': objective_corpora,
+                'objective_row_name': objective_row_name,
+            },
+        )
+        # Compatibility aliases kept to match naming from baseline runs.
+        task.upload_artifact('Corpora Dataframe', artifact_object=df_corpora_test)
+        task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
 
     comparison_cfg = config_mapping.get('evaluation_comparison') or config_mapping.get('comparison') or {}
     base_probabilities_csv = str(
@@ -745,11 +778,12 @@ def eval_final(
             iteration=0,
             table_plot=comparison_result.classes_comparison,
         )
-        task.upload_artifact('evaluation_comparison_summary', artifact_object=comparison_result.summary_comparison)
-        task.upload_artifact('evaluation_comparison_classes', artifact_object=comparison_result.classes_comparison)
-        task.upload_artifact('evaluation_comparison_corpora', artifact_object=comparison_result.corpora_comparison)
-        if comparison_result.excel_path is not None:
-            task.upload_artifact('evaluation_comparison_xlsx', artifact_object=str(comparison_result.excel_path))
+        if upload_artifacts:
+            task.upload_artifact('evaluation_comparison_summary', artifact_object=comparison_result.summary_comparison)
+            task.upload_artifact('evaluation_comparison_classes', artifact_object=comparison_result.classes_comparison)
+            task.upload_artifact('evaluation_comparison_corpora', artifact_object=comparison_result.corpora_comparison)
+            if comparison_result.excel_path is not None:
+                task.upload_artifact('evaluation_comparison_xlsx', artifact_object=str(comparison_result.excel_path))
 
     with pd.ExcelWriter(excel_path) as writer:
         cv_dev_df.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
@@ -787,7 +821,11 @@ def eval_final(
 )
 def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     """Execute full v1 training and evaluation pipeline."""
-    configure_component_logging()
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    elif root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
     task = Task.current_task()
     task.connect(config_mapping, name='pipelineConfig')
     config_name = str(config_mapping.get('config_name', 'wpentities'))
@@ -804,6 +842,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
     print_logs = bool(config_mapping.get('print_logs', True))
     debug = bool(config_mapping.get('debug', False))
+    upload_artifacts = bool(config_mapping.get('upload_artifacts', False))
 
     log_stage(
         task=task,
@@ -825,7 +864,8 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         paths_config=paths_config,
         embedding_config=embedding_config,
     )
-    task.upload_artifact('article_embedding_stats', artifact_object=dict(article_embedding_stats))
+    if upload_artifacts:
+        task.upload_artifact('article_embedding_stats', artifact_object=dict(article_embedding_stats))
 
     log_stage(
         task=task,
@@ -841,7 +881,8 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         paths_config=paths_config,
         embedding_config=embedding_config,
     )
-    task.upload_artifact('entity_embedding_stats', artifact_object=asdict(dataset_bundle.entity_embedding_stats))
+    if upload_artifacts:
+        task.upload_artifact('entity_embedding_stats', artifact_object=asdict(dataset_bundle.entity_embedding_stats))
 
     log_stage(
         task=task,
@@ -858,8 +899,10 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         objective_corpora=objective_corpora,
         print_logs=print_logs,
         debug=debug,
+        upload_artifacts=upload_artifacts,
     )
-    task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result.objective_metrics))
+    if upload_artifacts:
+        task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result.objective_metrics))
 
     log_stage(
         task=task,
@@ -890,6 +933,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         config_name=config_name,
         config_mapping=config_mapping,
         feature_dim=dataset_bundle.feature_dim,
+        upload_artifacts=upload_artifacts,
     )
 
     logger = task.get_logger()
@@ -927,14 +971,18 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
             iteration=0,
         )
 
-    task.upload_artifact('pipeline_config', artifact_object=dict(config_mapping))
-    task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
-    task.upload_artifact('dev_corpora_dataframe', artifact_object=eval_result.dev_corpora_df)
-    task.upload_artifact('test_corpora_dataframe', artifact_object=eval_result.test_corpora_df)
-    task.upload_artifact('test_classes_dataframe', artifact_object=eval_result.test_classes_df)
+    if upload_artifacts:
+        task.upload_artifact('pipeline_config', artifact_object=dict(config_mapping))
+        task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
+        task.upload_artifact('dev_corpora_dataframe', artifact_object=eval_result.dev_corpora_df)
+        task.upload_artifact('test_corpora_dataframe', artifact_object=eval_result.test_corpora_df)
+        task.upload_artifact('test_classes_dataframe', artifact_object=eval_result.test_classes_df)
+        finish_message = 'Pipeline finished: metrics, tables, and artifacts uploaded'
+    else:
+        finish_message = 'Pipeline finished: metrics and tables reported (artifact uploads disabled)'
     log_stage(
         task=task,
-        message='Pipeline finished: metrics, tables, and artifacts uploaded',
+        message=finish_message,
         print_logs=print_logs,
     )
 

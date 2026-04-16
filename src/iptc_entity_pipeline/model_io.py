@@ -63,6 +63,7 @@ def save_final_model_outputs(
     config_mapping: Mapping[str, Any],
     config_name: str,
     feature_dim: int,
+    upload_artifacts: bool = False,
 ) -> SavedModelPaths:
     """
     Save final model bundle and test probability CSV to disk and ClearML.
@@ -128,11 +129,12 @@ def save_final_model_outputs(
     logger.report_text(f'Saved final model bundle to {output_dir}')
     logger.report_text(f'Saved test probability CSV to {probabilities_csv_path}')
 
-    task.upload_artifact('saved_model_file', artifact_object=str(model_path))
-    task.upload_artifact('saved_model_test_embeddings', artifact_object=str(test_embeddings_path))
-    task.upload_artifact('saved_model_config_yaml', artifact_object=str(config_yaml_path))
-    task.upload_artifact('saved_model_parameters_json', artifact_object=str(parameters_json_path))
-    task.upload_artifact('saved_model_test_probabilities_csv', artifact_object=str(probabilities_csv_path))
+    if upload_artifacts:
+        task.upload_artifact('saved_model_file', artifact_object=str(model_path))
+        task.upload_artifact('saved_model_test_embeddings', artifact_object=str(test_embeddings_path))
+        task.upload_artifact('saved_model_config_yaml', artifact_object=str(config_yaml_path))
+        task.upload_artifact('saved_model_parameters_json', artifact_object=str(parameters_json_path))
+        task.upload_artifact('saved_model_test_probabilities_csv', artifact_object=str(probabilities_csv_path))
 
     return SavedModelPaths(
         output_dir=str(output_dir),
