@@ -31,7 +31,6 @@ class PathsConfig:
 class EmbeddingConfig:
     """Embedding loading and fallback-computation parameters."""
 
-    article_embedding_backend: str = 'origin_service'
     article_model_name: str = 'paraphrase-multilingual-MiniLM-L12-v2-300-0.3'
     article_embedding_dim: int = 384
     embed_svc_url: str = 'http://tau.g:5533'
