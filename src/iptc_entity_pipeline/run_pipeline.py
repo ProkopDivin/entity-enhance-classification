@@ -14,7 +14,7 @@ if __package__ is None or __package__ == '':
     if str(src_root) not in sys.path:
         sys.path.insert(0, str(src_root))
 
-from iptc_entity_pipeline.clearml_pipeline import run_pipeline
+from iptc_entity_pipeline.pipeline import run_pipeline
 from iptc_entity_pipeline.config import get_config, list_config_names
 
 LOGGER = logging.getLogger(__name__)

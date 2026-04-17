@@ -233,7 +233,7 @@ def link_embeddings_and_build_datasets(
     embedding_config: Mapping[str, Any],
 ):
     """Prepare entity coverage, link embeddings, and build EmbeddingDataset objects."""
-    from iptc_entity_pipeline.clearml_pipeline import DatasetBundle, EntityEmbeddingStats
+    from iptc_entity_pipeline.pipeline import DatasetBundle, EntityEmbeddingStats
     from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
 
     root_logger = logging.getLogger()
@@ -407,7 +407,7 @@ def run_cv(
     from dataclasses import asdict
 
     import pandas as pd
-    from iptc_entity_pipeline.clearml_pipeline import CvResult, FoldScores
+    from iptc_entity_pipeline.pipeline import CvResult, FoldScores
     from iptc_entity_pipeline.config import (
         CvConfig,
         EvaluationConfig,
@@ -660,7 +660,7 @@ def eval_final(
     """Evaluate final model on test and persist CV dev summary with mean/std."""
     import pandas as pd
     from geneea.catlib.model.model import filterLabels
-    from iptc_entity_pipeline.clearml_pipeline import EvalResult
+    from iptc_entity_pipeline.pipeline import EvalResult
     from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig, config_from_dict
 
     root_logger = logging.getLogger()
