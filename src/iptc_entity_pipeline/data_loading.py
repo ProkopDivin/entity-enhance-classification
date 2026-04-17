@@ -36,6 +36,8 @@ class LinkedEntity:
     gkb_id: str
     wd_ids: tuple[str, ...]
     relevance: float
+    mention_count: int = 1
+    raw_entity: Mapping[str, Any] | None = None
 
 
 def _require_geneea():
@@ -324,6 +326,10 @@ def attach_entities_to_corpus(
                     if not gkb_id:
                         continue
                     wd_ids = tuple(wdid_mapping.get(gkb_id, ()))
+                    mentions = ent.get('mentions')
+                    mention_count = 1
+                    if isinstance(mentions, list):
+                        mention_count = len(mentions)
                     relevance_raw = ent.get('relevance', None)
                     if relevance_raw is None:
                         feats_raw = ent.get('feats', {})
@@ -343,7 +349,15 @@ def attach_entities_to_corpus(
                         relevance = 0.0
                     if relevance < min_relevance:
                         continue
-                    linked.append(LinkedEntity(gkb_id=gkb_id, wd_ids=wd_ids, relevance=relevance))
+                    linked.append(
+                        LinkedEntity(
+                            gkb_id=gkb_id,
+                            wd_ids=wd_ids,
+                            relevance=relevance,
+                            mention_count=mention_count,
+                            raw_entity=dict(ent),
+                        )
+                    )
             if linked:
                 article_entities[article_id] = linked
 
@@ -395,8 +409,10 @@ def get_doc_wdid_mention_counts(doc: Any) -> list[tuple[str, float]]:
     """
     Extract ``(wdId, mention_count)`` pairs from ``doc.entities``.
 
-    Mention count is the number of linked-entity occurrences mapped to each wdId
-    within one document.
+    Mention count is read from ``len(entity['mentions'])`` for each linked entity.
+    When one linked entity maps to multiple wdIds, mention count is split evenly
+    across all mapped wdIds. For entities without ``mentions``, a fallback value
+    of ``1`` is used.
 
     :param doc: Corpus document with attached :class:`LinkedEntity` objects.
     :return: List of ``(wdId, mention_count)`` pairs.
@@ -404,8 +420,12 @@ def get_doc_wdid_mention_counts(doc: Any) -> list[tuple[str, float]]:
     mention_counts: dict[str, float] = {}
     for ent in getattr(doc, 'entities', []):
         wd_ids = tuple(getattr(ent, 'wd_ids', ()))
+        if not wd_ids:
+            continue
+        entity_mention_count = float(getattr(ent, 'mention_count', 1))
+        split_count = entity_mention_count / len(wd_ids)
         for wd_id in wd_ids:
-            mention_counts[wd_id] = mention_counts.get(wd_id, 0.0) + 1.0
+            mention_counts[wd_id] = mention_counts.get(wd_id, 0.0) + split_count
     return list(mention_counts.items())
 
 

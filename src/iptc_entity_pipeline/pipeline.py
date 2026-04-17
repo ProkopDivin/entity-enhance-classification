@@ -10,38 +10,30 @@ import numpy as np
 from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
-from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider, EmbeddingCacheStats
+from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
 from iptc_entity_pipeline.config import (
     BaseConfig,
     CvConfig,
-    EmbeddingConfig,
     EvaluationConfig,
     HyperparamSpace,
     ModelConfig,
-    PathsConfig,
     TrainingConfig,
-    config_from_dict,
     resolve_paths,
 )
 from iptc_entity_pipeline.data_loading import (
     attach_entities_to_corpus,
-    get_doc_wdids,
     load_and_normalize_corpora,
     load_wdid_mapping,
     sanitize_name,
 )
 from iptc_entity_pipeline.dataset_builder import (
-    build_embedding_dataset,
     build_multilabel_targets,
     slice_dataset,
     to_numpy_array,
 )
-from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.evaluation_comparison import build_output_path, compare_runs
-from iptc_entity_pipeline.feature_builder import FeatureBuilder
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.model_io import save_final_model_outputs
-from iptc_entity_pipeline.pooling import MeanEntityPooling, SumEntityPooling, WeightedMeanEntityPooling, WeightedSumEntityPooling
 from iptc_entity_pipeline.reporting import (
     log_stage,
     report_cv_fold_curve_charts,
@@ -72,27 +64,6 @@ def configure_component_logging(*, level: int = logging.INFO) -> None:
     for handler in root_logger.handlers:
         if handler.level > level:
             handler.setLevel(level)
-
-
-@dataclass(frozen=True)
-class EntityEmbeddingStats:
-    """Coverage statistics for entity embeddings linked to a corpus."""
-
-    use_entity_embeddings: bool = True
-    entity_dim: int = 0
-    linked_unique_wdids: int = 0
-    found_embeddings: int = 0
-    missing_embeddings: int = 0
-
-
-@dataclass(frozen=True)
-class DatasetBundle:
-    """Outputs of the dataset-building pipeline step."""
-
-    train_data: Any
-    test_data: Any
-    feature_dim: int
-    entity_embedding_stats: EntityEmbeddingStats
 
 
 @dataclass(frozen=True)
@@ -221,19 +192,22 @@ def prepare_article_embeddings(
 
 
 @PipelineDecorator.component(
-    return_values=['datasetBundle'],
+    return_values=['trainData', 'testData', 'featureDim'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
-def link_embeddings_and_build_datasets(
+def build_dataset(
     corpora,
     paths_config: Mapping[str, Any],
     embedding_config: Mapping[str, Any],
     article_embedding_stats: Mapping[str, Any],
 ):
-    """Prepare entity coverage, link embeddings, and build EmbeddingDataset objects."""
-    from iptc_entity_pipeline.pipeline import DatasetBundle, EntityEmbeddingStats
+    """Link embeddings and build train/test embedding datasets."""
+    from iptc_entity_pipeline.build_dataset import no_entities, report_entity_stats, get_pooling
     from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
+    from iptc_entity_pipeline.dataset_builder import build_embedding_dataset
+    from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
+    from iptc_entity_pipeline.feature_builder import FeatureBuilder
 
     root_logger = logging.getLogger()
     if not root_logger.handlers:
@@ -255,37 +229,13 @@ def link_embeddings_and_build_datasets(
         embed_svc_url=emb.embed_svc_url,
         embedding_dim=emb.article_embedding_dim,
     )
-
     if not emb.use_entity_embeddings:
-        def build_article_only_matrix(*, split_corpus, split_name: str) -> np.ndarray:
-            rows: list[np.ndarray] = []
-            total_docs = len(split_corpus)
-            logger.info('Building article-only features for %s corpus (%s articles)', split_name, total_docs)
-            for idx, doc in enumerate(split_corpus, start=1):
-                article_embedding = article_provider.get_embedding(article_id=doc.id)
-                rows.append(np.asarray(article_embedding, dtype=np.float32))
-                if idx % 1000 == 0 or idx == total_docs:
-                    logger.info(
-                        'Built article-only features for %s/%s articles in %s corpus',
-                        idx,
-                        total_docs,
-                        split_name,
-                    )
-            return np.vstack(rows)
-
-        logger.info('Entity embeddings disabled by config; running article-only feature pipeline')
-        x_train = build_article_only_matrix(split_corpus=corpora.train, split_name='train')
-        x_test = build_article_only_matrix(split_corpus=corpora.test, split_name='test')
-        train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
-        test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
-        feature_dim = int(x_train.shape[1])
-        entity_embedding_stats = EntityEmbeddingStats(use_entity_embeddings=False)
-        return DatasetBundle(
-            train_data=train_data,
-            test_data=test_data,
-            feature_dim=feature_dim,
-            entity_embedding_stats=entity_embedding_stats,
+        dataset_bundle = no_entities(
+            corpora=corpora,
+            article_provider=article_provider,
+            logger=logger,
         )
+        return dataset_bundle.train_data, dataset_bundle.test_data, dataset_bundle.feature_dim
 
     selected_langs = tuple(emb.entity_langs) if emb.entity_langs else (emb.entity_lang,)
     logger.info('Using entity embedding languages=%s', selected_langs)
@@ -293,95 +243,34 @@ def link_embeddings_and_build_datasets(
         root_dir=paths.entity_embeddings_dir,
         langs=selected_langs,
     )
-    entity_weight_source = 'relevance_split'
-    if emb.entity_pooling == 'weighted_mean':
-        pooling = WeightedMeanEntityPooling()
-        logger.info('Using relevance-weighted entity pooling (normalized weighted mean)')
-    elif emb.entity_pooling == 'weighted_sum':
-        pooling = WeightedSumEntityPooling()
-        entity_weight_source = 'mention_count'
-        logger.info('Using mention-weighted entity pooling (weighted sum)')
-    elif emb.entity_pooling == 'weighted_sum_relevance':
-        pooling = WeightedSumEntityPooling()
-        entity_weight_source = 'relevance_split'
-        logger.info('Using relevance-weighted entity pooling (weighted sum)')
-    elif emb.entity_pooling == 'mean':
-        pooling = MeanEntityPooling()
-        logger.info('Using unweighted entity pooling (mean)')
-    elif emb.entity_pooling == 'sum':
-        pooling = SumEntityPooling()
-        logger.info('Using unweighted entity pooling (sum)')
-    else:
-        raise ValueError(f'Unsupported entity_pooling: {emb.entity_pooling}')
+    pooling = get_pooling(emb_cfg=emb, logger=logger)
     builder = FeatureBuilder(
         article_embedding_provider=article_provider,
         entity_embedding_store=entity_store,
         pooling_strategy=pooling,
-        entity_weight_source=entity_weight_source,
         combine_method=emb.combine_method,
     )
 
-    unique_wdids: set[str] = set()
-    for corpus in [corpora.train, corpora.test]:
-        for doc in corpus:
-            unique_wdids.update(get_doc_wdids(doc))
-
-    found_cnt = 0
-    missing_cnt = 0
-    total_wdids = len(unique_wdids)
-    logger.info('Collected %s unique linked entities for coverage check', total_wdids)
-    entity_progress_interval = max(1, total_wdids // 20) if total_wdids else 1
-    for idx, wdid in enumerate(sorted(unique_wdids), start=1):
-        if entity_store.get_entity_embedding(wdid=wdid) is None:
-            missing_cnt += 1
-        else:
-            found_cnt += 1
-        if idx % entity_progress_interval == 0 or idx == total_wdids:
-            logger.info('Prepared entity embeddings for %s/%s linked entities', idx, total_wdids)
-
-    entity_dim = int(entity_store.infer_embedding_dim())
-    linked_ratio = (found_cnt / total_wdids) if total_wdids else 0.0
-    summary_message = (
-        'Entity linking summary: '
-        f'linked_unique={total_wdids} '
-        f'linked_with_embedding={found_cnt} '
-        f'unlinked_missing_embedding={missing_cnt} '
-        f'coverage={linked_ratio:.4f} '
-        f'entity_dim={entity_dim}'
-    )
-    logger.info(summary_message)
     task = Task.current_task()
-    if task is not None:
-        task.get_logger().report_text(summary_message, print_console=True)
-
-    entity_embedding_stats = EntityEmbeddingStats(
-        entity_dim=entity_dim,
-        linked_unique_wdids=int(total_wdids),
-        found_embeddings=int(found_cnt),
-        missing_embeddings=int(missing_cnt),
-    )
-
     logger.info('Building linked features for train corpus (%s articles)', len(corpora.train))
-    x_train = builder.build_features_for_corpus(
+    x_train, train_stats = builder.build_features_for_corpus(
         corpus=corpora.train,
         clearml_logger=task.get_logger() if task is not None else None,
+        return_stats=True,
     )
     logger.info('Building linked features for test corpus (%s articles)', len(corpora.test))
-    x_test = builder.build_features_for_corpus(
+    x_test, test_stats = builder.build_features_for_corpus(
         corpus=corpora.test,
         clearml_logger=task.get_logger() if task is not None else None,
+        return_stats=True,
     )
-
+    report_entity_stats(stats=test_stats, clearml_task=task, logger=logger)
+    report_entity_stats(stats=train_stats, clearml_task=task, logger=logger)
     train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
     test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
-    return DatasetBundle(
-        train_data=train_data,
-        test_data=test_data,
-        feature_dim=feature_dim,
-        entity_embedding_stats=entity_embedding_stats,
-    )
-
+    return train_data, test_data, feature_dim
+    
 
 @PipelineDecorator.component(
     return_values=['cvResult'],
@@ -655,6 +544,8 @@ def eval_final(
     upload_artifacts: bool = False,
 ):
     """Evaluate final model on test and persist CV dev summary with mean/std."""
+    from pathlib import Path
+
     import pandas as pd
     from geneea.catlib.model.model import filterLabels
     from iptc_entity_pipeline.pipeline import EvalResult
@@ -728,7 +619,8 @@ def eval_final(
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
-    results_dir = PROJECT_ROOT / 'results'
+    project_root = Path(globals().get('PROJECT_ROOT', Path.cwd()))
+    results_dir = project_root / 'results'
     results_dir.mkdir(parents=True, exist_ok=True)
     excel_path = results_dir / f'final_evaluation_tables_{sanitize_name(value=config_name)}.xlsx'
     save_paths = save_final_model_outputs(
@@ -898,23 +790,20 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         ),
         print_logs=print_logs,
     )
-    dataset_bundle = link_embeddings_and_build_datasets(
+    train_data, test_data, feature_dim = build_dataset(
         corpora=corpora,
         paths_config=paths_config,
         embedding_config=embedding_config,
         article_embedding_stats=article_embedding_stats,
     )
-    if upload_artifacts:
-        task.upload_artifact('entity_embedding_stats', artifact_object=asdict(dataset_bundle.entity_embedding_stats))
-
     log_stage(
         task=task,
         message=f'Stage 4/6: Running mandatory {cv_config.get("folds", 5)}-fold cross-validation on train',
         print_logs=print_logs,
     )
     cv_result = run_cv(
-        train_data=dataset_bundle.train_data,
-        feature_dim=dataset_bundle.feature_dim,
+        train_data=train_data,
+        feature_dim=feature_dim,
         hyperparam_space_config=hyperparam_space_config,
         training_config=training_config,
         evaluation_config=evaluation_config,
@@ -933,9 +822,9 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         print_logs=print_logs,
     )
     trained_model = train_best(
-        train_data=dataset_bundle.train_data,
-        test_data=dataset_bundle.test_data,
-        feature_dim=dataset_bundle.feature_dim,
+        train_data=train_data,
+        test_data=test_data,
+        feature_dim=feature_dim,
         best_model_config=cv_result.best_model_config,
         training_config=cv_result.best_training_config,
         print_logs=print_logs,
@@ -949,13 +838,13 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     eval_result = eval_final(
         trained_model=trained_model,
         cv_dev_df=cv_result.cv_dev_df,
-        test_data=dataset_bundle.test_data,
+        test_data=test_data,
         evaluation_config=evaluation_config,
         embedding_config=embedding_config,
         objective_corpora=objective_corpora,
         config_name=config_name,
         config_mapping=config_mapping,
-        feature_dim=dataset_bundle.feature_dim,
+        feature_dim=feature_dim,
         upload_artifacts=upload_artifacts,
     )
 
