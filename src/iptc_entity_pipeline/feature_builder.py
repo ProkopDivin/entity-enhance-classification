@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 from clearml import Task
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
-from iptc_entity_pipeline.data_loading import get_doc_wdid_mention_counts, get_doc_weighted_wdids
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.pooling import EntityPoolingStrategy
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FeatureBuildStats:
+    """Entity embedding coverage stats collected while building corpus features."""
+
+    unique_requested_wdids: frozenset[str]
+    unique_missing_wdids: frozenset[str]
+    total_found_embeddings: int
+    total_missing_embeddings: int
+    entity_dim: int
 
 
 class FeatureBuilder:
@@ -25,17 +36,13 @@ class FeatureBuilder:
         article_embedding_provider: ArticleEmbeddingProvider,
         entity_embedding_store: EntityEmbeddingStore,
         pooling_strategy: EntityPoolingStrategy,
-        entity_weight_source: str = 'relevance_split',
         combine_method: str = 'concat',
     ) -> None:
         if combine_method != 'concat':
             raise ValueError(f'Unsupported v1 combine method: {combine_method}')
-        if entity_weight_source not in {'relevance_split', 'mention_count'}:
-            raise ValueError(f'Unsupported entity weight source: {entity_weight_source}')
         self._article_embedding_provider = article_embedding_provider
         self._entity_embedding_store = entity_embedding_store
         self._pooling_strategy = pooling_strategy
-        self._entity_weight_source = entity_weight_source
         self._combine_method = combine_method
 
     def build_features_for_corpus(
@@ -44,7 +51,8 @@ class FeatureBuilder:
         corpus: Any,
         ensure_article_embeddings: bool = False,
         clearml_logger: Any | None = None,
-    ) -> np.ndarray:
+        return_stats: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, FeatureBuildStats]:
         """
         Build feature matrix for all docs in a corpus.
 
@@ -53,6 +61,7 @@ class FeatureBuilder:
         :param corpus: ``geneea.catlib.data.Corpus`` object with entities attached to each doc.
         :param ensure_article_embeddings: If ``True``, precompute missing article embeddings for the corpus.
         :param clearml_logger: Optional ClearML task logger used to report summary text.
+        :param return_stats: If ``True``, return matrix together with coverage stats.
         :return: Feature matrix of shape ``[docs, article_dim + entity_dim]``.
         """
         if ensure_article_embeddings:
@@ -68,41 +77,26 @@ class FeatureBuilder:
 
         for idx, doc in enumerate(corpus):
             article_embedding = self._article_embedding_provider.get_embedding(article_id=doc.id)
-            if self._entity_weight_source == 'mention_count':
-                weighted_wdids = get_doc_wdid_mention_counts(doc)
-            else:
-                weighted_wdids = get_doc_weighted_wdids(doc)
-            wdids = [wd_id for wd_id, _ in weighted_wdids]
+            pooling_result = self._pooling_strategy.pool(
+                doc=doc,
+                entity_embedding_store=self._entity_embedding_store,
+                embedding_dim=entity_dim,
+            )
+            wdids = list(pooling_result.requested_wdids)
             if not wdids:
                 LOGGER.warning('No linked entities for article_id=%s', doc.id)
             unique_requested_wdids.update(wdids)
-            entity_embeddings: list[np.ndarray] = []
-            entity_weights: list[float] = []
-            missing_wdids: list[str] = []
-            for wdid, weight in weighted_wdids:
-                entity_embedding = self._entity_embedding_store.get_entity_embedding(wdid=wdid)
-                if entity_embedding is not None:
-                    entity_embeddings.append(entity_embedding)
-                    entity_weights.append(weight)
-                else:
-                    missing_wdids.append(wdid)
-
-            total_found_embeddings += len(entity_embeddings)
-            total_missing_embeddings += len(missing_wdids)
-            unique_missing_wdids_all.update(missing_wdids)
-            if missing_wdids:
-                unique_missing_wdids = sorted(set(missing_wdids))
+            total_found_embeddings += pooling_result.found_embeddings
+            total_missing_embeddings += pooling_result.missing_embeddings
+            unique_missing_wdids_all.update(pooling_result.missing_wdids)
+            if pooling_result.missing_wdids:
+                unique_missing_wdids = sorted(set(pooling_result.missing_wdids))
                 LOGGER.warning(
                     'Missing entity embeddings for article_id=%s: %s',
                     doc.id,
                     ', '.join(unique_missing_wdids),
                 )
-            pooled_entity = self._pooling_strategy.pool(
-                entity_embeddings=entity_embeddings,
-                embedding_dim=entity_dim,
-                weights=entity_weights,
-            )
-            row = np.concatenate([article_embedding, pooled_entity]).astype(np.float32)
+            row = np.concatenate([article_embedding, pooling_result.pooled_embedding]).astype(np.float32)
             rows.append(row)
 
             processed_docs = idx + 1
@@ -134,5 +128,16 @@ class FeatureBuilder:
             if task is not None:
                 task.get_logger().report_text(final_stats_message, print_console=True)
 
-        return np.vstack(rows)
+        matrix = np.vstack(rows)
+        if not return_stats:
+            return matrix
+
+        stats = FeatureBuildStats(
+            unique_requested_wdids=frozenset(unique_requested_wdids),
+            unique_missing_wdids=frozenset(unique_missing_wdids_all),
+            total_found_embeddings=total_found_embeddings,
+            total_missing_embeddings=total_missing_embeddings,
+            entity_dim=int(entity_dim),
+        )
+        return matrix, stats
 
