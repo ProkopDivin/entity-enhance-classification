@@ -25,7 +25,6 @@ from iptc_entity_pipeline.config import (
 )
 from iptc_entity_pipeline.data_loading import (
     attach_entities_to_corpus,
-    get_article_text,
     get_doc_wdids,
     load_and_normalize_corpora,
     load_wdid_mapping,
@@ -197,13 +196,12 @@ def prepare_article_embeddings(
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths.article_embeddings_dir,
         model_name=emb.article_model_name,
-        backend=emb.article_embedding_backend,
         embed_svc_url=emb.embed_svc_url,
         embedding_dim=emb.article_embedding_dim,
     )
 
-    train_stats = article_provider.recompute_embeddings(corpus=corpora.train)
-    test_stats = article_provider.recompute_embeddings(corpus=corpora.test)
+    train_stats = article_provider.prepare_embeddings(corpus=corpora.train)
+    test_stats = article_provider.prepare_embeddings(corpus=corpora.test)
     total_docs = train_stats.total_docs + test_stats.total_docs
     total_computed = train_stats.computed_docs + test_stats.computed_docs
     logger.info(
@@ -231,6 +229,7 @@ def link_embeddings_and_build_datasets(
     corpora,
     paths_config: Mapping[str, Any],
     embedding_config: Mapping[str, Any],
+    article_embedding_stats: Mapping[str, Any],
 ):
     """Prepare entity coverage, link embeddings, and build EmbeddingDataset objects."""
     from iptc_entity_pipeline.pipeline import DatasetBundle, EntityEmbeddingStats
@@ -243,12 +242,16 @@ def link_embeddings_and_build_datasets(
         root_logger.setLevel(logging.INFO)
     logger = logging.getLogger(__name__)
     logger.info('Initializing providers for merged entity preparation + linking step')
+    logger.info(
+        'Using prepared article embedding cache from previous step: total=%s, computed_missing=%s',
+        article_embedding_stats.get('total_docs'),
+        article_embedding_stats.get('total_computed'),
+    )
     paths = config_from_dict(PathsConfig, paths_config)
     emb = config_from_dict(EmbeddingConfig, embedding_config)
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths.article_embeddings_dir,
         model_name=emb.article_model_name,
-        backend=emb.article_embedding_backend,
         embed_svc_url=emb.embed_svc_url,
         embedding_dim=emb.article_embedding_dim,
     )
@@ -259,11 +262,7 @@ def link_embeddings_and_build_datasets(
             total_docs = len(split_corpus)
             logger.info('Building article-only features for %s corpus (%s articles)', split_name, total_docs)
             for idx, doc in enumerate(split_corpus, start=1):
-                article_embedding = article_provider.get_embedding(
-                    article_id=doc.id,
-                    article_text=get_article_text(doc),
-                    article_doc=doc,
-                )
+                article_embedding = article_provider.get_embedding(article_id=doc.id)
                 rows.append(np.asarray(article_embedding, dtype=np.float32))
                 if idx % 1000 == 0 or idx == total_docs:
                     logger.info(
@@ -365,13 +364,11 @@ def link_embeddings_and_build_datasets(
     logger.info('Building linked features for train corpus (%s articles)', len(corpora.train))
     x_train = builder.build_features_for_corpus(
         corpus=corpora.train,
-        ensure_article_embeddings=False,
         clearml_logger=task.get_logger() if task is not None else None,
     )
     logger.info('Building linked features for test corpus (%s articles)', len(corpora.test))
     x_test = builder.build_features_for_corpus(
         corpus=corpora.test,
-        ensure_article_embeddings=False,
         clearml_logger=task.get_logger() if task is not None else None,
     )
 
@@ -905,6 +902,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         corpora=corpora,
         paths_config=paths_config,
         embedding_config=embedding_config,
+        article_embedding_stats=article_embedding_stats,
     )
     if upload_artifacts:
         task.upload_artifact('entity_embedding_stats', artifact_object=asdict(dataset_bundle.entity_embedding_stats))

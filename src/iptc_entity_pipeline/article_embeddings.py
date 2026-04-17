@@ -1,4 +1,4 @@
-"""Article embedding loading with fallback computation and persistent cache."""
+"""Article embedding computation, caching, and cache-only loading."""
 
 from __future__ import annotations
 
@@ -34,26 +34,15 @@ class ArticleEmbeddingProvider:
         *,
         embeddings_dir: str,
         model_name: str,
-        backend: str = 'origin_service',
         embed_svc_url: str = 'http://tau.g:5533',
         embedding_dim: int = 384,
     ) -> None:
         self._embeddings_dir = Path(embeddings_dir)
         self._embeddings_dir.mkdir(parents=True, exist_ok=True)
         self._model_name = model_name
-        self._backend = backend
         self._embed_svc_url = embed_svc_url
         self._embedding_dim = embedding_dim
-        self._model = None
         self._doc_vectorizer = None
-
-    def _get_model(self):
-        if self._model is None:
-            from sentence_transformers import SentenceTransformer
-
-            LOGGER.info('Loading article embedding model: %s', self._model_name)
-            self._model = SentenceTransformer(self._model_name)
-        return self._model
 
     def _get_doc_vectorizer(self):
         if self._doc_vectorizer is None:
@@ -100,9 +89,12 @@ class ArticleEmbeddingProvider:
 
         LOGGER.info('Computed and cached article embeddings for %s/%s missing articles', total_docs, total_docs)
 
-    def recompute_embeddings(self, *, corpus: Any) -> EmbeddingCacheStats:
+    def prepare_embeddings(self, *, corpus: Any) -> EmbeddingCacheStats:
         """
-        Precompute and cache missing article embeddings for the whole corpus.
+        Compute and cache missing article embeddings for the whole corpus.
+
+        After this call every article in the corpus has a cached ``.npy`` file,
+        so subsequent :meth:`get_embedding` calls will always hit the cache.
 
         :param corpus: Corpus of documents with ``id``.
         :return: Summary with total, cached, missing and computed article counts.
@@ -115,7 +107,7 @@ class ArticleEmbeddingProvider:
 
         if missing_docs:
             LOGGER.info('Found %s missing article embeddings', computed)
-            self._compute_missing(docs=missing_docs)
+            self._compute_cache_embeddings(docs=missing_docs)
 
         LOGGER.info(
             'Article embeddings prepared for %s/%s articles (computed=%s, cached=%s)',
@@ -123,52 +115,22 @@ class ArticleEmbeddingProvider:
         )
         return EmbeddingCacheStats(total_docs=total, cached_docs=cached, missing_docs=computed, computed_docs=computed)
 
-    def _compute_missing(self, *, docs: Sequence[Any]) -> None:
-        """Dispatch missing-embedding computation to the configured backend."""
-        if self._backend == 'origin_service':
-            self._compute_cache_embeddings(docs=docs)
-        elif self._backend == 'local_sentence_transformers':
-            self._compute_local_embeddings(docs=docs)
-        else:
-            raise ValueError(f'Unsupported article embedding backend: {self._backend}')
-
-    def _compute_local_embeddings(self, *, docs: Sequence[Any]) -> None:
-        from iptc_entity_pipeline.data_loading import get_article_text
-
-        total = len(docs)
-        LOGGER.info('Computing and caching %s missing article embeddings (local)', total)
-        for idx, doc in enumerate(docs, start=1):
-            self.get_embedding(article_id=doc.id, article_text=get_article_text(doc), article_doc=doc)
-            if idx % 1000 == 0:
-                LOGGER.info('Computed and cached article embeddings for %s/%s missing articles', idx, total)
-        LOGGER.info('Computed and cached article embeddings for %s/%s missing articles', total, total)
-
-    def get_embedding(self, *, article_id: str, article_text: str, article_doc: Any | None = None) -> np.ndarray:
+    def get_embedding(self, *, article_id: str) -> np.ndarray:
         """
-        Load embedding from cache or compute and save it.
+        Load a cached article embedding from disk.
+
+        Raises :exc:`FileNotFoundError` if the embedding is not in cache.
+        Call :meth:`prepare_embeddings` first to ensure all embeddings are present.
 
         :param article_id: Article identifier.
-        :param article_text: Article text used when embedding is missing.
-        :param article_doc: Original document object required for origin-compatible backend.
         :return: Article embedding vector.
         """
         emb_path = self._path_for_article(article_id=article_id)
-        if emb_path.is_file():
-            return np.load(emb_path)
+        if not emb_path.is_file():
+            raise FileNotFoundError(
+                f'Embedding not cached for article_id={article_id!r}. '
+                'Run prepare_embeddings() first.'
+            )
+        return np.load(emb_path)
 
-        if self._backend == 'origin_service':
-            if article_doc is None:
-                raise ValueError('article_doc must be provided for origin_service backend.')
-            self._compute_cache_embeddings(docs=[article_doc])
-            return np.load(emb_path)
-
-        if self._backend == 'local_sentence_transformers':
-            model = self._get_model()
-            embedding = model.encode(sentences=[article_text], show_progress_bar=False, normalize_embeddings=False)[0]
-            embedding = np.asarray(embedding, dtype=np.float32)
-            np.save(emb_path, embedding)
-            LOGGER.debug('Computed and cached missing article embedding: %s', emb_path.name)
-            return embedding
-
-        raise ValueError(f'Unsupported article embedding backend: {self._backend}')
 

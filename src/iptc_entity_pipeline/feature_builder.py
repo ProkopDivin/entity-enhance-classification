@@ -9,7 +9,7 @@ import numpy as np
 from clearml import Task
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
-from iptc_entity_pipeline.data_loading import get_article_text, get_doc_wdid_mention_counts, get_doc_weighted_wdids
+from iptc_entity_pipeline.data_loading import get_doc_wdid_mention_counts, get_doc_weighted_wdids
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.pooling import EntityPoolingStrategy
 
@@ -56,7 +56,7 @@ class FeatureBuilder:
         :return: Feature matrix of shape ``[docs, article_dim + entity_dim]``.
         """
         if ensure_article_embeddings:
-            self._article_embedding_provider.recompute_embeddings(corpus=corpus)
+            self._article_embedding_provider.prepare_embeddings(corpus=corpus)
         entity_dim = self._entity_embedding_store.infer_embedding_dim()
         rows: list[np.ndarray] = []
         total_docs = len(corpus)
@@ -67,11 +67,7 @@ class FeatureBuilder:
         total_missing_embeddings = 0
 
         for idx, doc in enumerate(corpus):
-            article_embedding = self._article_embedding_provider.get_embedding(
-                article_id=doc.id,
-                article_text=get_article_text(doc),
-                article_doc=doc,
-            )
+            article_embedding = self._article_embedding_provider.get_embedding(article_id=doc.id)
             if self._entity_weight_source == 'mention_count':
                 weighted_wdids = get_doc_wdid_mention_counts(doc)
             else:
