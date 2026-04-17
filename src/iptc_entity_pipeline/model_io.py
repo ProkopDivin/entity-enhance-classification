@@ -16,6 +16,7 @@ from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig
 from iptc_entity_pipeline.data_loading import sanitize_name
 
 LOGGER = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,7 @@ def save_final_model_outputs(
     task = Task.current_task()
     logger = task.get_logger()
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_dir = Path('results') / 'saved_models' / f'{sanitize_name(value=config_name)}_{timestamp}'
+    output_dir = PROJECT_ROOT / 'results' / 'saved_models' / f'{sanitize_name(value=config_name)}_{timestamp}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model_path = output_dir / 'model.nn.bin'
@@ -126,8 +127,8 @@ def save_final_model_outputs(
     with open(parameters_json_path, 'w', encoding='utf-8') as file:
         json.dump(config_mapping, file, indent=4)
 
-    logger.report_text(f'Saved final model bundle to {output_dir}')
-    logger.report_text(f'Saved test probability CSV to {probabilities_csv_path}')
+    logger.report_text(f'Saved final model bundle to {output_dir.resolve()}')
+    logger.report_text(f'Saved test probability CSV to {probabilities_csv_path.resolve()}')
 
     if upload_artifacts:
         task.upload_artifact('saved_model_file', artifact_object=str(model_path))
