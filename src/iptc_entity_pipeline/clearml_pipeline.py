@@ -58,6 +58,8 @@ from iptc_entity_pipeline.training import (
     train_model,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def configure_component_logging(*, level: int = logging.INFO) -> None:
     """Ensure component worker processes emit INFO logs to console."""
@@ -729,7 +731,7 @@ def eval_final(
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
-    results_dir = Path('results')
+    results_dir = PROJECT_ROOT / 'results'
     results_dir.mkdir(parents=True, exist_ok=True)
     excel_path = results_dir / f'final_evaluation_tables_{sanitize_name(value=config_name)}.xlsx'
     save_paths = save_final_model_outputs(

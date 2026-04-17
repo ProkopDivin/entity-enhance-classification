@@ -139,7 +139,7 @@ class BaseConfig:
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
-    upload_artifacts: bool = False
+    upload_artifacts: bool = True
     debug: bool = True
     
 
@@ -550,6 +550,28 @@ def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
     )
     return replace(config, paths=resolved_paths)
 
+
+class BestWpEntitiesConfig(BaseConfigWithHPO):
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.0,),
+            dropouts2=(0.0, ),
+            learning_rates=(0.00037,),
+        )
+    )
+    
+class BestArticleOnlyConfig(BaseConfigWithHPO):
+    hyperparam_space: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(2048, ),
+            dropouts1=(0.0,),
+            dropouts2=(0.3, ),
+            learning_rates=(0.00037,),
+        )
+    )
 
 def _config_map() -> dict[str, BaseConfig]:
     """Return supported config instances."""
