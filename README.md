@@ -29,7 +29,7 @@ v1 settings:
 - `src/iptc_entity_pipeline/feature_builder.py` - creates concatenated article+entity vectors.
 - `src/iptc_entity_pipeline/dataset_builder.py` - converts vectors to `EmbeddingDataset`.
 - `src/iptc_entity_pipeline/legacy_reuse.py` - reused original model/train/eval functions.
-- `src/iptc_entity_pipeline/clearml_pipeline.py` - ClearML components and orchestration.
+- `src/iptc_entity_pipeline/pipeline.py` - ClearML components and orchestration.
   - `load_data`
   - `prepare_article_embeddings`
   - `link_embeddings_and_build_datasets`
