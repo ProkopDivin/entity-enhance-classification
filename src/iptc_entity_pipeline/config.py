@@ -113,7 +113,7 @@ class EvaluationCnf:
     per_corpus: bool = True
     per_class: bool = True
     averaging_type: str = 'datapoint'
-    base_probabilities_csv: str = ''
+    base_run_dir: str = ''
 
 
 @dataclass(frozen=True)
@@ -576,6 +576,56 @@ class BestArticleOnlyCnf(BaseCnfWithHPO):
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), use_entity_embeddings=False)
     )
+########################################################
+# Best configurations for different relevance thresholds
+########################################################
+
+
+@dataclass(frozen=True)
+class BestWpentitiesAllLangsCnf(BaseCnfWithHPO):
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(384, 1024),
+            dropouts1=(0.0,),
+            dropouts2=(0.3, ),
+            learning_rates=(0.00037,),
+        )
+    )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'de', 'es', 'nl', 'fr', 'cs'))
+    )
+
+
+@dataclass(frozen=True)
+class BestWpentitiesNlCnf(BaseCnfWithHPO):
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(384, 1024),
+            dropouts1=(0.0,),
+            dropouts2=(0.3, ),
+            learning_rates=(0.00037,),
+        )
+    )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('nl',))
+    )
+
+@dataclass(frozen=True)
+class BestWPEntitiesENNLCnf(BaseCnfWithHPO):
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, 8192),
+            dropouts1=(0.0,),
+            dropouts2=(0.3, ),
+            learning_rates=(0.00037,),
+        )
+    )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'nl'))
+    )
 
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
@@ -592,7 +642,12 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_rel_th_5': WPEntitiesRelTH5(),
         'best_wpentities': BestWpEntitiesCnf(),
         'best_article_only': BestArticleOnlyCnf(),
+        'best_wpentities_all_langs': BestWpentitiesAllLangsCnf(),
+        'best_wpentities_nl': BestWpentitiesNlCnf(),
+        'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
+
     }
+
 
 
 def get_config(config_name: str) -> BaseCnf:

@@ -51,7 +51,6 @@ Default paths are hardcoded (origin-style) to:
 
 Article embedding computation defaults:
 
-- backend: `origin_service`
 - model id: `paraphrase-multilingual-MiniLM-L12-v2-300-0.3`
 - service URL: `http://tau.g:5533`
 - dimension: `384`
@@ -90,28 +89,19 @@ python3 -m iptc_entity_pipeline.run_pipeline --local
 Useful arguments:
 
 - `--task-name`: ClearML task name (default: `iptc-entity-enhanced-v1`)
-- `--config-name`: config variant to run:
-  - `base`
+- `--config` / `-c`: config variant to run:
+  - `debug`
+  - `wpentities`
+  - `wpentities_weighted_mean`
+  - `wpentities_relevance_weighted_sum`
+  - `wpentities_mention_weighted_sum`
   - `article_only`
-  - `entities_origin_filtred`
-  - `entities_chrono_global`
-  - `entities_chrono_per_dataset`
-  - `downsample_nl_noordhollandsdagblad_033` (train/dev downsampling for `nl_noordhollandsdagblad`)
-- `--article-only`: deprecated alias for `--config-name article_only`
-
-Run the deterministic downsampling variant:
-
-```bash
-python3 -m iptc_entity_pipeline.run_pipeline --local --config-name downsample_nl_noordhollandsdagblad_033
-```
-
-Validation checklist for this variant:
-
-- Re-run the same command and verify logs report identical train/dev downsampling counts for
-  `nl_noordhollandsdagblad`.
-- Confirm `data/nl_noordhollandsdagblad_train.txt` and `data/nl_noordhollandsdagblad_dev.txt` exist after first run
-  and are reused on subsequent runs.
-- Confirm test split size stays unchanged, and logs still print `Downsampling skipped for test split by design`.
+  - `wpentities_en_nl`
+  - `wpentities_nl`
+  - `wpentities_all_langs`
+  - `wpentities_rel_th_5`
+  - `best_wpentities`
+  - `best_article_only`
 
 ## What Is Reused vs New
 
@@ -144,4 +134,4 @@ Run new worker(agent)
    ```
 
 
-python3 -m iptc_entity_pipeline.run_pipeline --local --config-name article_only
+python3 -m iptc_entity_pipeline.run_pipeline --local --config article_only
