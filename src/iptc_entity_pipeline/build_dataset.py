@@ -11,7 +11,7 @@ from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
-from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
+from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, config_from_dict
 from iptc_entity_pipeline.dataset_builder import build_embedding_dataset
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.feature_builder import FeatureBuildStats, FeatureBuilder
@@ -104,7 +104,7 @@ def no_entities(
 
 def get_pooling(
     *,
-    emb_cfg: EmbeddingConfig,
+    emb_cfg: EmbeddingCnf,
     logger: logging.Logger,
 ) -> EntityPoolingStrategy:
     """Select pooling strategy and entity weighting mode from config."""

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
-from iptc_entity_pipeline.config import EvaluationConfig
+from iptc_entity_pipeline.config import EvaluationCnf
 
 
 @dataclass
@@ -398,7 +398,7 @@ def trainClassificationModel(
 def evaluateModel(
     model: NeuralCategModel,
     evalData: EmbeddingDataset,
-    evaluation_config: EvaluationConfig,
+    evaluation_config: EvaluationCnf,
     customThresholds: Optional[Mapping[str, float]] = None,
     *,
     returnPredictions: bool = False,

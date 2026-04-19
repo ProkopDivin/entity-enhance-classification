@@ -1,23 +1,21 @@
 """ClearML pipeline orchestration for entity-enhanced IPTC training."""
 
-import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple
 
-import numpy as np
 from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
 from iptc_entity_pipeline.config import (
-    BaseConfig,
-    CvConfig,
-    EvaluationConfig,
+    BaseCnf,
+    CvCnf,
+    EvaluationCnf,
     HyperparamSpace,
-    ModelConfig,
-    TrainingConfig,
+    ModelCnf,
+    TrainingCnf,
     resolve_paths,
 )
 from iptc_entity_pipeline.data_loading import (
@@ -25,11 +23,6 @@ from iptc_entity_pipeline.data_loading import (
     load_and_normalize_corpora,
     load_wdid_mapping,
     sanitize_name,
-)
-from iptc_entity_pipeline.dataset_builder import (
-    build_multilabel_targets,
-    slice_dataset,
-    to_numpy_array,
 )
 from iptc_entity_pipeline.evaluation_comparison import build_output_path, compare_runs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
@@ -42,12 +35,7 @@ from iptc_entity_pipeline.reporting import (
     report_eval_scalars,
     report_train_test_curve_charts,
 )
-from iptc_entity_pipeline.training import (
-    CvFoldCurves,
-    combo_params_json,
-    get_obj_row,
-    train_model,
-)
+from iptc_entity_pipeline.training import train_model
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -67,16 +55,6 @@ def configure_component_logging(*, level: int = logging.INFO) -> None:
 
 
 @dataclass(frozen=True)
-class CvResult:
-    """Outputs of the cross-validation pipeline step."""
-
-    cv_dev_df: Any
-    best_model_config: dict[str, Any]
-    best_training_config: dict[str, Any]
-    objective_metrics: dict[str, Any]
-
-
-@dataclass(frozen=True)
 class EvalResult:
     """Outputs of the final evaluation pipeline step."""
 
@@ -86,38 +64,26 @@ class EvalResult:
     objective_metrics: dict[str, Any]
 
 
-@dataclass
-class FoldScores:
-    """Per-fold metric accumulator for cross-validation."""
-
-    loss: list[float] = field(default_factory=list)
-    epochs: list[float] = field(default_factory=list)
-    precision: list[float] = field(default_factory=list)
-    recall: list[float] = field(default_factory=list)
-    f1: list[float] = field(default_factory=list)
-
-
-
 @PipelineDecorator.component(
     return_values=['corpora'],
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
 def load_data(
-    paths_config: Mapping[str, Any],
-    embedding_config: Mapping[str, Any],
+    paths_cnf: Mapping[str, Any],
+    emb_cnf: Mapping[str, Any],
     downsample_corpora: Mapping[str, float] | None = None,
 ):
     """Load normalized corpora with linked entities attached to each document."""
-    from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
+    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, config_from_dict
 
     root_logger = logging.getLogger()
     if not root_logger.handlers:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     elif root_logger.level > logging.INFO:
         root_logger.setLevel(logging.INFO)
-    paths = config_from_dict(PathsConfig, paths_config)
-    emb = config_from_dict(EmbeddingConfig, embedding_config)
+    paths = config_from_dict(PathsCnf, paths_cnf)
+    emb = config_from_dict(EmbeddingCnf, emb_cnf)
     corpora = load_and_normalize_corpora(
         train_csv=paths.train_csv,
         test_csv=paths.test_csv,
@@ -148,13 +114,13 @@ def load_data(
 )
 def prepare_article_embeddings(
     corpora,
-    paths_config: Mapping[str, Any],
-    embedding_config: Mapping[str, Any],
+    paths_cnf: Mapping[str, Any],
+    emb_cnf: Mapping[str, Any],
 ):
     """Precompute and cache missing article embeddings for all corpora."""
     from dataclasses import asdict
 
-    from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
+    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, config_from_dict
 
     root_logger = logging.getLogger()
     if not root_logger.handlers:
@@ -162,8 +128,8 @@ def prepare_article_embeddings(
     elif root_logger.level > logging.INFO:
         root_logger.setLevel(logging.INFO)
     logger = logging.getLogger(__name__)
-    paths = config_from_dict(PathsConfig, paths_config)
-    emb = config_from_dict(EmbeddingConfig, embedding_config)
+    paths = config_from_dict(PathsCnf, paths_cnf)
+    emb = config_from_dict(EmbeddingCnf, emb_cnf)
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths.article_embeddings_dir,
         model_name=emb.article_model_name,
@@ -198,13 +164,13 @@ def prepare_article_embeddings(
 )
 def build_dataset(
     corpora,
-    paths_config: Mapping[str, Any],
-    embedding_config: Mapping[str, Any],
+    paths_cnf: Mapping[str, Any],
+    emb_cnf: Mapping[str, Any],
     article_embedding_stats: Mapping[str, Any],
 ):
     """Link embeddings and build train/test embedding datasets."""
     from iptc_entity_pipeline.build_dataset import no_entities, report_entity_stats, get_pooling
-    from iptc_entity_pipeline.config import EmbeddingConfig, PathsConfig, config_from_dict
+    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, config_from_dict
     from iptc_entity_pipeline.dataset_builder import build_embedding_dataset
     from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
     from iptc_entity_pipeline.feature_builder import FeatureBuilder
@@ -221,8 +187,8 @@ def build_dataset(
         article_embedding_stats.get('total_docs'),
         article_embedding_stats.get('total_computed'),
     )
-    paths = config_from_dict(PathsConfig, paths_config)
-    emb = config_from_dict(EmbeddingConfig, embedding_config)
+    paths = config_from_dict(PathsCnf, paths_cnf)
+    emb = config_from_dict(EmbeddingCnf, emb_cnf)
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths.article_embeddings_dir,
         model_name=emb.article_model_name,
@@ -280,10 +246,10 @@ def build_dataset(
 def run_cv(
     train_data,
     feature_dim: int,
-    hyperparam_space_config: Mapping[str, Any],
-    training_config: Mapping[str, Any],
-    evaluation_config: Mapping[str, Any],
-    cv_config: Mapping[str, Any],
+    hparam_cnf: Mapping[str, Any],
+    train_cnf: Mapping[str, Any],
+    eval_cnf: Mapping[str, Any],
+    cv_cnf: Mapping[str, Any],
     objective_corpora: str,
     print_logs: bool = True,
     debug: bool = False,
@@ -292,203 +258,76 @@ def run_cv(
     """Run mandatory CV over train and select best hyperparameter combination."""
     from dataclasses import asdict
 
-    import pandas as pd
-    from iptc_entity_pipeline.pipeline import CvResult, FoldScores
     from iptc_entity_pipeline.config import (
-        CvConfig,
-        EvaluationConfig,
+        CvCnf,
+        EvaluationCnf,
         HyperparamSpace,
-        ModelConfig,
-        TrainingConfig,
+        TrainingCnf,
         config_from_dict,
     )
-    from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
+    from iptc_entity_pipeline.cross_validation import (
+        CvResult,
+        build_cv_dataframes,
+        build_objective_metrics,
+        prepare_cv_arrays,
+        select_best_combination,
+    )
 
     root_logger = logging.getLogger()
     if not root_logger.handlers:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     elif root_logger.level > logging.INFO:
         root_logger.setLevel(logging.INFO)
+    py_logger = logging.getLogger(__name__)
     task = Task.current_task()
-    logger = task.get_logger()
+    clearml_logger = task.get_logger()
 
-    space = config_from_dict(HyperparamSpace, hyperparam_space_config)
-    base_training = config_from_dict(TrainingConfig, training_config)
-    eval_cfg = config_from_dict(EvaluationConfig, evaluation_config)
-    cv_cfg = config_from_dict(CvConfig, cv_config)
+    space = config_from_dict(HyperparamSpace, hparam_cnf)
+    base_training = config_from_dict(TrainingCnf, train_cnf)
+    eval_cfg = config_from_dict(EvaluationCnf, eval_cnf)
+    cv_cfg = config_from_dict(CvCnf, cv_cnf)
 
-    x_full = to_numpy_array(matrix_like=train_data.X)
-    y_full = (
-        to_numpy_array(matrix_like=train_data.Y)
-        if hasattr(train_data, 'Y')
-        else build_multilabel_targets(corpus=train_data.corpus)
-    )
-
+    x_full, y_full = prepare_cv_arrays(train_data=train_data)
     combinations = space.iter_combinations(base_training=base_training)
-    total_combinations = len(combinations)
-    trainings_per_combo = 1 if debug else cv_cfg.folds
-    total_trainings = total_combinations * trainings_per_combo
-    completed_trainings = 0
-    cv_plan_message = (
-        'CV hyperparameter search plan: '
-        f'combinations={total_combinations} '
-        f'folds_per_combination={trainings_per_combo} '
-        f'total_model_trains={total_trainings}'
+
+    selection = select_best_combination(
+        combinations=combinations,
+        train_data=train_data,
+        x_full=x_full,
+        y_full=y_full,
+        feature_dim=feature_dim,
+        eval_cfg=eval_cfg,
+        cv_cfg=cv_cfg,
+        objective_corpora=objective_corpora,
+        debug=debug,
+        print_logs=print_logs,
+        py_logger=py_logger,
+        clearml_logger=clearml_logger,
     )
-    logging.getLogger(__name__).info(cv_plan_message)
-    logger.report_text(cv_plan_message, print_console=True)
-    fold_rows: list[dict[str, Any]] = []
-    trial_rows: list[dict[str, Any]] = []
-    best_trial: dict[str, Any] | None = None
-    best_combo: tuple[ModelConfig, TrainingConfig] | None = None
-    best_fold_curves: tuple[CvFoldCurves, ...] = ()
 
-    for combo_idx, (combo_model_cfg, combo_train_cfg) in enumerate(combinations, start=1):
-        params_json = combo_params_json(
-            model_config=combo_model_cfg,
-            training_config=combo_train_cfg,
-        )
-        cv_splitter = MultilabelStratifiedKFold(
-            n_splits=cv_cfg.folds,
-            shuffle=True,
-            random_state=cv_cfg.random_seed,
-        )
-        fold_scores = FoldScores()
-        combo_fold_curves: list[CvFoldCurves] = []
-        for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
-            fit_data = slice_dataset(dataset=train_data, indices=fit_indices.tolist())
-            val_data = slice_dataset(dataset=train_data, indices=val_indices.tolist())
-            train_result = train_model(
-                train_data=fit_data,
-                dev_data=val_data,
-                feature_dim=feature_dim,
-                model_config=combo_model_cfg,
-                training_config=combo_train_cfg,
-                print_logs=print_logs,
-            )
-            completed_trainings += 1
-            training_progress_message = (
-                'CV training progress: '
-                f'trained_models={completed_trainings}/{total_trainings} '
-                f'combination={combo_idx}/{total_combinations} '
-                f'fold={fold_idx}/{trainings_per_combo}'
-            )
-            logging.getLogger(__name__).info(training_progress_message)
-            logger.report_text(training_progress_message, print_console=True)
-            model = train_result.model
-            dev_loss = train_result.final_dev_loss
-            df_corpora_fold, _ = evaluateModel(
-                model=model,
-                evalData=val_data,
-                evaluation_config=eval_cfg,
-                customThresholds=None,
-            )
-            micro_row = (
-                df_corpora_fold.loc['All-micro'].to_dict()
-                if 'All-micro' in df_corpora_fold.index
-                else get_obj_row(
-                    df_corpora=df_corpora_fold,
-                    objective_corpora=objective_corpora,
-                    averaging_type=eval_cfg.averaging_type,
-                )
-            )
-            fold_scores.loss.append(dev_loss)
-            fold_scores.epochs.append(float(train_result.epochs_run))
-            fold_scores.precision.append(float(micro_row['Precision']))
-            fold_scores.recall.append(float(micro_row['Recall']))
-            fold_scores.f1.append(float(micro_row['F1']))
-            combo_fold_curves.append(
-                CvFoldCurves(
-                    fold_id=fold_idx,
-                    train_loss_per_epoch=train_result.train_loss_per_epoch,
-                    dev_loss_per_epoch=train_result.dev_loss_per_epoch,
-                    train_f1_per_epoch=train_result.train_f1_per_epoch,
-                    dev_f1_per_epoch=train_result.dev_f1_per_epoch,
-                )
-            )
-            fold_rows.append(
-                {
-                    'trial_id': combo_idx,
-                    'fold_id': fold_idx,
-                    'params': params_json,
-                    'epochs': float(train_result.epochs_run),
-                    'Loss': dev_loss,
-                    'Precision': float(micro_row['Precision']),
-                    'Recall': float(micro_row['Recall']),
-                    'F1': float(micro_row['F1']),
-                }
-            )
-            if debug:
-                break
-
-        trial_row = {
-            'trial_id': combo_idx,
-            'params': params_json,
-            'epochs': float(np.mean(fold_scores.epochs)),
-            'Loss_mean': float(np.mean(fold_scores.loss)),
-            'Loss_std': float(np.std(fold_scores.loss)),
-            'F1_mean': float(np.mean(fold_scores.f1)),
-            'F1_std': float(np.std(fold_scores.f1)),
-            'Precision_mean': float(np.mean(fold_scores.precision)),
-            'Precision_std': float(np.std(fold_scores.precision)),
-            'Recall_mean': float(np.mean(fold_scores.recall)),
-            'Recall_std': float(np.std(fold_scores.recall)),
-        }
-        trial_rows.append(trial_row)
-        if best_trial is None or trial_row['F1_mean'] > best_trial['F1_mean']:
-            best_trial = trial_row
-            best_combo = (combo_model_cfg, combo_train_cfg)
-            best_fold_curves = tuple(combo_fold_curves)
-
-    if best_trial is None or best_combo is None:
-        raise ValueError('No CV trial results were produced.')
-    trials_df = pd.DataFrame(trial_rows).sort_values(by='F1_mean', ascending=False).reset_index(drop=True)
-    folds_df = pd.DataFrame(fold_rows)
-    cv_dev_df = pd.DataFrame(
-        [
-            {
-                'params': best_trial['params'],
-                'epochs': best_trial['epochs'],
-                'Precision': best_trial['Precision_mean'],
-                'Recall': best_trial['Recall_mean'],
-                'F1': best_trial['F1_mean'],
-                'Loss': best_trial['Loss_mean'],
-                'Precision_std': best_trial['Precision_std'],
-                'Recall_std': best_trial['Recall_std'],
-                'F1_std': best_trial['F1_std'],
-                'Loss_std': best_trial['Loss_std'],
-            }
-        ],
+    trials_df, folds_df, cv_dev_df = build_cv_dataframes(
+        trial_rows=selection.trial_rows,
+        fold_rows=selection.fold_rows,
+        best_trial=selection.best_trial,
     )
 
     report_cv_outputs(
         task=task,
-        logger=logger,
+        logger=clearml_logger,
         trials_df=trials_df,
         folds_df=folds_df,
         cv_dev_df=cv_dev_df,
         upload_artifacts=upload_artifacts,
     )
-    report_cv_fold_curve_charts(logger=logger, fold_curves=best_fold_curves)
-
-    best_model_cfg, best_train_cfg = best_combo
-    objective_metrics = {
-        'Loss_mean': float(best_trial['Loss_mean']),
-        'Loss_std': float(best_trial['Loss_std']),
-        'Precision_mean': float(best_trial['Precision_mean']),
-        'Precision_std': float(best_trial['Precision_std']),
-        'Recall_mean': float(best_trial['Recall_mean']),
-        'Recall_std': float(best_trial['Recall_std']),
-        'F1_mean': float(best_trial['F1_mean']),
-        'F1_std': float(best_trial['F1_std']),
-        'epochs': float(best_trial['epochs']),
-    }
-    return CvResult(
+    report_cv_fold_curve_charts(logger=clearml_logger, fold_curves=selection.best_fold_curves)
+    
+    result = CvResult(
         cv_dev_df=cv_dev_df,
-        best_model_config=asdict(best_model_cfg),
-        best_training_config=asdict(best_train_cfg),
-        objective_metrics=objective_metrics,
+        best_model_config=asdict(selection.best_model_config),
+        best_training_config=asdict(selection.best_training_config),
+        objective_metrics=build_objective_metrics(best_trial=selection.best_trial),
     )
+    return result
 
 @PipelineDecorator.component(
     return_values=['trainedModel'],
@@ -499,20 +338,20 @@ def train_best(
     train_data,
     test_data,
     feature_dim: int,
-    best_model_config: Mapping[str, Any],
-    training_config: Mapping[str, Any],
+    best_model_cnf: Mapping[str, Any],
+    train_cnf: Mapping[str, Any],
     print_logs: bool = True,
 ):
     """Train final model on full train set with best hyperparams from CV."""
-    from iptc_entity_pipeline.config import ModelConfig, TrainingConfig, config_from_dict
+    from iptc_entity_pipeline.config import ModelCnf, TrainingCnf, config_from_dict
 
     root_logger = logging.getLogger()
     if not root_logger.handlers:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     elif root_logger.level > logging.INFO:
         root_logger.setLevel(logging.INFO)
-    model_cfg = config_from_dict(ModelConfig, best_model_config)
-    train_cfg = config_from_dict(TrainingConfig, training_config)
+    model_cfg = config_from_dict(ModelCnf, best_model_cnf)
+    train_cfg = config_from_dict(TrainingCnf, train_cnf)
     result = train_model(
         train_data=train_data,
         dev_data=test_data,
@@ -535,8 +374,8 @@ def eval_final(
     trained_model,
     cv_dev_df,
     test_data,
-    evaluation_config: Mapping[str, Any],
-    embedding_config: Mapping[str, Any],
+    eval_cnf: Mapping[str, Any],
+    emb_cnf: Mapping[str, Any],
     objective_corpora: str,
     config_name: str,
     config_mapping: Mapping[str, Any],
@@ -549,7 +388,7 @@ def eval_final(
     import pandas as pd
     from geneea.catlib.model.model import filterLabels
     from iptc_entity_pipeline.pipeline import EvalResult
-    from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig, config_from_dict
+    from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf, config_from_dict
 
     root_logger = logging.getLogger()
     if not root_logger.handlers:
@@ -558,8 +397,8 @@ def eval_final(
         root_logger.setLevel(logging.INFO)
     task = Task.current_task()
     logger = task.get_logger()
-    eval_cfg = config_from_dict(EvaluationConfig, evaluation_config)
-    emb_cfg = config_from_dict(EmbeddingConfig, embedding_config)
+    eval_cfg = config_from_dict(EvaluationCnf, eval_cnf)
+    emb_cfg = config_from_dict(EmbeddingCnf, emb_cnf)
     df_corpora_test, df_classes_test, pred_scores = evaluateModel(
         model=trained_model,
         evalData=test_data,
@@ -620,15 +459,16 @@ def eval_final(
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
     project_root = Path(globals().get('PROJECT_ROOT', Path.cwd()))
-    results_dir = project_root / 'results'
-    results_dir.mkdir(parents=True, exist_ok=True)
-    excel_path = results_dir / f'final_evaluation_tables_{sanitize_name(value=config_name)}.xlsx'
+    model_name = sanitize_name(value=config_name)
+    model_results_dir = project_root / 'results' / model_name
+    model_results_dir.mkdir(parents=True, exist_ok=True)
+    excel_path = model_results_dir / f'final_evaluation_tables_{model_name}.xlsx'
     save_paths = save_final_model_outputs(
         model=trained_model,
         test_data=test_data,
         pred_scores=pred_scores,
         evaluation_config=eval_cfg,
-        embedding_config=emb_cfg,
+        emb_cnf=emb_cfg,
         config_mapping=config_mapping,
         config_name=config_name,
         feature_dim=feature_dim,
@@ -733,7 +573,7 @@ def eval_final(
     version='0.1',
     pipeline_execution_queue='iptc_entity_pipeline',
 )
-def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
+def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     """Execute full v1 training and evaluation pipeline."""
     root_logger = logging.getLogger()
     if not root_logger.handlers:
@@ -741,22 +581,22 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     elif root_logger.level > logging.INFO:
         root_logger.setLevel(logging.INFO)
     task = Task.current_task()
-    task.connect(config_mapping, name='pipelineConfig')
-    config_name = str(config_mapping.get('config_name', 'wpentities'))
+    task.connect(cnf, name='pipelineConfig')
+    config_name = str(cnf.get('config_name', 'wpentities'))
     task.add_tags([config_name])
 
-    paths_config = config_mapping['paths']
-    embedding_config = config_mapping['embeddings']
-    training_config = config_mapping['training']
-    evaluation_config = config_mapping['evaluation']
-    cv_config = config_mapping.get('cv', {'folds': 5, 'random_seed': 43})
-    hyperparam_space_config = config_mapping['hyperparam_space']
-    objective_corpora = config_mapping['objective_corpora']
-    downsample_corpora = config_mapping.get('downsample_corpora', {})
-    use_entity_embeddings = bool(embedding_config.get('use_entity_embeddings', True))
-    print_logs = bool(config_mapping.get('print_logs', True))
-    debug = bool(config_mapping.get('debug', False))
-    upload_artifacts = bool(config_mapping.get('upload_artifacts', False))
+    paths_cnf = cnf['paths']
+    emb_cnf = cnf['emb']
+    train_cnf = cnf['train']
+    eval_cnf = cnf['eval']
+    cv_cnf = cnf.get('cv', {'folds': 5, 'random_seed': 43})
+    hparam_cnf = cnf['hparam']
+    obj_corpora = cnf['objective_corpora']
+    down_smpl = cnf.get('downsample_corpora', {})
+    use_ent_emb = bool(emb_cnf.get('use_entity_embeddings', True))
+    print_logs = bool(cnf.get('print_logs', True))
+    debug = bool(cnf.get('debug', False))
+    upload_artifacts = bool(cnf.get('upload_artifacts', False))
 
     log_stage(
         task=task,
@@ -764,9 +604,9 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         print_logs=print_logs,
     )
     corpora = load_data(
-        paths_config=paths_config,
-        embedding_config=embedding_config,
-        downsample_corpora=downsample_corpora,
+        paths_cnf=paths_cnf,
+        emb_cnf=emb_cnf,
+        downsample_corpora=down_smpl,
     )
     log_stage(
         task=task,
@@ -775,8 +615,8 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
     )
     article_embedding_stats = prepare_article_embeddings(
         corpora=corpora,
-        paths_config=paths_config,
-        embedding_config=embedding_config,
+        paths_cnf=paths_cnf,
+        emb_cnf=emb_cnf,
     )
     if upload_artifacts:
         task.upload_artifact('article_embedding_stats', artifact_object=dict(article_embedding_stats))
@@ -785,30 +625,30 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         task=task,
         message=(
             'Stage 3/6: Preparing entity embeddings, linking, and building datasets'
-            if use_entity_embeddings
+            if use_ent_emb
             else 'Stage 3/6: Building article-only datasets (entity embeddings disabled)'
         ),
         print_logs=print_logs,
     )
     train_data, test_data, feature_dim = build_dataset(
         corpora=corpora,
-        paths_config=paths_config,
-        embedding_config=embedding_config,
+        paths_cnf=paths_cnf,
+        emb_cnf=emb_cnf,
         article_embedding_stats=article_embedding_stats,
     )
     log_stage(
         task=task,
-        message=f'Stage 4/6: Running mandatory {cv_config.get("folds", 5)}-fold cross-validation on train',
+        message=f'Stage 4/6: Running mandatory {cv_cnf.get("folds", 5)}-fold cross-validation on train',
         print_logs=print_logs,
     )
     cv_result = run_cv(
         train_data=train_data,
         feature_dim=feature_dim,
-        hyperparam_space_config=hyperparam_space_config,
-        training_config=training_config,
-        evaluation_config=evaluation_config,
-        cv_config=cv_config,
-        objective_corpora=objective_corpora,
+        hparam_cnf=hparam_cnf,
+        train_cnf=train_cnf,
+        eval_cnf=eval_cnf,
+        cv_cnf=cv_cnf,
+        objective_corpora=obj_corpora,
         print_logs=print_logs,
         debug=debug,
         upload_artifacts=upload_artifacts,
@@ -825,8 +665,8 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         train_data=train_data,
         test_data=test_data,
         feature_dim=feature_dim,
-        best_model_config=cv_result.best_model_config,
-        training_config=cv_result.best_training_config,
+        best_model_cnf=cv_result.best_model_config,
+        train_cnf=cv_result.best_training_config,
         print_logs=print_logs,
     )
 
@@ -839,17 +679,17 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         trained_model=trained_model,
         cv_dev_df=cv_result.cv_dev_df,
         test_data=test_data,
-        evaluation_config=evaluation_config,
-        embedding_config=embedding_config,
-        objective_corpora=objective_corpora,
+        eval_cnf=eval_cnf,
+        emb_cnf=emb_cnf,
+        objective_corpora=obj_corpora,
         config_name=config_name,
-        config_mapping=config_mapping,
+        config_mapping=cnf,
         feature_dim=feature_dim,
         upload_artifacts=upload_artifacts,
     )
 
     logger = task.get_logger()
-    objective_row_name = f'All-{evaluation_config["averaging_type"]}'
+    objective_row_name = f'All-{eval_cnf["averaging_type"]}'
     if objective_row_name in eval_result.dev_corpora_df.index:
         row_cv = eval_result.dev_corpora_df.loc[objective_row_name].to_dict()
     else:
@@ -884,7 +724,7 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
         )
 
     if upload_artifacts:
-        task.upload_artifact('pipeline_config', artifact_object=dict(config_mapping))
+        task.upload_artifact('pipeline_config', artifact_object=dict(cnf))
         task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
         task.upload_artifact('dev_corpora_dataframe', artifact_object=eval_result.dev_corpora_df)
         task.upload_artifact('test_corpora_dataframe', artifact_object=eval_result.test_corpora_df)
@@ -900,10 +740,10 @@ def run_training_pipeline(config_mapping: Mapping[str, Any]) -> None:
 
 
 def run_pipeline(
-    config: Optional[BaseConfig] = None,
+    config: Optional[BaseCnf] = None,
     config_name: str = 'wpentities',
     is_local: bool = False,
-) -> Tuple[BaseConfig, Mapping[str, Any]]:
+) -> Tuple[BaseCnf, Mapping[str, Any]]:
     """
     Resolve config and execute the ClearML pipeline locally.
 
@@ -912,11 +752,11 @@ def run_pipeline(
     :param is_local: Run pipeline steps locally instead of dispatching to a queue.
     :return: Tuple of resolved config and mapping passed to ClearML.
     """
-    pipeline_config = config or BaseConfig()
+    pipeline_config = config or BaseCnf()
     resolved_config = resolve_paths(config=pipeline_config, root_dir=Path.cwd())
     config_mapping = asdict(resolved_config)
     config_mapping['config_name'] = config_name
     if is_local:
         PipelineDecorator.run_locally()
-    run_training_pipeline(config_mapping=config_mapping)
+    run_training_pipeline(cnf=config_mapping)
     return resolved_config, config_mapping
