@@ -7,12 +7,10 @@ import logging
 import sys
 from pathlib import Path
 
-# Allow direct script execution:
-# python src/iptc_entity_pipeline/run_pipeline.py
-if __package__ is None or __package__ == '':
-    src_root = Path(__file__).resolve().parents[1]
-    if str(src_root) not in sys.path:
-        sys.path.insert(0, str(src_root))
+# Keep local src first to avoid importing stale site-packages versions.
+src_root = Path(__file__).resolve().parents[1]
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
 
 from iptc_entity_pipeline.pipeline import run_pipeline
 from iptc_entity_pipeline.config import get_config, list_config_names
