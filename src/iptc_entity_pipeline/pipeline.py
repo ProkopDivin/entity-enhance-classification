@@ -266,7 +266,6 @@ def run_cv(
         config_from_dict,
     )
     from iptc_entity_pipeline.cross_validation import (
-        CvResult,
         build_cv_dataframes,
         build_objective_metrics,
         prepare_cv_arrays,
@@ -321,12 +320,12 @@ def run_cv(
     )
     report_cv_fold_curve_charts(logger=clearml_logger, fold_curves=selection.best_fold_curves)
     
-    result = CvResult(
-        cv_dev_df=cv_dev_df,
-        best_model_config=asdict(selection.best_model_config),
-        best_training_config=asdict(selection.best_training_config),
-        objective_metrics=build_objective_metrics(best_trial=selection.best_trial),
-    )
+    result = {
+        'cv_dev_df': cv_dev_df,
+        'best_model_config': asdict(selection.best_model_config),
+        'best_training_config': asdict(selection.best_training_config),
+        'objective_metrics': build_objective_metrics(best_trial=selection.best_trial),
+    }
     return result
 
 @PipelineDecorator.component(
@@ -654,7 +653,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         upload_artifacts=upload_artifacts,
     )
     if upload_artifacts:
-        task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result.objective_metrics))
+        task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result['objective_metrics']))
 
     log_stage(
         task=task,
@@ -665,8 +664,8 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         train_data=train_data,
         test_data=test_data,
         feature_dim=feature_dim,
-        best_model_cnf=cv_result.best_model_config,
-        train_cnf=cv_result.best_training_config,
+        best_model_cnf=cv_result['best_model_config'],
+        train_cnf=cv_result['best_training_config'],
         print_logs=print_logs,
     )
 
@@ -677,7 +676,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     )
     eval_result = eval_final(
         trained_model=trained_model,
-        cv_dev_df=cv_result.cv_dev_df,
+        cv_dev_df=cv_result['cv_dev_df'],
         test_data=test_data,
         eval_cnf=eval_cnf,
         emb_cnf=emb_cnf,
