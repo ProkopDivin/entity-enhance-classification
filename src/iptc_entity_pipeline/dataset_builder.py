@@ -7,24 +7,10 @@ from typing import Any, Sequence
 
 import numpy as np
 import torch
+from geneea.catlib.data import Corpus
+from geneea.catlib.vec.dataset import EmbeddingDataset
 
 LOGGER = logging.getLogger(__name__)
-
-
-def _require_embedding_dataset_cls():
-    try:
-        from geneea.catlib.vec.dataset import EmbeddingDataset  # type: ignore
-    except ImportError as exc:  # pragma: no cover - environment-specific
-        raise ImportError(
-            'Missing geneea dependency "geneea.catlib". Install internal packages to build EmbeddingDataset.'
-        ) from exc
-    return EmbeddingDataset
-
-
-def _require_corpus_cls() -> Any:
-    from geneea.catlib.data import Corpus
-
-    return Corpus
 
 
 def to_numpy_array(*, matrix_like: Any) -> np.ndarray:
@@ -61,7 +47,6 @@ def build_embedding_dataset(*, corpus: Any, x_matrix: np.ndarray) -> Any:
     :param x_matrix: Feature matrix.
     :return: ``EmbeddingDataset`` instance.
     """
-    EmbeddingDataset = _require_embedding_dataset_cls()
     y_matrix = build_multilabel_targets(corpus=corpus)
     x_tensor = torch.as_tensor(x_matrix, dtype=torch.float32)
     y_tensor = torch.as_tensor(y_matrix, dtype=torch.float32)
@@ -74,18 +59,16 @@ def _build_dataset_with_targets(
     y_matrix: np.ndarray,
     cat_list: Sequence[str] | None = None,
 ) -> Any:
-    embedding_dataset_cls = _require_embedding_dataset_cls()
     setattr(corpus, 'catList', list(cat_list)) # TODO: finf out if this is not stupid 
     x_tensor = torch.as_tensor(x_matrix, dtype=torch.float32)
     y_tensor = torch.as_tensor(y_matrix, dtype=torch.float32)
-    return embedding_dataset_cls(corpus, x_tensor, y_tensor)
+    return EmbeddingDataset(corpus, x_tensor, y_tensor)
 
 
 def merge_datasets(*, left_data: Any, right_data: Any) -> Any:
     """Merge two embedding datasets by concatenating corpus docs and feature matrices."""
-    corpus_cls = _require_corpus_cls()
     merged_docs = list(left_data.corpus) + list(right_data.corpus)
-    merged_corpus = corpus_cls(doc for doc in merged_docs)
+    merged_corpus = Corpus(doc for doc in merged_docs)
     merged_x = np.vstack([to_numpy_array(matrix_like=left_data.X), to_numpy_array(matrix_like=right_data.X)])
     if hasattr(left_data, 'Y') and hasattr(right_data, 'Y'):
         merged_y = np.vstack([to_numpy_array(matrix_like=left_data.Y), to_numpy_array(matrix_like=right_data.Y)])
@@ -101,12 +84,11 @@ def merge_datasets(*, left_data: Any, right_data: Any) -> Any:
 
 def slice_dataset(*, dataset: Any, indices: Sequence[int]) -> Any:
     """Return dataset subset by explicit positional indices."""
-    corpus_cls = _require_corpus_cls()
     docs = list(dataset.corpus)
     x_matrix = to_numpy_array(matrix_like=dataset.X)
     selected_docs = [docs[idx] for idx in indices]
     selected_x = x_matrix[np.asarray(indices, dtype=np.int64)]
-    selected_corpus = corpus_cls(doc for doc in selected_docs)
+    selected_corpus = Corpus(doc for doc in selected_docs)
     if hasattr(dataset, 'Y'):
         y_matrix = to_numpy_array(matrix_like=dataset.Y)
         selected_y = y_matrix[np.asarray(indices, dtype=np.int64)]

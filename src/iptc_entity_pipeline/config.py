@@ -571,6 +571,9 @@ class BestArticleOnlyConfig(BaseConfigWithHPO):
             learning_rates=(0.00037,),
         )
     )
+    embeddings: EmbeddingConfig = field(
+        default_factory=lambda: replace(EmbeddingConfig(), use_entity_embeddings=False)
+    )
 
 def _config_map() -> dict[str, BaseConfig]:
     """Return supported config instances."""
@@ -585,6 +588,8 @@ def _config_map() -> dict[str, BaseConfig]:
         'wpentities_nl': WPEntitiesNlConfig(),
         'wpentities_all_langs': WPEntitiesAllLangsConfig(),
         'wpentities_rel_th_5': WPEntitiesRelTH5(),
+        'best_wpentities': BestWpEntitiesConfig(),
+        'best_article_only': BestArticleOnlyConfig(),
         #'wpentities_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
         #'wpentities_mean': WPEntitiesMeanConfig(),
 
