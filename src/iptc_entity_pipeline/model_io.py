@@ -1,15 +1,15 @@
-"""Persist trained model artifacts and build probability tables."""
+"""Persist trained model artifacts and raw prediction score outputs."""
 
 from __future__ import annotations
 
 import json
 import logging
+import pickle
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import numpy as np
 from clearml import Task
 
 from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf
@@ -17,6 +17,9 @@ from iptc_entity_pipeline.data_loading import sanitize_name
 
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+PREDICTIONS_FILENAME = 'predictions.pkl'
+EVAL_CORPUS_FILENAME = 'eval_corpus.pkl'
 
 
 @dataclass(frozen=True)
@@ -28,30 +31,8 @@ class SavedModelPaths:
     test_embeddings_path: str
     config_yaml_path: str
     parameters_json_path: str
-    probabilities_csv_path: str
-
-
-def build_probability_dataframe(
-    *,
-    dataset: Any,
-    pred_scores: Sequence[Any],
-) -> Any:
-    """Build per-article category probability table from model score outputs."""
-    import pandas as pd
-
-    categories = list(getattr(dataset.corpus, 'catList', []))
-    rows: list[dict[str, Any]] = []
-    for doc, doc_scores in zip(dataset.corpus, pred_scores):
-        row = {
-            'article_id': doc.id,
-            'corpus_name': doc.metadata.get('corpusName', ''),
-        }
-        for cat_id in categories:
-            raw_score = float(doc_scores[cat_id]) if cat_id in doc_scores else float('-inf')
-            clipped_score = float(np.clip(raw_score, -50.0, 50.0))
-            row[f'prob_{cat_id}'] = float(1.0 / (1.0 + np.exp(-clipped_score)))
-        rows.append(row)
-    return pd.DataFrame(rows)
+    predictions_path: str
+    eval_corpus_path: str
 
 
 def save_final_model_outputs(
@@ -67,11 +48,12 @@ def save_final_model_outputs(
     upload_artifacts: bool = False,
 ) -> SavedModelPaths:
     """
-    Save final model bundle and test probability CSV to disk and ClearML.
+    Save final model bundle, raw prediction scores and eval corpus to disk and ClearML.
 
     :param model: Trained model.
     :param test_data: Test dataset.
-    :param pred_scores: Prediction scores for each test document.
+    :param pred_scores: Raw prediction scores for each test document
+        (``list[list[tuple[str, float]]]`` aligned with ``test_data.corpus``).
     :param eval_cnf: Typed evaluation config.
     :param emb_cnf: Typed embedding config.
     :param config_mapping: Full serialized config dict (written to JSON as-is).
@@ -101,12 +83,13 @@ def save_final_model_outputs(
     test_embeddings_path = output_dir / 'test_embeddings.tsv'
     test_data.saveEmbeds(str(test_embeddings_path))
 
-    probabilities_df = build_probability_dataframe(
-        dataset=test_data,
-        pred_scores=pred_scores,
-    )
-    probabilities_csv_path = output_dir / 'test_article_probabilities.csv'
-    probabilities_df.to_csv(probabilities_csv_path, index=False)
+    predictions_path = output_dir / PREDICTIONS_FILENAME
+    with open(predictions_path, 'wb') as f:
+        pickle.dump(list(pred_scores), f)
+
+    eval_corpus_path = output_dir / EVAL_CORPUS_FILENAME
+    with open(eval_corpus_path, 'wb') as f:
+        pickle.dump(test_data.corpus, f)
 
     selected_cat_ids = list(getattr(model, 'catList', []))
     config_data = {
@@ -128,14 +111,16 @@ def save_final_model_outputs(
         json.dump(config_mapping, file, indent=4)
 
     logger.report_text(f'Saved final model bundle to {output_dir.resolve()}')
-    logger.report_text(f'Saved test probability CSV to {probabilities_csv_path.resolve()}')
+    logger.report_text(f'Saved raw predictions to {predictions_path.resolve()}')
+    logger.report_text(f'Saved eval corpus to {eval_corpus_path.resolve()}')
 
     if upload_artifacts:
         task.upload_artifact('saved_model_file', artifact_object=str(model_path))
         task.upload_artifact('saved_model_test_embeddings', artifact_object=str(test_embeddings_path))
         task.upload_artifact('saved_model_config_yaml', artifact_object=str(config_yaml_path))
         task.upload_artifact('saved_model_parameters_json', artifact_object=str(parameters_json_path))
-        task.upload_artifact('saved_model_test_probabilities_csv', artifact_object=str(probabilities_csv_path))
+        task.upload_artifact('saved_model_predictions', artifact_object=str(predictions_path))
+        task.upload_artifact('saved_model_eval_corpus', artifact_object=str(eval_corpus_path))
 
     return SavedModelPaths(
         output_dir=str(output_dir),
@@ -143,5 +128,6 @@ def save_final_model_outputs(
         test_embeddings_path=str(test_embeddings_path),
         config_yaml_path=str(config_yaml_path),
         parameters_json_path=str(parameters_json_path),
-        probabilities_csv_path=str(probabilities_csv_path),
+        predictions_path=str(predictions_path),
+        eval_corpus_path=str(eval_corpus_path),
     )

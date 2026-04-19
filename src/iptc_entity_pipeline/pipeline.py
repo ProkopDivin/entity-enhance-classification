@@ -385,7 +385,6 @@ def eval_final(
     from pathlib import Path
 
     import pandas as pd
-    from geneea.catlib.model.model import filterLabels
     from iptc_entity_pipeline.pipeline import EvalResult
     from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf, config_from_dict
 
@@ -434,52 +433,31 @@ def eval_final(
             list(df_corpora_test.index),
         )
 
-    def build_predictions_dataframe(*, dataset) -> pd.DataFrame:
-        pred_labels = [
-            filterLabels(dc, thr=eval_cfg.threshold_eval, thrByLabel=None, keepWgh=False)
-            for dc in pred_scores
-        ]
-        rows = []
-        for doc, pred in zip(dataset.corpus, pred_labels):
-            rows.append(
-                {
-                    'article_id': doc.id,
-                    'corpus_name': doc.metadata.get('corpusName', ''),
-                    'predicted_categories': '|'.join(sorted(pred)),
-                    'gold_categories': '|'.join(sorted(doc.cats)),
-                }
-            )
-        return pd.DataFrame(rows)
-
-    test_predictions_df = build_predictions_dataframe(dataset=test_data)
-
     logger.report_table(title='Cross Validation Summary', series='Mean+Std', iteration=0, table_plot=cv_dev_df)
     logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
-    project_root = Path(globals().get('PROJECT_ROOT', Path.cwd()))
     model_name = sanitize_name(value=config_name)
-    model_results_dir = project_root / 'results' / model_name
-    model_results_dir.mkdir(parents=True, exist_ok=True)
-    excel_path = model_results_dir / f'final_evaluation_tables_{model_name}.xlsx'
     save_paths = save_final_model_outputs(
         model=trained_model,
         test_data=test_data,
         pred_scores=pred_scores,
-        evaluation_config=eval_cfg,
+        eval_cnf=eval_cfg,
         emb_cnf=emb_cfg,
         config_mapping=config_mapping,
         config_name=config_name,
         feature_dim=feature_dim,
         upload_artifacts=upload_artifacts,
     )
+    output_dir = Path(save_paths.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    excel_path = output_dir / f'final_evaluation_tables_{model_name}.xlsx'
 
     if upload_artifacts:
         task.upload_artifact('dev_corpora_dataframe', artifact_object=cv_dev_df)
         task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
         task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
         task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
-        task.upload_artifact('test_article_predictions', artifact_object=test_predictions_df)
         task.upload_artifact('saved_model_paths', artifact_object=asdict(save_paths))
         task.upload_artifact(
             'evaluation_thresholds',
@@ -495,21 +473,20 @@ def eval_final(
         task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
 
     comparison_cfg = config_mapping.get('evaluation_comparison') or config_mapping.get('comparison') or {}
-    base_probabilities_csv = str(
-        comparison_cfg.get('base_probabilities_csv', '') or eval_cfg.base_probabilities_csv
+    base_run_dir = str(
+        comparison_cfg.get('base_run_dir', '') or eval_cfg.base_run_dir
     ).strip()
     comparison_result = None
-    if base_probabilities_csv:
+    if base_run_dir:
         comparison_result = compare_runs(
-            current_probabilities=save_paths.probabilities_csv_path,
-            base_probabilities=base_probabilities_csv,
-            gold_data=test_data,
+            current_run_dir=save_paths.output_dir,
+            base_run_dir=base_run_dir,
             threshold_eval=eval_cfg.threshold_eval,
             averaging_type=eval_cfg.averaging_type,
             top_n=int(comparison_cfg.get('top_n', 20)),
             only_diff=bool(comparison_cfg.get('only_diff', False)),
             output_path=build_output_path(
-                output_root=str(comparison_cfg.get('output_root', 'results/comparisons')),
+                output_root=str(comparison_cfg.get('output_root', output_dir)),
                 config_name=str(comparison_cfg.get('config_name', config_name)),
             ),
         )

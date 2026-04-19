@@ -1,9 +1,21 @@
-"""Compare evaluation outputs between a current and base run."""
+"""Compare evaluation outputs between a current and base run.
+
+Each run is a directory holding two pickled artifacts produced by
+:func:`iptc_entity_pipeline.model_io.save_final_model_outputs`:
+
+- ``predictions.pkl``: raw weighted predictions, ``list[list[tuple[str, float]]]``
+  aligned positionally with the corpus.
+- ``eval_corpus.pkl``: the ``geneea.catlib.data.Corpus`` used during evaluation,
+  carrying gold labels and ``corpusName`` metadata.
+
+Gold labels for cross-run metrics are derived from the *current* run's corpus.
+"""
 
 from __future__ import annotations
 
 import argparse
 import logging
+import pickle
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,7 +31,8 @@ if __package__ is None or __package__ == '':
         sys.path.insert(0, str(src_root))
 
 from iptc_entity_pipeline.data_loading import sanitize_name
-from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, get_iptc_topics
+from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, evaluate_predictions, get_iptc_topics
+from iptc_entity_pipeline.model_io import EVAL_CORPUS_FILENAME, PREDICTIONS_FILENAME
 
 LOG = logging.getLogger(__name__)
 
@@ -68,9 +81,9 @@ class GoldLabelMap:
     article_map: Mapping[str, GoldArticle]
 
     @classmethod
-    def from_input(cls, *, gold_data: str | Path | pd.DataFrame | Any) -> 'GoldLabelMap':
-        """Load gold labels from dataframe, dataset, or CSV."""
-        df = load_gold_df(gold_data=gold_data)
+    def from_corpus(cls, *, corpus: Any) -> 'GoldLabelMap':
+        """Build a gold label map from a ``geneea.catlib.data.Corpus``."""
+        df = gold_df_from_corpus(corpus=corpus)
         article_map = {
             row.article_id: GoldArticle(
                 article_id=row.article_id,
@@ -80,28 +93,6 @@ class GoldLabelMap:
             for row in df.itertuples(index=False)
         }
         return cls(df=df, article_map=article_map)
-
-    def align_prob_df(self, *, prob_df: pd.DataFrame) -> pd.DataFrame:
-        """Attach cached gold labels to probability rows in gold order."""
-        prob_ids = set(prob_df['article_id'])
-        gold_df = self.df[self.df['article_id'].isin(prob_ids)].copy()
-        if gold_df.empty:
-            raise ValueError('No overlapping article_id values between probabilities and gold labels.')
-
-        prob_cols = [col for col in prob_df.columns if col.startswith('prob_')]
-        prob_part = prob_df[['article_id', 'corpus_name', *prob_cols]].copy()
-        aligned_df = gold_df.merge(
-            prob_part,
-            on='article_id',
-            how='inner',
-            suffixes=('_gold', '_prob'),
-            sort=False,
-        )
-        aligned_df['corpus_name'] = aligned_df['corpus_name_gold'].where(
-            aligned_df['corpus_name_gold'].astype(str).str.len() > 0,
-            aligned_df['corpus_name_prob'],
-        )
-        return aligned_df[['article_id', 'corpus_name', 'gold_categories', *prob_cols]]
 
     def cat_ids(self, *, prob_dfs: Sequence[pd.DataFrame]) -> list[str]:
         """Collect category ids from gold labels plus all probability tables."""
@@ -115,7 +106,10 @@ class GoldLabelMap:
         cat_to_idx = {cat_id: idx for idx, cat_id in enumerate(cat_ids)}
         matrix = np.zeros((len(article_ids), len(cat_ids)), dtype=np.int8)
         for row_idx, article_id in enumerate(article_ids):
-            for cat_id in self.article_map[article_id].gold_categories:
+            gold = self.article_map.get(article_id)
+            if gold is None:
+                continue
+            for cat_id in gold.gold_categories:
                 cat_idx = cat_to_idx.get(cat_id)
                 if cat_idx is not None:
                     matrix[row_idx, cat_idx] = 1
@@ -124,38 +118,71 @@ class GoldLabelMap:
 
 @dataclass(frozen=True)
 class RunEval:
-    """One run after gold alignment and legacy table rebuild."""
+    """One run after table rebuild and per-article alignment."""
 
     aligned_df: pd.DataFrame
     corpora_df: pd.DataFrame
     classes_df: pd.DataFrame
 
 
+def load_run(*, run_dir: str | Path) -> tuple[list[list[tuple[str, float]]], Any]:
+    """Load raw predictions and eval corpus from a saved run directory.
+
+    :param run_dir: Directory containing ``predictions.pkl`` and ``eval_corpus.pkl``.
+    :return: ``(pred_scores, eval_corpus)`` tuple aligned positionally.
+    """
+    run_path = Path(run_dir)
+    predictions_path = run_path / PREDICTIONS_FILENAME
+    eval_corpus_path = run_path / EVAL_CORPUS_FILENAME
+    with open(predictions_path, 'rb') as f:
+        pred_scores = pickle.load(f)
+    with open(eval_corpus_path, 'rb') as f:
+        eval_corpus = pickle.load(f)
+    if len(pred_scores) != len(eval_corpus):
+        raise ValueError(
+            f'Misaligned run {run_path}: predictions={len(pred_scores)} corpus={len(eval_corpus)}'
+        )
+    return pred_scores, eval_corpus
+
+
 def compare_runs(
     *,
-    current_probabilities: str | Path | pd.DataFrame,
-    base_probabilities: str | Path | pd.DataFrame,
-    gold_data: str | Path | pd.DataFrame | Any,
+    current_run_dir: str | Path,
+    base_run_dir: str | Path,
     threshold_eval: float,
     averaging_type: str = 'datapoint',
     top_n: int = 20,
     only_diff: bool = False,
     output_path: str | Path | None = None,
 ) -> ComparisonResult:
-    """Compare current and base probabilities against the same gold labels."""
-    gold_map = GoldLabelMap.from_input(gold_data=gold_data)
-    current_prob_df = load_prob_df(probabilities=current_probabilities)
-    base_prob_df = load_prob_df(probabilities=base_probabilities)
+    """Compare current and base runs loaded from their saved directories.
 
-    current_run = rebuild_run(
-        prob_df=current_prob_df,
-        gold_map=gold_map,
+    Gold labels are derived from the current run's pickled corpus and reused
+    for both runs' cross-run metrics (Hamming loss, PR-AUC).
+
+    :param current_run_dir: Directory of the current run.
+    :param base_run_dir: Directory of the base run.
+    :param threshold_eval: Threshold applied during evaluation.
+    :param averaging_type: One of ``'datapoint'``, ``'micro'``, ``'macro'``.
+    :param top_n: Preview size for improved/degraded categories logging.
+    :param only_diff: Drop base metric columns from comparison sheets.
+    :param output_path: Optional Excel workbook path.
+    :return: Structured :class:`ComparisonResult`.
+    """
+    current_pred, current_corpus = load_run(run_dir=current_run_dir)
+    base_pred, base_corpus = load_run(run_dir=base_run_dir)
+
+    gold_map = GoldLabelMap.from_corpus(corpus=current_corpus)
+
+    current_run = build_run(
+        pred_scores=current_pred,
+        eval_corpus=current_corpus,
         threshold_eval=threshold_eval,
         averaging_type=averaging_type,
     )
-    base_run = rebuild_run(
-        prob_df=base_prob_df,
-        gold_map=gold_map,
+    base_run = build_run(
+        pred_scores=base_pred,
+        eval_corpus=base_corpus,
         threshold_eval=threshold_eval,
         averaging_type=averaging_type,
     )
@@ -176,7 +203,7 @@ def compare_runs(
     classes_cmp_df = diff_only_df(df=classes_cmp_full, key_col='IPTC Category') if only_diff else classes_cmp_full
 
     shared_ids = shared_article_ids(current_df=current_run.aligned_df, base_df=base_run.aligned_df)
-    cat_ids = gold_map.cat_ids(prob_dfs=[current_prob_df, base_prob_df])
+    cat_ids = gold_map.cat_ids(prob_dfs=[current_run.aligned_df, base_run.aligned_df])
 
     summary_df = build_summary_df(current_run=current_run, base_run=base_run)
     top_improved_df, top_degraded_df = build_top_change_dfs(classes_df=classes_cmp_full)
@@ -210,26 +237,21 @@ def compare_runs(
         base_classes=base_run.classes_df,
         excel_path=excel_path,
     )
-    write_csv(result=result, output_path=Path(output_path).parent)
     if excel_path is not None:
+        write_csv(result=result, output_path=excel_path.parent)
         write_excel(result=result, output_path=excel_path)
         log_top_changes(result=result, top_n=top_n)
     return result
 
 
-def rebuild_run(
+def build_run(
     *,
-    prob_df: pd.DataFrame,
-    gold_map: GoldLabelMap,
+    pred_scores: Sequence[Any],
+    eval_corpus: Any,
     threshold_eval: float,
     averaging_type: str,
 ) -> RunEval:
-    """Rebuild legacy corpora/classes tables from probabilities and cached gold labels."""
-    from iptc_entity_pipeline.evaluate import evaluate_predictions
-
-    aligned_df = gold_map.align_prob_df(prob_df=prob_df)
-    eval_corpus = build_eval_corpus(aligned_df=aligned_df)
-    pred_scores = build_pred_scores(df=aligned_df)
+    """Evaluate one run and build its aligned per-article dataframe."""
     corpora_df, classes_df = evaluate_predictions(
         pred_wgh_cats=pred_scores,
         eval_corpus=eval_corpus,
@@ -239,120 +261,59 @@ def rebuild_run(
         per_class=True,
         averaging_type=averaging_type,
     )
+    aligned_df = build_aligned_df(eval_corpus=eval_corpus, pred_scores=pred_scores)
     return RunEval(aligned_df=aligned_df, corpora_df=corpora_df, classes_df=classes_df)
 
 
-def load_prob_df(*, probabilities: str | Path | pd.DataFrame) -> pd.DataFrame:
-    """Load probability table from path or in-memory dataframe."""
-    df = probabilities.copy() if isinstance(probabilities, pd.DataFrame) else pd.read_csv(Path(probabilities))
+def build_aligned_df(*, eval_corpus: Any, pred_scores: Sequence[Any]) -> pd.DataFrame:
+    """Build per-article dataframe with gold categories and dense ``prob_*`` columns."""
+    if len(pred_scores) != len(eval_corpus):
+        raise ValueError(
+            f'Misaligned predictions: predictions={len(pred_scores)} corpus={len(eval_corpus)}'
+        )
+    rows = []
+    for doc, doc_pred in zip(eval_corpus, pred_scores):
+        rows.append(
+            {
+                'article_id': str(doc.id),
+                'corpus_name': str(doc.metadata.get('corpusName', '')),
+                'gold_categories': tuple(sorted(norm_cat_ids(cat_ids=doc.cats))),
+                'pred_scores': [(str(cat_id), float(score)) for cat_id, score in doc_pred],
+            }
+        )
+    base_df = pd.DataFrame(rows)
+    return add_prob_columns(df=base_df)
 
-    required_cols = {'article_id', 'corpus_name'}
-    missing_cols = required_cols.difference(df.columns)
-    if missing_cols:
-        raise ValueError(f'Missing probability columns: {sorted(missing_cols)}')
 
-    prob_cols = [col for col in df.columns if col.startswith('prob_')]
-    if not prob_cols:
-        raise ValueError('Probability input must contain at least one prob_<cat_id> column.')
+def add_prob_columns(*, df: pd.DataFrame) -> pd.DataFrame:
+    """Expand ``pred_scores`` into dense ``prob_<cat_id>`` columns, preserving other columns."""
+    cat_ids = sorted({cat_id for pred_scores in df['pred_scores'] for cat_id, _ in pred_scores})
+    score_dicts = df['pred_scores'].map(dict)
+    prob_data = {
+        f'prob_{cat_id}': score_dicts.map(lambda d, _cid=cat_id: float(d.get(_cid, 0.0)))
+        for cat_id in cat_ids
+    }
+    prob_df = pd.DataFrame(prob_data, index=df.index)
+    return pd.concat([df, prob_df], axis=1)
 
+
+def gold_df_from_corpus(*, corpus: Any) -> pd.DataFrame:
+    """Extract normalized gold dataframe from a ``geneea.catlib.data.Corpus``."""
+    rows = []
+    for doc in corpus:
+        article_id = str(doc.id)
+        rows.append(
+            {
+                'article_id': article_id,
+                'corpus_name': str(doc.metadata.get('corpusName', '')),
+                'gold_categories': tuple(sorted(norm_cat_ids(cat_ids=doc.cats))),
+            }
+        )
+    df = pd.DataFrame(rows)
     dup_ids = df['article_id'][df['article_id'].duplicated()].astype(str).unique().tolist()
     if dup_ids:
-        raise ValueError(f'Duplicate article_id values in probabilities: {dup_ids[:5]}')
-
-    df = df.copy()
-    df['article_id'] = df['article_id'].astype(str)
-    df['corpus_name'] = df['corpus_name'].fillna('').astype(str)
-    df[prob_cols] = df[prob_cols].apply(pd.to_numeric, errors='coerce').fillna(0.0)
+        raise ValueError(f'Duplicate article_id values in eval corpus: {dup_ids[:5]}')
     return df
-
-
-def load_gold_df(*, gold_data: str | Path | pd.DataFrame | Any) -> pd.DataFrame:
-    """Load normalized gold labels from dataframe, dataset, or CSV."""
-    if isinstance(gold_data, pd.DataFrame):
-        return norm_gold_df(df=gold_data.copy())
-    if hasattr(gold_data, 'corpus'):
-        return gold_df_from_dataset(dataset=gold_data)
-
-    gold_path = Path(gold_data)
-    header_df = pd.read_csv(gold_path, nrows=0)
-    header_cols = set(header_df.columns)
-    if {'article_id', 'gold_categories'}.issubset(header_cols):
-        return norm_gold_df(df=pd.read_csv(gold_path))
-    if {'id', 'cats', 'metadata'}.issubset(header_cols):
-        return gold_df_from_corpus_csv(gold_path=gold_path)
-    raise ValueError(
-        'Unsupported gold input format. Expected normalized comparison CSV with '
-        'article_id/gold_categories columns or a corpus CSV with id/cats/metadata columns.'
-    )
-
-
-def norm_gold_df(*, df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize gold dataframe into article_id/corpus_name/gold_categories columns."""
-    df = df.rename(
-        columns={
-            'id': 'article_id',
-            'corpus': 'corpus_name',
-            'gold_labels': 'gold_categories',
-            'cats': 'gold_categories',
-        }
-    ).copy()
-    required_cols = {'article_id', 'gold_categories'}
-    missing_cols = required_cols.difference(df.columns)
-    if missing_cols:
-        raise ValueError(f'Missing gold columns: {sorted(missing_cols)}')
-    if 'corpus_name' not in df.columns:
-        df['corpus_name'] = ''
-
-    dup_ids = df['article_id'][df['article_id'].duplicated()].astype(str).unique().tolist()
-    if dup_ids:
-        raise ValueError(f'Duplicate article_id values in gold data: {dup_ids[:5]}')
-
-    df['article_id'] = df['article_id'].astype(str)
-    df['corpus_name'] = df['corpus_name'].fillna('').astype(str)
-    df['gold_categories'] = df['gold_categories'].map(parse_gold_cats)
-    return df[['article_id', 'corpus_name', 'gold_categories']]
-
-
-def gold_df_from_dataset(*, dataset: Any) -> pd.DataFrame:
-    """Extract normalized gold dataframe from an in-memory evaluation dataset."""
-    rows = [
-        {
-            'article_id': str(doc.id),
-            'corpus_name': str(doc.metadata.get('corpusName', '')),
-            'gold_categories': tuple(sorted(norm_cat_ids(cat_ids=doc.cats))),
-        }
-        for doc in dataset.corpus
-    ]
-    return norm_gold_df(df=pd.DataFrame(rows))
-
-
-def gold_df_from_corpus_csv(*, gold_path: Path) -> pd.DataFrame:
-    """Load and normalize gold labels from a legacy corpus CSV."""
-    from geneea.catlib.data import Corpus
-    from iptc_entity_pipeline.data_loading import _ensure_csv_field_limit
-    _ensure_csv_field_limit()
-    rows = [
-        {
-            'article_id': str(doc.id),
-            'corpus_name': str(doc.metadata.get('corpusName', '')),
-            'gold_categories': tuple(sorted(norm_cat_ids(cat_ids=doc.cats))),
-        }
-        for doc in Corpus.fromCsv(str(gold_path))
-    ]
-    return norm_gold_df(df=pd.DataFrame(rows))
-
-
-def parse_gold_cats(value: Any) -> tuple[str, ...]:
-    """Parse and normalize one gold category payload."""
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        cat_ids: Sequence[str] = ()
-    elif isinstance(value, str):
-        cat_ids = [part.strip() for part in value.split('|') if part.strip()]
-    elif isinstance(value, (list, tuple, set)):
-        cat_ids = [str(part).strip() for part in value if str(part).strip()]
-    else:
-        raise TypeError(f'Unsupported gold category value type: {type(value)}')
-    return tuple(sorted(norm_cat_ids(cat_ids=cat_ids)))
 
 
 def norm_cat_ids(*, cat_ids: Sequence[str]) -> list[str]:
@@ -368,31 +329,6 @@ def norm_cat_ids(*, cat_ids: Sequence[str]) -> list[str]:
             LOG.warning('Skipping unknown IPTC category during normalization: cat_id=%s', cat_id)
     norm_cats = iptc_topics.normalizeCategories(valid_cats)
     return [cat.id for cat in norm_cats if cat.id and cat.id not in REMOVED_CAT_IDS]
-
-
-def build_eval_corpus(*, aligned_df: pd.DataFrame) -> Any:
-    """Construct a minimal evaluation corpus from aligned labels."""
-    from geneea.catlib.data import Corpus, Doc
-
-    docs = [
-        Doc(
-            id=str(row.article_id),
-            title='',
-            lead='',
-            text='',
-            cats=list(row.gold_categories),
-            metadata={'corpusName': str(row.corpus_name)},
-        )
-        for row in aligned_df.itertuples(index=False)
-    ]
-    return Corpus(docs)
-
-
-def build_pred_scores(*, df: pd.DataFrame) -> list[list[tuple[str, float]]]:
-    """Convert probability columns into legacy label-score tuples."""
-    prob_cols = [col for col in df.columns if col.startswith('prob_')]
-    cat_ids = [col.removeprefix('prob_') for col in prob_cols]
-    return [[(cat_id, float(score)) for cat_id, score in zip(cat_ids, row)] for row in df[prob_cols].itertuples(index=False, name=None)]
 
 
 def build_cmp_df(
@@ -491,11 +427,11 @@ def build_top_change_dfs(*, classes_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.
 
 
 def shared_article_ids(*, current_df: pd.DataFrame, base_df: pd.DataFrame) -> list[str]:
-    """Return article ids shared by current and base runs in gold order."""
+    """Return article ids shared by current and base runs in current order."""
     base_ids = set(base_df['article_id'])
     article_ids = [article_id for article_id in current_df['article_id'] if article_id in base_ids]
     if not article_ids:
-        raise ValueError('Current and base probabilities do not share any aligned article_id values.')
+        raise ValueError('Current and base runs do not share any aligned article_id values.')
     return article_ids
 
 
@@ -608,6 +544,7 @@ def average_precision(*, y_true: np.ndarray, y_score: np.ndarray) -> float:
     recall = np.concatenate(([0.0], recall))
     return float(np.sum((recall[1:] - recall[:-1]) * precision[1:]))
 
+
 def write_csv(*, result: ComparisonResult, output_path: Path) -> None:
     """Persist comparison outputs into CSV files."""
     output_path.mkdir(parents=True, exist_ok=True)
@@ -623,6 +560,7 @@ def write_csv(*, result: ComparisonResult, output_path: Path) -> None:
     result.current_classes.to_csv(output_path / 'current_classes.csv', index=False)
     result.base_corpora.to_csv(output_path / 'base_corpora.csv', index=False)
     result.base_classes.to_csv(output_path / 'base_classes.csv', index=False)
+
 
 def write_excel(*, result: ComparisonResult, output_path: Path) -> None:
     """Persist comparison outputs into one Excel workbook."""
@@ -640,8 +578,7 @@ def write_excel(*, result: ComparisonResult, output_path: Path) -> None:
         result.current_classes.to_excel(writer, sheet_name='current_classes')
         result.base_corpora.to_excel(writer, sheet_name='base_corpora')
         result.base_classes.to_excel(writer, sheet_name='base_classes')
-    
-    
+
 
 def log_top_changes(*, result: ComparisonResult, top_n: int) -> None:
     """Log concise previews of top improved and degraded categories."""
@@ -663,12 +600,17 @@ def build_output_path(*, output_root: str | Path, config_name: str) -> Path:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Create CLI parser for standalone run comparison."""
-    parser = argparse.ArgumentParser(description='Compare current and base evaluation outputs.')
-    parser.add_argument('--current-probabilities', required=True, help='Current probability CSV path.')
-    parser.add_argument('--base-probabilities', required=True, help='Base probability CSV path.')
-    parser.add_argument('--gold-input', required=True, help='Gold labels CSV path.')
+    parser = argparse.ArgumentParser(description='Compare current and base evaluation runs.')
+    parser.add_argument(
+        '--current-run', '-c', required=True,
+        help='Current run directory containing predictions.pkl and eval_corpus.pkl.',
+    )
+    parser.add_argument(
+        '--base-run', '-b', required=True,
+        help='Base run directory containing predictions.pkl and eval_corpus.pkl.',
+    )
     parser.add_argument('--config-name', default='comparison', help='Output name fragment.')
-    parser.add_argument('--threshold-eval', type=float, required=True, help='Evaluation threshold.')
+    parser.add_argument('--threshold-eval', type=float, default=0.5, help='Evaluation threshold.')
     parser.add_argument('--averaging-type', default='datapoint', choices=['datapoint', 'micro', 'macro'])
     parser.add_argument('--top-n', type=int, default=20, help='Preview size for improved/degraded categories.')
     parser.add_argument('--only-diff', action='store_true', help='Drop base metric columns from comparison sheets.')
@@ -686,9 +628,8 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     output_path = build_output_path(output_root=args.output_root, config_name=args.config_name)
     compare_runs(
-        current_probabilities=args.current_probabilities,
-        base_probabilities=args.base_probabilities,
-        gold_data=args.gold_input,
+        current_run_dir=args.current_run,
+        base_run_dir=args.base_run,
         threshold_eval=args.threshold_eval,
         averaging_type=args.averaging_type,
         top_n=args.top_n,
