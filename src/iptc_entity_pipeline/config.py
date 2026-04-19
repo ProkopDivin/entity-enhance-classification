@@ -15,7 +15,7 @@ def config_from_dict(cls, d: Mapping[str, Any]):
 
     
 @dataclass(frozen=True)
-class PathsConfig:
+class PathsCnf:
     """Filesystem paths for data and artifacts."""
 
     train_csv: str = f'{DATA_ROOT}/gold-chrono-per-dataset/all-corpora-train-entities.csv'
@@ -28,7 +28,7 @@ class PathsConfig:
 
 
 @dataclass(frozen=True)
-class EmbeddingConfig:
+class EmbeddingCnf:
     """Embedding loading and fallback-computation parameters."""
 
     article_model_name: str = 'paraphrase-multilingual-MiniLM-L12-v2-300-0.3'
@@ -44,7 +44,7 @@ class EmbeddingConfig:
 
 
 @dataclass(frozen=True)
-class ModelConfig:
+class ModelCnf:
     """Scalar model architecture parameters for a single training run."""
 
     hidden_dim: int = 1024
@@ -53,7 +53,7 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
-class TrainingConfig:
+class TrainingCnf:
     """Scalar training loop parameters for a single training run."""
 
     epochs: int = 100
@@ -85,16 +85,16 @@ class HyperparamSpace:
     learning_rates: tuple[float, ...] = (0.00037,)
 
     def iter_combinations(
-        self, base_training: TrainingConfig,
-    ) -> list[tuple[ModelConfig, TrainingConfig]]:
-        """Expand grid into all ``(ModelConfig, TrainingConfig)`` combinations.
+        self, base_training: TrainingCnf,
+    ) -> list[tuple[ModelCnf, TrainingCnf]]:
+        """Expand grid into all ``(ModelCnf, TrainingCnf)`` combinations.
 
         :param base_training: Base training config whose non-grid fields are preserved.
-        :return: List of ``(ModelConfig, TrainingConfig)`` tuples.
+        :return: List of ``(ModelCnf, TrainingCnf)`` tuples.
         """
         return [
             (
-                ModelConfig(hidden_dim=hd, dropouts1=d1, dropouts2=d2),
+                ModelCnf(hidden_dim=hd, dropouts1=d1, dropouts2=d2),
                 replace(base_training, batch_size=bs, learning_rate=lr),
             )
             for hd, d1, d2, bs, lr in product(
@@ -105,7 +105,7 @@ class HyperparamSpace:
 
 
 @dataclass(frozen=True)
-class EvaluationConfig:
+class EvaluationCnf:
     """Evaluation behavior and threshold settings."""
 
     threshold_predict: float = -9999
@@ -117,7 +117,7 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True)
-class CvConfig:
+class CvCnf:
     """Cross-validation setup."""
 
     folds: int = 5
@@ -125,16 +125,16 @@ class CvConfig:
 
 
 @dataclass(frozen=True)
-class BaseConfig:
+class BaseCnf:
     """Top-level pipeline config grouped by concern."""
 
-    paths: PathsConfig = field(default_factory=PathsConfig)
-    embeddings: EmbeddingConfig = field(default_factory=EmbeddingConfig)
-    model: ModelConfig = field(default_factory=ModelConfig)
-    training: TrainingConfig = field(default_factory=TrainingConfig)
-    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
-    cv: CvConfig = field(default_factory=CvConfig)
-    hyperparam_space: HyperparamSpace = field(default_factory=HyperparamSpace)
+    paths: PathsCnf = field(default_factory=PathsCnf)
+    emb: EmbeddingCnf = field(default_factory=EmbeddingCnf)
+    model: ModelCnf = field(default_factory=ModelCnf)
+    train: TrainingCnf = field(default_factory=TrainingCnf)
+    eval: EvaluationCnf = field(default_factory=EvaluationCnf)
+    cv: CvCnf = field(default_factory=CvCnf)
+    hparam: HyperparamSpace = field(default_factory=HyperparamSpace)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
@@ -147,10 +147,10 @@ class BaseConfig:
         return asdict(self)
 
 @dataclass(frozen=True)
-class BaseConfigWithHPO(BaseConfig):
+class BaseCnfWithHPO(BaseCnf):
     """Base configuration with hyperparameter space."""
     debug: bool = field(default_factory=lambda: False)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(384, 1024, 2048, 4096, 8192,),
@@ -161,25 +161,25 @@ class BaseConfigWithHPO(BaseConfig):
     ) 
 
 @dataclass(frozen=True)
-class WpEntitiesConfig(BaseConfigWithHPO):
+class WpEntitiesCnf(BaseCnfWithHPO):
     """Default entity-enhanced configuration."""
 
 @dataclass(frozen=True)
-class WPEntitiesMeanConfig(BaseConfig):
+class WPEntitiesMeanCnf(BaseCnf):
     """Entity-enhanced configuration with mean pooling."""
 
-    embeddings: EmbeddingConfig = field(
-        default_factory=lambda: replace(EmbeddingConfig(), entity_pooling='mean')
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
     )
 
 
 @dataclass(frozen=True)
-class WPEntitiesWeightedMeanConfig(BaseConfigWithHPO):
+class WPEntitiesWeightedMeanCnf(BaseCnfWithHPO):
     """Entity-enhanced config with relevance-weighted mean pooling enabled."""
 
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             use_entity_relevance_weights=True,
             entity_pooling='weighted_mean',
         )
@@ -187,29 +187,29 @@ class WPEntitiesWeightedMeanConfig(BaseConfigWithHPO):
 
 
 @dataclass(frozen=True)
-class ArticleOnlyConfig(BaseConfigWithHPO):
+class ArticleOnlyCnf(BaseCnfWithHPO):
     """Article-only configuration without entity embeddings."""
 
-    embeddings: EmbeddingConfig = field(
-        default_factory=lambda: replace(EmbeddingConfig(), use_entity_embeddings=False)
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_entity_embeddings=False)
     )
 
 
 
 @dataclass(frozen=True)
-class DebugConfig(BaseConfig):
+class DebugCnf(BaseCnf):
     """Debug configuration for quick local runs."""
 
-    paths: PathsConfig = field(
-        default_factory=lambda: PathsConfig(
+    paths: PathsCnf = field(
+        default_factory=lambda: PathsCnf(
             train_csv=f'{DATA_ROOT}/debug/all-corpora-train-entities.csv',
             test_csv=f'{DATA_ROOT}/debug/all-corpora-test-entities.csv',
             wdid_mapping_tsv=f'{DATA_ROOT}/debug/wdId_mapping.tsv',
         )
     )
-    model: ModelConfig = field(default_factory=lambda: replace(ModelConfig(), dropouts1=0.1))
-    training: TrainingConfig = field(default_factory=lambda: replace(TrainingConfig(), epochs=5))
-    hyperparam_space: HyperparamSpace = field(
+    model: ModelCnf = field(default_factory=lambda: replace(ModelCnf(), dropouts1=0.1))
+    train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), epochs=5))
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -218,61 +218,61 @@ class DebugConfig(BaseConfig):
             learning_rates=(0.00037,),
         )
     )
-    cv: CvConfig = field(default_factory=lambda: replace(CvConfig(), folds=2))
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), folds=2))
     debug: bool = False
 
 
 
 @dataclass(frozen=True)
-class WPEntitiesEnDeConfig(BaseConfig):
+class WPEntitiesEnDeCnf(BaseCnf):
     """Entity-enhanced configuration with English and German entity embeddings."""
-    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de')))
+    emb: EmbeddingCnf = field(default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'de')))
 
 
 @dataclass(frozen=True)
-class WPEntitiesEnEsConfig(BaseConfig):
+class WPEntitiesEnEsCnf(BaseCnf):
     """Entity-enhanced configuration with English and Spanish entity embeddings."""
-    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'es')))
+    emb: EmbeddingCnf = field(default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'es')))
 
 
 @dataclass(frozen=True)
-class WPEntitiesEnNlConfig(BaseConfigWithHPO):
+class WPEntitiesEnNlCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration with English and Dutch entity embeddings."""
-    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'nl')))
+    emb: EmbeddingCnf = field(default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'nl')))
 
 
 @dataclass(frozen=True)
-class WPEntitiesEnFrConfig(BaseConfig):
+class WPEntitiesEnFrCnf(BaseCnf):
     """Entity-enhanced configuration with English and French entity embeddings."""
-    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'fr')))
+    emb: EmbeddingCnf = field(default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'fr')))
 
 
 @dataclass(frozen=True)
-class WPEntitiesEnCsConfig(BaseConfig):
+class WPEntitiesEnCsCnf(BaseCnf):
     """Entity-enhanced configuration with English and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'cs')))
+    emb: EmbeddingCnf = field(default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'cs')))
 
 
 @dataclass(frozen=True)
-class WPEntitiesAllLangsConfig(BaseConfigWithHPO):
+class WPEntitiesAllLangsCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration with all supported entity embedding languages."""
-    embeddings: EmbeddingConfig = field(
-        default_factory=lambda: replace(EmbeddingConfig(), entity_langs=('en', 'de', 'es', 'nl', 'fr', 'cs'))
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'de', 'es', 'nl', 'fr', 'cs'))
     )
 
 
 @dataclass(frozen=True)
-class WPEntitiesRelTH(BaseConfig):
+class WPEntitiesRelTH(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=0.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -283,17 +283,17 @@ class WPEntitiesRelTH(BaseConfig):
     )   
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH1(BaseConfig):
+class WPEntitiesRelTH1(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=1.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -304,17 +304,17 @@ class WPEntitiesRelTH1(BaseConfig):
     )   
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH3(BaseConfig):
+class WPEntitiesRelTH3(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=3.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),  
             hidden_dims=(1024, ),
@@ -325,17 +325,17 @@ class WPEntitiesRelTH3(BaseConfig):
     )   
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH5(BaseConfigWithHPO):
+class WPEntitiesRelTH5(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=5.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -346,17 +346,17 @@ class WPEntitiesRelTH5(BaseConfigWithHPO):
     )   
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH7(BaseConfig):
+class WPEntitiesRelTH7(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=7.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -368,17 +368,17 @@ class WPEntitiesRelTH7(BaseConfig):
     
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH9(BaseConfig):
+class WPEntitiesRelTH9(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=9.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -391,17 +391,17 @@ class WPEntitiesRelTH9(BaseConfig):
     
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH11(BaseConfig):
+class WPEntitiesRelTH11(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=11.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -414,17 +414,17 @@ class WPEntitiesRelTH11(BaseConfig):
     
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH13(BaseConfig):
+class WPEntitiesRelTH13(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=13.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -436,27 +436,27 @@ class WPEntitiesRelTH13(BaseConfig):
     
 
 @dataclass(frozen=True)
-class WPEntitiesNlConfig(BaseConfigWithHPO):
+class WPEntitiesNlCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration with English and Dutch entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('nl',),
         )
     )
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH15(BaseConfig):
+class WPEntitiesRelTH15(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=15.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -468,17 +468,17 @@ class WPEntitiesRelTH15(BaseConfig):
     
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH17(BaseConfig):
+class WPEntitiesRelTH17(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=17.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -489,17 +489,17 @@ class WPEntitiesRelTH17(BaseConfig):
     )   
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH999(BaseConfig):
+class WPEntitiesRelTH999(BaseCnf):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_langs=('en',),
             entity_relevance_threshold=999.0,
         )
     )
     debug: bool = field(default_factory=lambda: True)
-    hyperparam_space: HyperparamSpace = field(
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -511,34 +511,34 @@ class WPEntitiesRelTH999(BaseConfig):
     
 
 @dataclass(frozen=True)
-class WPEntitiesMentionWeightedSumConfig(BaseConfigWithHPO):
+class WPEntitiesMentionWeightedSumCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration with mention-weighted sum pooling enabled."""
 
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_pooling='weighted_sum',
         )
     )
 
 
 @dataclass(frozen=True)
-class WPEntitiesRelevanceWeightedSumConfig(BaseConfigWithHPO):
+class WPEntitiesRelevanceWeightedSumCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration with relevance-weighted sum pooling enabled."""
 
-    embeddings: EmbeddingConfig = field(
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            EmbeddingConfig(),
+            EmbeddingCnf(),
             entity_pooling='weighted_sum_relevance',
         )
     )
 
 
-def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
+def resolve_paths(config: BaseCnf, root_dir: str | Path) -> BaseCnf:
     """Return a config with absolute paths resolved from ``root_dir``."""
     root_path = Path(root_dir)
     paths = config.paths
-    resolved_paths = PathsConfig(
+    resolved_paths = PathsCnf(
         train_csv=str(root_path / paths.train_csv),
         test_csv=str(root_path / paths.test_csv),
         wdid_mapping_tsv=str(root_path / paths.wdid_mapping_tsv),
@@ -550,8 +550,9 @@ def resolve_paths(config: BaseConfig, root_dir: str | Path) -> BaseConfig:
     return replace(config, paths=resolved_paths)
 
 
-class BestWpEntitiesConfig(BaseConfigWithHPO):
-    hyperparam_space: HyperparamSpace = field(
+@dataclass(frozen=True)
+class BestWpEntitiesCnf(BaseCnfWithHPO):
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(1024, ),
@@ -561,8 +562,9 @@ class BestWpEntitiesConfig(BaseConfigWithHPO):
         )
     )
     
-class BestArticleOnlyConfig(BaseConfigWithHPO):
-    hyperparam_space: HyperparamSpace = field(
+@dataclass(frozen=True)
+class BestArticleOnlyCnf(BaseCnfWithHPO):
+    hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
             hidden_dims=(2048, ),
@@ -571,49 +573,29 @@ class BestArticleOnlyConfig(BaseConfigWithHPO):
             learning_rates=(0.00037,),
         )
     )
-    embeddings: EmbeddingConfig = field(
-        default_factory=lambda: replace(EmbeddingConfig(), use_entity_embeddings=False)
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_entity_embeddings=False)
     )
 
-def _config_map() -> dict[str, BaseConfig]:
+def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
     return {
-        'debug': DebugConfig(),
-        'article_only': ArticleOnlyConfig(),
-        'wpentities': WpEntitiesConfig(),
-        'wpentities_weighted_mean': WPEntitiesWeightedMeanConfig(),
-        'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumConfig(),
-        'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
-        'wpentities_en_nl': WPEntitiesEnNlConfig(),
-        'wpentities_nl': WPEntitiesNlConfig(),
-        'wpentities_all_langs': WPEntitiesAllLangsConfig(),
+        'debug': DebugCnf(),
+        'article_only': ArticleOnlyCnf(),
+        'wpentities': WpEntitiesCnf(),
+        'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
+        'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumCnf(),
+        'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumCnf(),
+        'wpentities_en_nl': WPEntitiesEnNlCnf(),
+        'wpentities_nl': WPEntitiesNlCnf(),
+        'wpentities_all_langs': WPEntitiesAllLangsCnf(),
         'wpentities_rel_th_5': WPEntitiesRelTH5(),
-        'best_wpentities': BestWpEntitiesConfig(),
-        'best_article_only': BestArticleOnlyConfig(),
-        #'wpentities_weighted_sum': WPEntitiesMentionWeightedSumConfig(),
-        #'wpentities_mean': WPEntitiesMeanConfig(),
-
-        #'wpentities_en_de': WPEntitiesEnDeConfig(),
-        #'wpentities_en_es': WPEntitiesEnEsConfig(),
-        
-        #'wpentities_en_fr': WPEntitiesEnFrConfig(),
-        #'wpentities_en_cs': WPEntitiesEnCsConfig(),
-        
-        #'wpentities_rel_th': WPEntitiesRelTH(),
-        #'wpentities_rel_th_1': WPEntitiesRelTH1(),
-        #'wpentities_rel_th_3': WPEntitiesRelTH3(),
-        
-        #'wpentities_rel_th_7': WPEntitiesRelTH7(),
-        #'wpentities_rel_th_9': WPEntitiesRelTH9(),
-        #'wpentities_rel_th_11': WPEntitiesRelTH11(),
-        #'wpentities_rel_th_13': WPEntitiesRelTH13(),
-        #'wpentities_rel_th_15': WPEntitiesRelTH15(),
-        #'wpentities_rel_th_17': WPEntitiesRelTH17(),
-        #'wpentities_rel_th_999': WPEntitiesRelTH999(),
+        'best_wpentities': BestWpEntitiesCnf(),
+        'best_article_only': BestArticleOnlyCnf(),
     }
 
 
-def get_config(config_name: str) -> BaseConfig:
+def get_config(config_name: str) -> BaseCnf:
     """
     Return config variant by name.
 
@@ -643,4 +625,4 @@ def list_config_names() -> tuple[str, ...]:
 
 
 # Backward compatibility alias for older imports.
-PipelineConfig = BaseConfig
+PipelineCnf = BaseCnf

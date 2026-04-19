@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from clearml import Task
 
-from iptc_entity_pipeline.config import EmbeddingConfig, EvaluationConfig
+from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf
 from iptc_entity_pipeline.data_loading import sanitize_name
 
 LOGGER = logging.getLogger(__name__)
@@ -59,8 +59,8 @@ def save_final_model_outputs(
     model: Any,
     test_data: Any,
     pred_scores: Sequence[Any],
-    evaluation_config: EvaluationConfig,
-    embedding_config: EmbeddingConfig,
+    eval_cnf: EvaluationCnf,
+    emb_cnf: EmbeddingCnf,
     config_mapping: Mapping[str, Any],
     config_name: str,
     feature_dim: int,
@@ -72,8 +72,8 @@ def save_final_model_outputs(
     :param model: Trained model.
     :param test_data: Test dataset.
     :param pred_scores: Prediction scores for each test document.
-    :param evaluation_config: Typed evaluation config.
-    :param embedding_config: Typed embedding config.
+    :param eval_cnf: Typed evaluation config.
+    :param emb_cnf: Typed embedding config.
     :param config_mapping: Full serialized config dict (written to JSON as-is).
     :param config_name: Config variant name.
     :param feature_dim: Input feature dimensionality.
@@ -111,10 +111,10 @@ def save_final_model_outputs(
     selected_cat_ids = list(getattr(model, 'catList', []))
     config_data = {
         'testEmbeddingPath': str(test_embeddings_path),
-        'embedSvcModelId': embedding_config.article_model_name,
+        'embedSvcModelId': emb_cnf.article_model_name,
         'embedDim': int(feature_dim),
         'nnModelPath': str(model_path),
-        'threshold': evaluation_config.threshold_eval,
+        'threshold': eval_cnf.threshold_eval,
         'thresholdByTopic': {},
         'selectedTopics': [get_cat_name(cat_id=cat_id) for cat_id in selected_cat_ids],
     }

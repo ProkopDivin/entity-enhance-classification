@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from iptc_entity_pipeline.config import ModelConfig, TrainingConfig
+from iptc_entity_pipeline.config import ModelCnf, TrainingCnf
 from iptc_entity_pipeline.dataset_builder import to_numpy_array
 from iptc_entity_pipeline.legacy_reuse import createClassificationModel, trainClassificationModel
 
@@ -42,7 +42,7 @@ class CvFoldCurves:
     dev_f1_per_epoch: tuple[float, ...]
 
 
-def combo_params_json(*, model_config: ModelConfig, training_config: TrainingConfig) -> str:
+def combo_params_json(*, model_config: ModelCnf, training_config: TrainingCnf) -> str:
     """Serialize selected hyperparameters as JSON for tabular display."""
     payload = {
         'hidden_dim': model_config.hidden_dim,
@@ -54,7 +54,7 @@ def combo_params_json(*, model_config: ModelConfig, training_config: TrainingCon
     return json.dumps(payload, sort_keys=True)
 
 
-def model_payload(*, model_config: ModelConfig) -> dict[str, Any]:
+def model_payload(*, model_config: ModelCnf) -> dict[str, Any]:
     """Build model payload expected by legacy model factory."""
     return {
         'hiddenDim': model_config.hidden_dim,
@@ -63,7 +63,7 @@ def model_payload(*, model_config: ModelConfig) -> dict[str, Any]:
     }
 
 
-def train_payload(*, training_config: TrainingConfig) -> dict[str, Any]:
+def train_payload(*, training_config: TrainingCnf) -> dict[str, Any]:
     """Build training payload expected by legacy training entrypoint."""
     return {
         'epochs': training_config.epochs,
@@ -95,8 +95,8 @@ def train_model(
     train_data: Any,
     dev_data: Any,
     feature_dim: int,
-    model_config: ModelConfig,
-    training_config: TrainingConfig,
+    model_config: ModelCnf,
+    training_config: TrainingCnf,
     print_logs: bool = True,
 ) -> TrainingResult:
     """
