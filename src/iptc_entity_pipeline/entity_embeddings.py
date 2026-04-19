@@ -113,7 +113,7 @@ class EntityEmbeddingStore:
         if not chunks_all_langs:
             self._cache[wdid] = None
             return None
-
+        # there can be multiple chunks for the same wdid when the entity is too long 
         embedding = np.mean(np.vstack(chunks_all_langs), axis=0, dtype=np.float32)
         self._cache[wdid] = embedding
         return embedding

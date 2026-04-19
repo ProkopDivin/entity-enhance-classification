@@ -13,19 +13,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from geneea.catlib.data import Doc  # type: ignore
+from geneea.catlib.data import Corpus, CorpusGroup, Doc  # type: ignore
+from geneea.mediacats import iptc  # type: ignore
 
 LOGGER = logging.getLogger(__name__)
 
 
 class DocWithEntities(Doc):
     """Doc subclass allowing a mutable ``entities`` attribute."""
-
     @classmethod
-    def from_doc(cls, *, doc: Doc, entities: Sequence[Any]) -> 'DocWithEntities':
+    def from_doc(cls, *, doc: Doc, entities: Sequence[LinkedEntity]) -> 'DocWithEntities':
         """Create enriched doc copy with attached entities."""
         enriched = cls._make(doc)
-        enriched.entities = list(entities)
+        enriched.entities = entities
         return enriched
 
 
@@ -38,17 +38,6 @@ class LinkedEntity:
     relevance: float
     mention_count: int = 1
     raw_entity: Mapping[str, Any] | None = None
-
-
-def _require_geneea():
-    try:
-        from geneea.catlib.data import Corpus, CorpusGroup  # type: ignore
-        from geneea.mediacats import iptc  # type: ignore
-    except ImportError as exc:  # pragma: no cover - environment-specific
-        raise ImportError(
-            'Missing geneea dependencies. Install internal geneea.* packages to run the pipeline.'
-        ) from exc
-    return Corpus, CorpusGroup, iptc
 
 
 def load_and_normalize_corpora(
@@ -70,7 +59,6 @@ def load_and_normalize_corpora(
     :return: ``CorpusGroup`` with synchronized train/test category space.
     """
     _ensure_csv_field_limit()
-    Corpus, CorpusGroup, iptc = _require_geneea()
     iptc_cats = iptc.IptcTopics.load()
     removed_cat_ids_set = frozenset(removed_cat_ids)
     unknown_cat_ids_seen: set[str] = set()
@@ -375,17 +363,17 @@ def attach_entities_to_corpus(
     )
 
 
-def get_doc_wdids(doc: Any) -> list[str]:
+def get_doc_wdids(doc: DocWithEntities) -> list[str]:
     """
     Extract flat wdId list from ``doc.entities``.
 
     :param doc: Corpus document with attached :class:`LinkedEntity` objects.
     :return: List of all wdIds across the document's linked entities.
     """
-    return [wd_id for ent in getattr(doc, 'entities', []) for wd_id in ent.wd_ids]
+    return [wd_id for ent in doc.entities for wd_id in ent.wd_ids]
 
 
-def get_doc_weighted_wdids(doc: Any) -> list[tuple[str, float]]:
+def get_doc_weighted_wdids(doc: DocWithEntities) -> list[tuple[str, float]]:
     """
     Extract ``(wdId, weight)`` pairs from ``doc.entities``.
 
@@ -396,16 +384,16 @@ def get_doc_weighted_wdids(doc: Any) -> list[tuple[str, float]]:
     :return: List of ``(wdId, weight)`` pairs.
     """
     weighted_wdids: list[tuple[str, float]] = []
-    for ent in getattr(doc, 'entities', []):
-        wd_ids = tuple(getattr(ent, 'wd_ids', ()))
+    for ent in doc.entities:
+        wd_ids = ent.wd_ids
         if not wd_ids:
             continue
-        weight = float(getattr(ent, 'relevance', 0.0)) / len(wd_ids)
+        weight = ent.relevance / len(wd_ids)
         weighted_wdids.extend((wd_id, weight) for wd_id in wd_ids)
     return weighted_wdids
 
 
-def get_doc_wdid_mention_counts(doc: Any) -> list[tuple[str, float]]:
+def get_doc_wdid_mention_counts(doc: DocWithEntities) -> list[tuple[str, float]]:
     """
     Extract ``(wdId, mention_count)`` pairs from ``doc.entities``.
 
@@ -418,26 +406,26 @@ def get_doc_wdid_mention_counts(doc: Any) -> list[tuple[str, float]]:
     :return: List of ``(wdId, mention_count)`` pairs.
     """
     mention_counts: dict[str, float] = {}
-    for ent in getattr(doc, 'entities', []):
-        wd_ids = tuple(getattr(ent, 'wd_ids', ()))
+    for ent in doc.entities:
+        wd_ids = ent.wd_ids
         if not wd_ids:
             continue
-        entity_mention_count = float(getattr(ent, 'mention_count', 1))
+        entity_mention_count = ent.mention_count
         split_count = entity_mention_count / len(wd_ids)
         for wd_id in wd_ids:
             mention_counts[wd_id] = mention_counts.get(wd_id, 0.0) + split_count
     return list(mention_counts.items())
 
 
-def get_article_text(doc: Any) -> str:
+def get_article_text(doc: DocWithEntities) -> str:
     """
     Compose deterministic text used for fallback article embeddings.
 
     :param doc: Corpus document.
     :return: Concatenated text from title, lead, and body.
     """
-    title = getattr(doc, 'title', '') or ''
-    lead = getattr(doc, 'lead', '') or ''
-    text = getattr(doc, 'text', '') or ''
+    title = doc.title or ''
+    lead = doc.lead or ''
+    text = doc.text or ''
     return '\n\n'.join(part.strip() for part in [title, lead, text] if part and part.strip())
 

@@ -18,7 +18,7 @@ def _unit_weighted_wdids(*, doc: DocWithEntities) -> list[tuple[str, float]]:
     return [(wd_id, 1.0) for wd_id in get_doc_wdids(doc)]
 
 
-def _require_weight_alignment(
+def _validate_weight_alignment(
     *,
     class_name: str,
     entity_embeddings: Sequence[np.ndarray],
@@ -163,7 +163,7 @@ class WeightedMeanEntityPooling(EntityPoolingStrategy):
     ) -> np.ndarray:
         if not entity_embeddings:
             return np.zeros(embedding_dim, dtype=np.float32)
-        weights_arr = _require_weight_alignment(
+        weights_arr = _validate_weight_alignment(
             class_name=self.__class__.__name__,
             entity_embeddings=entity_embeddings,
             weights=weights,
@@ -193,7 +193,7 @@ class WeightedSumEntityPooling(EntityPoolingStrategy):
     ) -> np.ndarray:
         if not entity_embeddings:
             return np.zeros(embedding_dim, dtype=np.float32)
-        weights_arr = _require_weight_alignment(
+        weights_arr = _validate_weight_alignment(
             class_name=self.__class__.__name__,
             entity_embeddings=entity_embeddings,
             weights=weights,
@@ -216,7 +216,7 @@ class MentionWeightedSumEntityPooling(EntityPoolingStrategy):
     ) -> np.ndarray:
         if not entity_embeddings:
             return np.zeros(embedding_dim, dtype=np.float32)
-        weights_arr = _require_weight_alignment(
+        weights_arr = _validate_weight_alignment(
             class_name=self.__class__.__name__,
             entity_embeddings=entity_embeddings,
             weights=weights,
