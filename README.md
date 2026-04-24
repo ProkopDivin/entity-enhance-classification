@@ -103,6 +103,42 @@ Useful arguments:
   - `best_wpentities`
   - `best_article_only`
 
+## Wikipedia2Vec Embedding Prefetch
+
+Use the downloader to precompute entity embeddings as `{QID}_{lang}_1.npy` + `{QID}_{lang}_1.json`.
+
+Single language (backward compatible):
+
+```bash
+python3 -m iptc_entity_pipeline.download_wikipedia2vec_embeddings \
+  --lang en
+```
+
+Multiple languages in one run (titles fetched for all requested languages per batch):
+
+```bash
+python3 -m iptc_entity_pipeline.download_wikipedia2vec_embeddings \
+  --lang en de cs \
+  --model-url-map en=http://wikipedia2vec.s3.amazonaws.com/models/en/2018-04-20/enwiki_20180420_win10_500d.pkl.bz2 \
+  --model-url-map de=http://wikipedia2vec.s3.amazonaws.com/models/de/2018-04-20/dewiki_20180420_win10_500d.pkl.bz2 \
+  --model-url-map cs=http://wikipedia2vec.s3.amazonaws.com/models/cs/2018-04-20/cswiki_20180420_win10_500d.pkl.bz2 \
+  --model-name-map en=enwiki_20180420_win10_500d \
+  --model-name-map de=dewiki_20180420_win10_500d \
+  --model-name-map cs=cswiki_20180420_win10_500d \
+  --dump-date-map en=2018-04-20 \
+  --dump-date-map de=2018-04-20 \
+  --dump-date-map cs=2018-04-20
+```
+
+Notes:
+
+- For multi-language runs, provide `--model-url-map`, `--model-name-map`, and `--dump-date-map` for each requested
+  language.
+- Cache file `_qid_to_title.tsv` stores language-aware rows
+  (`QID<TAB>lang<TAB>status<TAB>title`) where `status` is `ok` or `no_sitelink`.
+- If a `(QID, lang)` pair is absent from cache, it means that language was not fetched for that QID in previous runs.
+- Storage format and naming remain unchanged and compatible with `EntityEmbeddingStore`.
+
 ## What Is Reused vs New
 
 Reused (copied with behavior preserved from original pipeline):

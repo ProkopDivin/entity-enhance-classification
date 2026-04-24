@@ -148,7 +148,8 @@ def prepare_article_embeddings(
         total_computed,
         total_docs - total_computed,
     )
-    return {
+    
+    result = {
         'train': asdict(train_stats),
         'test': asdict(test_stats),
         'total_docs': total_docs,
@@ -156,6 +157,7 @@ def prepare_article_embeddings(
         'total_cached_or_present': total_docs - total_computed,
     }
 
+    return result
 
 @PipelineDecorator.component(
     return_values=['trainData', 'testData', 'featureDim'],
@@ -235,6 +237,7 @@ def build_dataset(
     train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
     test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
+    
     return train_data, test_data, feature_dim
     
 
