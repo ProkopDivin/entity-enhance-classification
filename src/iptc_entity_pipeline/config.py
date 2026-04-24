@@ -334,16 +334,6 @@ class WPEntitiesRelTH5(BaseCnfWithHPO):
             entity_relevance_threshold=5.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
-        )
-    )   
     
 @dataclass(frozen=True)
 class WPEntitiesRelTH7(BaseCnf):
@@ -626,6 +616,14 @@ class BestWPEntitiesENNLCnf(BaseCnfWithHPO):
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'nl'))
     )
+    
+class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO):
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec',
+        )
+    )
 
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
@@ -645,7 +643,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities_all_langs': BestWpentitiesAllLangsCnf(),
         'best_wpentities_nl': BestWpentitiesNlCnf(),
         'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
-
+        'wikipedia2vec_entities': Wikipedia2VecEntitiesCnf(),
     }
 
 

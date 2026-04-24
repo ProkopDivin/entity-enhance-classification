@@ -31,18 +31,25 @@ if __package__ is None or __package__ == '':
         sys.path.insert(0, str(src_root))
 
 from iptc_entity_pipeline.data_loading import sanitize_name
-from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, evaluate_predictions, get_iptc_topics
+from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, evaluate_predictions, get_cat_name, get_iptc_topics
 from iptc_entity_pipeline.model_io import EVAL_CORPUS_FILENAME, PREDICTIONS_FILENAME
 
 LOG = logging.getLogger(__name__)
 
 AGG_CLASS_ROWS = frozenset({'All - micro avg', 'All - macro avg', 'All - datapoint avg'})
+AGG_CORPUS_ROWS = frozenset({'All-macro', 'All-micro', 'All-datapoint'})
 SUMMARY_ROWS = {
-    'macro_over_corpora': ('corpora', 'All-macro'),
     'macro_over_classes_all': ('classes', 'All - macro avg'),
     'micro_over_labels': ('classes', 'All - micro avg'),
 }
-PR_AUC_AGG = 'macro'
+SUPPORT_BUCKETS: tuple[tuple[int, int, str], ...] = (
+    (0, 10, '0-10'),
+    (10, 100, '10-100'),
+    (100, 1000, '100-1000'),
+    (1000, 10000, '1000-10000'),
+)
+LANG_PREFIXES: tuple[str, ...] = ('en', 'es', 'nl', 'fr', 'de', 'cs')
+EUROSPORT_TOKEN = 'eurosport'
 
 
 @dataclass(frozen=True)
@@ -54,6 +61,8 @@ class ComparisonResult:
     summary_comparison: pd.DataFrame
     top_improved_categories: pd.DataFrame
     top_degraded_categories: pd.DataFrame
+    top_improved_stats: pd.DataFrame
+    top_degraded_stats: pd.DataFrame
     hamming_loss_comparison: pd.DataFrame
     pr_auc_per_class: pd.DataFrame
     pr_auc_summary: pd.DataFrame
@@ -205,8 +214,17 @@ def compare_runs(
     shared_ids = shared_article_ids(current_df=current_run.aligned_df, base_df=base_run.aligned_df)
     cat_ids = gold_map.cat_ids(prob_dfs=[current_run.aligned_df, base_run.aligned_df])
 
-    summary_df = build_summary_df(current_run=current_run, base_run=base_run)
+    summary_df = build_summary_df(
+        current_run=current_run,
+        base_run=base_run,
+        classes_cmp=classes_cmp_full,
+        corpora_cmp=corpora_cmp_full,
+    )
     top_improved_df, top_degraded_df = build_top_change_dfs(classes_df=classes_cmp_full)
+    top_improved_stats_df, top_degraded_stats_df = build_top_change_stats_dfs(
+        improved_df=top_improved_df,
+        degraded_df=top_degraded_df,
+    )
     hamming_df = build_hamming_df(
         current_df=subset_by_ids(df=current_run.aligned_df, article_ids=shared_ids),
         base_df=subset_by_ids(df=base_run.aligned_df, article_ids=shared_ids),
@@ -228,6 +246,8 @@ def compare_runs(
         summary_comparison=summary_df,
         top_improved_categories=top_improved_df,
         top_degraded_categories=top_degraded_df,
+        top_improved_stats=top_improved_stats_df,
+        top_degraded_stats=top_degraded_stats_df,
         hamming_loss_comparison=hamming_df,
         pr_auc_per_class=pr_auc_df,
         pr_auc_summary=pr_auc_summary_df,
@@ -365,9 +385,15 @@ def diff_only_df(*, df: pd.DataFrame, key_col: str) -> pd.DataFrame:
     return df.loc[:, cols]
 
 
-def build_summary_df(*, current_run: RunEval, base_run: RunEval) -> pd.DataFrame:
+def build_summary_df(
+    *,
+    current_run: RunEval,
+    base_run: RunEval,
+    classes_cmp: pd.DataFrame,
+    corpora_cmp: pd.DataFrame,
+) -> pd.DataFrame:
     """Build compact summary rows from aggregate evaluation outputs."""
-    rows = []
+    rows: list[dict[str, Any]] = []
     tables = {
         'corpora_current': current_run.corpora_df,
         'corpora_base': base_run.corpora_df,
@@ -377,21 +403,91 @@ def build_summary_df(*, current_run: RunEval, base_run: RunEval) -> pd.DataFrame
     for summary_key, (group_name, row_name) in SUMMARY_ROWS.items():
         current_row = tables[f'{group_name}_current'].loc[row_name]
         base_row = tables[f'{group_name}_base'].loc[row_name]
+        rows.append(_metric_row(summary_key=summary_key, current=current_row, base=base_row))
+
+    classes_filtered = classes_cmp[~classes_cmp['IPTC Category'].isin(AGG_CLASS_ROWS)].copy()
+    classes_filtered['support'] = classes_filtered['Data Count_current'].combine_first(
+        classes_filtered['Data Count_base']
+    )
+    for low, high, label in SUPPORT_BUCKETS:
+        mask = (classes_filtered['support'] >= low) & (classes_filtered['support'] < high)
+        sub = classes_filtered[mask]
         rows.append(
-            {
-                'summary_key': summary_key,
-                'precision_current': current_row['Precision'],
-                'precision_base': base_row['Precision'],
-                'precision_diff': current_row['Precision'] - base_row['Precision'],
-                'recall_current': current_row['Recall'],
-                'recall_base': base_row['Recall'],
-                'recall_diff': current_row['Recall'] - base_row['Recall'],
-                'f1_current': current_row['F1'],
-                'f1_base': base_row['F1'],
-                'f1_diff': current_row['F1'] - base_row['F1'],
-            }
+            _avg_metrics_row(summary_key=f'macro_over_classes_support_{label}', sub_df=sub)
         )
+
+    corpora_filtered = corpora_cmp[~corpora_cmp['Corpus Name'].isin(AGG_CORPUS_ROWS)].copy()
+    for prefix in LANG_PREFIXES:
+        mask = corpora_filtered['Corpus Name'].str.startswith(f'{prefix}_')
+        sub = corpora_filtered[mask]
+        rows.append(
+            _avg_metrics_row(summary_key=f'macro_over_corpora_prefix_{prefix}', sub_df=sub)
+        )
+
+    eurosport_mask = corpora_filtered['Corpus Name'].str.contains(EUROSPORT_TOKEN, case=False, na=False)
+    rows.append(
+        _avg_metrics_row(
+            summary_key=f'macro_over_corpora_{EUROSPORT_TOKEN}',
+            sub_df=corpora_filtered[eurosport_mask],
+        )
+    )
+
+    macro_corpora_current = current_run.corpora_df.loc['All-macro']
+    macro_corpora_base = base_run.corpora_df.loc['All-macro']
+    rows.append(
+        _metric_row(
+            summary_key='macro_over_corpora',
+            current=macro_corpora_current,
+            base=macro_corpora_base,
+        )
+    )
     return pd.DataFrame(rows)
+
+
+def _metric_row(*, summary_key: str, current: pd.Series, base: pd.Series) -> dict[str, Any]:
+    """Build one summary row from current/base metric series."""
+    return {
+        'summary_key': summary_key,
+        'precision_current': current['Precision'],
+        'precision_base': base['Precision'],
+        'precision_diff': current['Precision'] - base['Precision'],
+        'recall_current': current['Recall'],
+        'recall_base': base['Recall'],
+        'recall_diff': current['Recall'] - base['Recall'],
+        'f1_current': current['F1'],
+        'f1_base': base['F1'],
+        'f1_diff': current['F1'] - base['F1'],
+    }
+
+
+def _avg_metrics_row(*, summary_key: str, sub_df: pd.DataFrame) -> dict[str, Any]:
+    """Macro-average precision/recall/f1 over the rows of ``sub_df``."""
+    if sub_df.empty:
+        nan = float('nan')
+        return {
+            'summary_key': summary_key,
+            'precision_current': nan,
+            'precision_base': nan,
+            'precision_diff': nan,
+            'recall_current': nan,
+            'recall_base': nan,
+            'recall_diff': nan,
+            'f1_current': nan,
+            'f1_base': nan,
+            'f1_diff': nan,
+        }
+    return {
+        'summary_key': summary_key,
+        'precision_current': float(sub_df['Precision_current'].mean()),
+        'precision_base': float(sub_df['Precision_base'].mean()),
+        'precision_diff': float(sub_df['Precision_diff'].mean()),
+        'recall_current': float(sub_df['Recall_current'].mean()),
+        'recall_base': float(sub_df['Recall_base'].mean()),
+        'recall_diff': float(sub_df['Recall_diff'].mean()),
+        'f1_current': float(sub_df['F1_current'].mean()),
+        'f1_base': float(sub_df['F1_base'].mean()),
+        'f1_diff': float(sub_df['F1_diff'].mean()),
+    }
 
 
 def build_top_change_dfs(*, classes_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -424,6 +520,73 @@ def build_top_change_dfs(*, classes_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.
         na_position='last',
     )
     return improved_df.reindex(columns=cols), degraded_df.reindex(columns=cols)
+
+
+CHANGE_THRESHOLDS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7)
+TOP_CHANGE_N: int = 100
+
+
+def build_top_change_stats_dfs(
+    *,
+    improved_df: pd.DataFrame,
+    degraded_df: pd.DataFrame,
+    top_n: int = TOP_CHANGE_N,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build summary stats tables for the improved and degraded category rankings."""
+    improved_stats = _change_stats_rows(df=improved_df, label='improved', top_n=top_n)
+    degraded_stats = _change_stats_rows(df=degraded_df, label='degraded', top_n=top_n)
+    return pd.DataFrame(improved_stats), pd.DataFrame(degraded_stats)
+
+
+def _change_stats_rows(*, df: pd.DataFrame, label: str, top_n: int) -> list[dict[str, Any]]:
+    """Build the metric/value rows for one change-direction table."""
+    abs_diff = df['F1_diff'].abs() if not df.empty else pd.Series(dtype=float)
+    rows: list[dict[str, Any]] = [
+        {'metric': f'count_{label}', 'value': int(len(df))},
+    ]
+    for thr in CHANGE_THRESHOLDS:
+        rows.append(
+            {'metric': f'count_{label}_f1_diff_gt_{thr}', 'value': int((abs_diff > thr).sum())}
+        )
+
+    top = df.head(top_n)
+    rows.append(
+        {
+            'metric': f'avg_f1_diff_top_{top_n}',
+            'value': float(top['F1_diff'].mean()) if not top.empty else float('nan'),
+        }
+    )
+    rows.append(
+        {
+            'metric': f'avg_article_frequency_top_{top_n}',
+            'value': float(top['article_frequency'].mean()) if not top.empty else float('nan'),
+        }
+    )
+
+    if not top.empty:
+        top_levels = top['IPTC Category'].map(top_level_from_label).value_counts().sort_values(ascending=False)
+        for name, count in top_levels.items():
+            rows.append({'metric': f'top_level_top_{top_n}::{name}', 'value': int(count)})
+    return rows
+
+
+def top_level_from_label(label: str) -> str:
+    """Extract the IPTC top-level category name from a quoted long-name label.
+
+    Example labels::
+
+        '"sport >> chess (20001154)"'         -> 'sport'
+        '"arts+ - arts, culture, ... (...)"'  -> 'arts+'
+
+    :param label: Quoted IPTC long-name label.
+    :return: Top-level category name (best-effort string parse).
+    """
+    inner = str(label).strip().strip('"').strip()
+    delim_positions = [pos for pos in (inner.find(' >'), inner.find(' -')) if pos != -1]
+    if delim_positions:
+        return inner[: min(delim_positions)].strip()
+    paren_idx = inner.find('(')
+    return inner[:paren_idx].strip() if paren_idx != -1 else inner
 
 
 def shared_article_ids(*, current_df: pd.DataFrame, base_df: pd.DataFrame) -> list[str]:
@@ -493,7 +656,8 @@ def build_pr_auc_dfs(
         base_pr_auc = average_precision(y_true=y_true, y_score=base_scores[:, idx])
         rows.append(
             {
-                'IPTC Category': cat_id,
+                'IPTC Category': safe_cat_label(cat_id=cat_id),
+                'cat_id': cat_id,
                 'pr_auc_current': current_pr_auc,
                 'pr_auc_base': base_pr_auc,
                 'pr_auc_diff': current_pr_auc - base_pr_auc
@@ -505,21 +669,149 @@ def build_pr_auc_dfs(
         )
 
     pr_auc_df = pd.DataFrame(rows)
-    current_macro = float(pr_auc_df['pr_auc_current'].dropna().mean()) if not pr_auc_df.empty else np.nan
-    base_macro = float(pr_auc_df['pr_auc_base'].dropna().mean()) if not pr_auc_df.empty else np.nan
-    pr_auc_summary_df = pd.DataFrame(
-        [
-            {
-                'aggregation': PR_AUC_AGG,
-                'current': current_macro,
-                'base': base_macro,
-                'diff': current_macro - base_macro
-                if not np.isnan(current_macro) and not np.isnan(base_macro)
-                else np.nan,
-            }
-        ]
+    pr_auc_summary_df = build_pr_auc_summary_df(
+        pr_auc_df=pr_auc_df,
+        current_df=current_df,
+        gold_matrix=gold_matrix,
+        current_scores=current_scores,
+        base_scores=base_scores,
     )
     return pr_auc_df, pr_auc_summary_df
+
+
+def safe_cat_label(*, cat_id: str) -> str:
+    """Return the quoted long name used by other tables, falling back to the id."""
+    try:
+        return '"' + get_cat_name(cat_id) + '"'
+    except KeyError:
+        LOG.warning('No IPTC name for cat_id=%s; using raw id in PR-AUC table', cat_id)
+        return cat_id
+
+
+def build_pr_auc_summary_df(
+    *,
+    pr_auc_df: pd.DataFrame,
+    current_df: pd.DataFrame,
+    gold_matrix: np.ndarray,
+    current_scores: np.ndarray,
+    base_scores: np.ndarray,
+) -> pd.DataFrame:
+    """Build PR-AUC summary rows: micro, macro, support buckets, per-corpus groups."""
+    rows: list[dict[str, Any]] = []
+
+    rows.append(
+        _pr_auc_row(
+            aggregation='macro_over_classes_all',
+            current=_safe_mean(values=pr_auc_df['pr_auc_current']),
+            base=_safe_mean(values=pr_auc_df['pr_auc_base']),
+        )
+    )
+    rows.append(
+        _pr_auc_row(
+            aggregation='micro',
+            current=micro_pr_auc(gold_matrix=gold_matrix, scores=current_scores),
+            base=micro_pr_auc(gold_matrix=gold_matrix, scores=base_scores),
+        )
+    )
+
+    for low, high, label in SUPPORT_BUCKETS:
+        mask = (pr_auc_df['positive_support'] >= low) & (pr_auc_df['positive_support'] < high)
+        sub = pr_auc_df[mask]
+        rows.append(
+            _pr_auc_row(
+                aggregation=f'macro_over_classes_support_{label}',
+                current=_safe_mean(values=sub['pr_auc_current']),
+                base=_safe_mean(values=sub['pr_auc_base']),
+            )
+        )
+
+    current_per_corpus = per_corpus_pr_auc(df=current_df, scores=current_scores, gold_matrix=gold_matrix)
+    base_per_corpus = per_corpus_pr_auc(df=current_df, scores=base_scores, gold_matrix=gold_matrix)
+
+    for prefix in LANG_PREFIXES:
+        rows.append(
+            _pr_auc_row(
+                aggregation=f'macro_over_corpora_prefix_{prefix}',
+                current=_avg_filtered(values_dict=current_per_corpus, predicate=_prefix_predicate(prefix)),
+                base=_avg_filtered(values_dict=base_per_corpus, predicate=_prefix_predicate(prefix)),
+            )
+        )
+
+    rows.append(
+        _pr_auc_row(
+            aggregation=f'macro_over_corpora_{EUROSPORT_TOKEN}',
+            current=_avg_filtered(values_dict=current_per_corpus, predicate=_contains_predicate(EUROSPORT_TOKEN)),
+            base=_avg_filtered(values_dict=base_per_corpus, predicate=_contains_predicate(EUROSPORT_TOKEN)),
+        )
+    )
+
+    rows.append(
+        _pr_auc_row(
+            aggregation='macro_over_corpora',
+            current=_safe_mean(values=pd.Series(list(current_per_corpus.values()), dtype=float)),
+            base=_safe_mean(values=pd.Series(list(base_per_corpus.values()), dtype=float)),
+        )
+    )
+    return pd.DataFrame(rows)
+
+
+def _pr_auc_row(*, aggregation: str, current: float, base: float) -> dict[str, Any]:
+    """Build one PR-AUC summary row with diff."""
+    diff = current - base if not np.isnan(current) and not np.isnan(base) else np.nan
+    return {'aggregation': aggregation, 'current': current, 'base': base, 'diff': diff}
+
+
+def _safe_mean(*, values: pd.Series) -> float:
+    """Mean over non-NaN values; NaN if empty."""
+    cleaned = values.dropna()
+    return float(cleaned.mean()) if not cleaned.empty else float('nan')
+
+
+def _avg_filtered(*, values_dict: Mapping[str, float], predicate: Any) -> float:
+    """Mean of dict values whose key matches ``predicate`` and is not NaN."""
+    matched = [v for k, v in values_dict.items() if predicate(k) and not np.isnan(v)]
+    return float(np.mean(matched)) if matched else float('nan')
+
+
+def _prefix_predicate(prefix: str) -> Any:
+    """Predicate matching corpus names starting with ``<prefix>_``."""
+    return lambda name: name.startswith(f'{prefix}_')
+
+
+def _contains_predicate(token: str) -> Any:
+    """Predicate matching corpus names containing ``token`` (case-insensitive)."""
+    lower = token.lower()
+    return lambda name: lower in name.lower()
+
+
+def micro_pr_auc(*, gold_matrix: np.ndarray, scores: np.ndarray) -> float:
+    """Compute micro PR-AUC by flattening across all classes."""
+    if gold_matrix.size == 0:
+        return float('nan')
+    return average_precision(y_true=gold_matrix.flatten().astype(np.int8), y_score=scores.flatten())
+
+
+def per_corpus_pr_auc(
+    *,
+    df: pd.DataFrame,
+    scores: np.ndarray,
+    gold_matrix: np.ndarray,
+) -> dict[str, float]:
+    """Compute per-corpus macro PR-AUC over classes with positive support in that corpus."""
+    corpus_to_value: dict[str, float] = {}
+    corpus_names = df['corpus_name'].to_numpy()
+    for corpus_name in sorted({name for name in corpus_names if name}):
+        mask = corpus_names == corpus_name
+        per_class_values = []
+        for idx in range(scores.shape[1]):
+            y_true = gold_matrix[mask, idx].astype(np.int8)
+            if y_true.sum() == 0:
+                continue
+            per_class_values.append(average_precision(y_true=y_true, y_score=scores[mask, idx]))
+        corpus_to_value[corpus_name] = (
+            float(np.mean(per_class_values)) if per_class_values else float('nan')
+        )
+    return corpus_to_value
 
 
 def build_score_matrix(*, df: pd.DataFrame, cat_ids: Sequence[str]) -> np.ndarray:
@@ -553,6 +845,8 @@ def write_csv(*, result: ComparisonResult, output_path: Path) -> None:
     result.summary_comparison.to_csv(output_path / 'summary_comparison.csv', index=False)
     result.top_improved_categories.to_csv(output_path / 'top_improved.csv', index=False)
     result.top_degraded_categories.to_csv(output_path / 'top_degraded.csv', index=False)
+    result.top_improved_stats.to_csv(output_path / 'top_improved_stats.csv', index=False)
+    result.top_degraded_stats.to_csv(output_path / 'top_degraded_stats.csv', index=False)
     result.hamming_loss_comparison.to_csv(output_path / 'hamming_loss.csv', index=False)
     result.pr_auc_per_class.to_csv(output_path / 'pr_auc_per_class.csv', index=False)
     result.pr_auc_summary.to_csv(output_path / 'pr_auc_summary.csv', index=False)
@@ -571,6 +865,8 @@ def write_excel(*, result: ComparisonResult, output_path: Path) -> None:
         result.summary_comparison.to_excel(writer, sheet_name='summary_comparison', index=False)
         result.top_improved_categories.to_excel(writer, sheet_name='top_improved', index=False)
         result.top_degraded_categories.to_excel(writer, sheet_name='top_degraded', index=False)
+        result.top_improved_stats.to_excel(writer, sheet_name='top_improved_stats', index=False)
+        result.top_degraded_stats.to_excel(writer, sheet_name='top_degraded_stats', index=False)
         result.hamming_loss_comparison.to_excel(writer, sheet_name='hamming_loss', index=False)
         result.pr_auc_per_class.to_excel(writer, sheet_name='pr_auc_per_class', index=False)
         result.pr_auc_summary.to_excel(writer, sheet_name='pr_auc_summary', index=False)
