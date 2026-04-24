@@ -73,7 +73,7 @@ class BestSelection:
     fold_rows: list[dict[str, Any]]
 
 
-def prepare_cv_arrays(*, train_data: Any) -> tuple[np.ndarray, np.ndarray]:
+def prepare_cv(*, train_data: Any) -> tuple[np.ndarray, np.ndarray]:
     """Extract X/Y NumPy arrays for stratified split planning."""
     x_full = to_numpy_array(matrix_like=train_data.X)
     y_full = (
@@ -305,7 +305,7 @@ def run_combination(
     )
 
 
-def select_best_combination(
+def select_best(
     *,
     combinations: Sequence[tuple[ModelCnf, TrainingCnf]],
     train_data: Any,
@@ -382,7 +382,7 @@ def select_best_combination(
     )
 
 
-def build_cv_dataframes(
+def build_cv_df(
     *,
     trial_rows: Sequence[Mapping[str, Any]],
     fold_rows: Sequence[Mapping[str, Any]],
@@ -410,7 +410,7 @@ def build_cv_dataframes(
     return trials_df, folds_df, cv_dev_df
 
 
-def build_objective_metrics(*, best_trial: Mapping[str, Any]) -> dict[str, Any]:
+def build_metrics(*, best_trial: Mapping[str, Any]) -> dict[str, Any]:
     """Extract the objective metrics dict from the best trial summary."""
     return {
         'Loss_mean': float(best_trial['Loss_mean']),

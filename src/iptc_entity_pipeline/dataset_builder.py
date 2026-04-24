@@ -39,7 +39,7 @@ def build_multilabel_targets(*, corpus: Any) -> np.ndarray:
     return y
 
 
-def build_embedding_dataset(*, corpus: Any, x_matrix: np.ndarray) -> Any:
+def build_emb_data(*, corpus: Any, x_matrix: np.ndarray) -> Any:
     """
     Wrap numpy features + derived targets into ``EmbeddingDataset``.
 
@@ -79,7 +79,7 @@ def merge_datasets(*, left_data: Any, right_data: Any) -> Any:
             y_matrix=merged_y,
             cat_list=merged_cat_list,
         )
-    return build_embedding_dataset(corpus=merged_corpus, x_matrix=merged_x)
+    return build_emb_data(corpus=merged_corpus, x_matrix=merged_x)
 
 
 def slice_dataset(*, dataset: Any, indices: Sequence[int]) -> Any:
@@ -99,5 +99,5 @@ def slice_dataset(*, dataset: Any, indices: Sequence[int]) -> Any:
             y_matrix=selected_y,
             cat_list=cat_list,
         )
-    return build_embedding_dataset(corpus=selected_corpus, x_matrix=selected_x)
+    return build_emb_data(corpus=selected_corpus, x_matrix=selected_x)
 

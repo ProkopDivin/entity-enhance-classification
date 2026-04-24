@@ -11,8 +11,8 @@ from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
-from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, config_from_dict
-from iptc_entity_pipeline.dataset_builder import build_embedding_dataset
+from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, conf_from_dict
+from iptc_entity_pipeline.dataset_builder import build_emb_data
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.feature_builder import FeatureBuildStats, FeatureBuilder
 from iptc_entity_pipeline.pooling import (
@@ -90,8 +90,8 @@ def no_entities(
         article_provider=article_provider,
         logger=logger,
     )
-    train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
-    test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
+    train_data = build_emb_data(corpus=corpora.train, x_matrix=x_train)
+    test_data = build_emb_data(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
     entity_embedding_stats = EntityEmbeddingStats(use_entity_embeddings=False)
     return DatasetBundle(
@@ -128,7 +128,7 @@ def get_pooling(
     return pooling
 
 
-def report_entity_stats(
+def report_ent_stats(
     *,
     stats: FeatureBuildStats,
     clearml_task: Task | None,

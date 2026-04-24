@@ -115,7 +115,7 @@ class FeatureBuilder:
         if task is not None:
             task.get_logger().report_text(final_stats_message, print_console=True)
 
-    def build_features_for_corpus(
+    def build_features(
         self,
         *,
         corpus: Any,
