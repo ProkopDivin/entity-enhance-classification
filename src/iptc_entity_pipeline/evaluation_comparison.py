@@ -886,7 +886,7 @@ def log_top_changes(*, result: ComparisonResult, top_n: int) -> None:
         LOG.info('Saved comparison report to %s', result.excel_path)
 
 
-def build_output_path(*, output_root: str | Path, config_name: str) -> Path:
+def build_path(*, output_root: str | Path, config_name: str) -> Path:
     """Create timestamped comparison workbook path."""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     safe_name = sanitize_name(value=config_name)
@@ -922,7 +922,7 @@ def main() -> None:
     """Run the comparison CLI."""
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     args = build_arg_parser().parse_args()
-    output_path = build_output_path(output_root=args.output_root, config_name=args.config_name)
+    output_path = build_path(output_root=args.output_root, config_name=args.config_name)
     compare_runs(
         current_run_dir=args.current_run,
         base_run_dir=args.base_run,

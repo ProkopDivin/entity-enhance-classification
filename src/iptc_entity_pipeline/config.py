@@ -1,6 +1,6 @@
 """Configuration dataclasses for the IPTC entity-enhanced pipeline."""
 
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import Field, asdict, dataclass, field, fields, replace
 from itertools import product
 from pathlib import Path
 from typing import Any, Mapping
@@ -8,7 +8,7 @@ from typing import Any, Mapping
 DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
 
 
-def config_from_dict(cls, d: Mapping[str, Any]):
+def conf_from_dict(cls, d: Mapping[str, Any]):
     """Reconstruct a frozen dataclass from a dict, ignoring unknown keys."""
     valid_keys = {f.name for f in fields(cls)}
     return cls(**{k: v for k, v in d.items() if k in valid_keys})
@@ -617,13 +617,67 @@ class BestWPEntitiesENNLCnf(BaseCnfWithHPO):
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'nl'))
     )
     
+    
+@dataclass(frozen=True)
 class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec',
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
         )
     )
+
+
+@dataclass(frozen=True)
+class BestWikipedia2VecEntitiesCnf(BaseCnfWithHPO):
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+        )
+    )
+    hparam: HyperparamSpace = field(default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.0,),
+            dropouts2=(0.0, ),
+            learning_rates=(0.00037,),
+        )
+    )
+
+
+def _iter_subclasses(base_cls: type[Any]) -> tuple[type[Any], ...]:
+    """Return all transitive subclasses of ``base_cls``."""
+    found: dict[type[Any], None] = {}
+    stack = list(base_cls.__subclasses__())
+    while stack:
+        sub_cls = stack.pop()
+        if sub_cls in found:
+            continue
+        found[sub_cls] = None
+        stack.extend(sub_cls.__subclasses__())
+    return tuple(found.keys())
+
+
+def _validate_config_dataclass_decorators() -> None:
+    """Fail fast when config subclasses are not declared as frozen dataclasses."""
+    for cls in _iter_subclasses(BaseCnf):
+        if cls.__module__ != __name__:
+            continue
+
+        if '__dataclass_params__' not in cls.__dict__:
+            raw_fields = [
+                name for name, value in cls.__dict__.items()
+                if isinstance(value, Field)
+            ]
+            details = f', raw fields={raw_fields}' if raw_fields else ''
+            raise TypeError(
+                f'{cls.__name__} must declare @dataclass(frozen=True){details}'
+            )
+
+        if not cls.__dataclass_params__.frozen:
+            raise TypeError(f'{cls.__name__} must declare @dataclass(frozen=True)')
+
 
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
@@ -644,6 +698,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities_nl': BestWpentitiesNlCnf(),
         'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
         'wikipedia2vec_entities': Wikipedia2VecEntitiesCnf(),
+        'best_wikipedia2vec_entities': BestWikipedia2VecEntitiesCnf(),
     }
 
 
@@ -678,4 +733,5 @@ def list_config_names() -> tuple[str, ...]:
 
 
 # Backward compatibility alias for older imports.
+_validate_config_dataclass_decorators()
 PipelineCnf = BaseCnf

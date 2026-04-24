@@ -22,14 +22,15 @@ class ChartSpec(NamedTuple):
 LOGGER = logging.getLogger(__name__)
 
 
-def report_eval_scalars(*, logger: Any, title: str, row: Mapping[str, Any], iteration: int = 0) -> None:
+def report_eval(*, logger: Any, title: str, row: Mapping[str, Any], iteration: int = 0) -> None:
     """Report shared eval metrics to ClearML scalar charts."""
     logger.report_scalar(title=title, series='Precision', value=row['Precision'], iteration=iteration)
     logger.report_scalar(title=title, series='Recall', value=row['Recall'], iteration=iteration)
     logger.report_scalar(title=title, series='F1', value=row['F1'], iteration=iteration)
 
 
-def report_cv_std_scalars(
+
+def report_cv_std(
     *,
     logger: Any,
     row: Mapping[str, Any],
@@ -57,7 +58,7 @@ def report_cv_std_scalars(
     )
 
 
-def report_cv_outputs(
+def report_cv_curve(
     *,
     task: Task,
     logger: Any,
@@ -87,7 +88,7 @@ def _scatter_xy(data: Sequence[float]) -> Any:
     return np.column_stack((epochs, np.asarray(list(data), dtype=float)))
 
 
-def report_cv_fold_curve_charts(
+def report_cv_fold(
     *,
     logger: Any,
     fold_curves: Sequence[CvFoldCurves],
@@ -136,7 +137,7 @@ def report_cv_fold_curve_charts(
         )
 
 
-def report_train_test_curve_charts(*, logger: Any, result: TrainingResult) -> None:
+def report_test_curve(*, logger: Any, result: TrainingResult) -> None:
     """Report final-model train vs test curves across epochs."""
     charts = (
         ChartSpec('Final Model Loss', 'loss', result.train_loss_per_epoch, result.dev_loss_per_epoch),
@@ -165,3 +166,17 @@ def report_train_test_curve_charts(*, logger: Any, result: TrainingResult) -> No
             yaxis=chart.yaxis,
             mode='lines+markers',
         )
+
+
+def conf_logging(*, level: int = logging.INFO) -> None:
+    """Ensure component worker processes emit INFO logs to console."""
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(level=level, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+        return
+
+    if root_logger.level > level:
+        root_logger.setLevel(level)
+    for handler in root_logger.handlers:
+        if handler.level > level:
+            handler.setLevel(level)

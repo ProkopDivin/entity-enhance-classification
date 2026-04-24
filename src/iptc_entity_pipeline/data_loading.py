@@ -40,7 +40,7 @@ class LinkedEntity:
     raw_entity: Mapping[str, Any] | None = None
 
 
-def load_and_normalize_corpora(
+def load_and_normalize(
     *,
     train_csv: str,
     test_csv: str,
@@ -250,7 +250,7 @@ def _ensure_csv_field_limit() -> None:
     csv.field_size_limit(_CSV_FIELD_LIMIT)
 
 
-def load_wdid_mapping(*, wdid_mapping_tsv: str) -> dict[str, list[str]]:
+def load_wdid_map(*, wdid_mapping_tsv: str) -> dict[str, list[str]]:
     """
     Parse wdId mapping TSV into gkbId to wdId lookup.
 
@@ -272,7 +272,7 @@ def load_wdid_mapping(*, wdid_mapping_tsv: str) -> dict[str, list[str]]:
     return mapping
 
 
-def attach_entities_to_corpus(
+def attach_entities(
     *,
     corpus: Any,
     csv_path: str,

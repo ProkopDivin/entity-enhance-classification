@@ -9,49 +9,17 @@ from clearml import Task, TaskTypes
 from clearml.automation.controller import PipelineDecorator
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
-from iptc_entity_pipeline.config import (
-    BaseCnf,
-    CvCnf,
-    EvaluationCnf,
-    HyperparamSpace,
-    ModelCnf,
-    TrainingCnf,
-    resolve_paths,
-)
-from iptc_entity_pipeline.data_loading import (
-    attach_entities_to_corpus,
-    load_and_normalize_corpora,
-    load_wdid_mapping,
-    sanitize_name,
-)
-from iptc_entity_pipeline.evaluation_comparison import build_output_path, compare_runs
+from iptc_entity_pipeline.config import BaseCnf, resolve_paths
+from iptc_entity_pipeline.data_loading import attach_entities, load_and_normalize, load_wdid_map, sanitize_name
+from iptc_entity_pipeline.evaluation_comparison import build_path, compare_runs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
-from iptc_entity_pipeline.model_io import save_final_model_outputs
-from iptc_entity_pipeline.reporting import (
-    log_stage,
-    report_cv_fold_curve_charts,
-    report_cv_outputs,
-    report_cv_std_scalars,
-    report_eval_scalars,
-    report_train_test_curve_charts,
-)
+from iptc_entity_pipeline.model_io import save_outputs
+from iptc_entity_pipeline.reporting import log_stage, report_cv_fold, report_cv_curve, report_cv_std, report_eval, report_test_curve
+
 from iptc_entity_pipeline.training import train_model
+from iptc_entity_pipeline.reporting import conf_logging
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def configure_component_logging(*, level: int = logging.INFO) -> None:
-    """Ensure component worker processes emit INFO logs to console."""
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(level=level, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-        return
-
-    if root_logger.level > level:
-        root_logger.setLevel(level)
-    for handler in root_logger.handlers:
-        if handler.level > level:
-            handler.setLevel(level)
 
 
 @dataclass(frozen=True)
@@ -75,30 +43,26 @@ def load_data(
     downsample_corpora: Mapping[str, float] | None = None,
 ):
     """Load normalized corpora with linked entities attached to each document."""
-    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, config_from_dict
+    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, conf_from_dict
 
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    elif root_logger.level > logging.INFO:
-        root_logger.setLevel(logging.INFO)
-    paths = config_from_dict(PathsCnf, paths_cnf)
-    emb = config_from_dict(EmbeddingCnf, emb_cnf)
-    corpora = load_and_normalize_corpora(
+    conf_logging()
+    paths = conf_from_dict(PathsCnf, paths_cnf)
+    emb = conf_from_dict(EmbeddingCnf, emb_cnf)
+    corpora = load_and_normalize(
         train_csv=paths.train_csv,
         test_csv=paths.test_csv,
         removed_cat_ids=paths.removed_cat_ids,
         downsample_corpora=downsample_corpora or {},
         downsampling_order_cache_json=paths.downsampling_order_cache_json,
     )
-    wdid_mapping = load_wdid_mapping(wdid_mapping_tsv=paths.wdid_mapping_tsv)
-    attach_entities_to_corpus(
+    wdid_mapping = load_wdid_map(wdid_mapping_tsv=paths.wdid_mapping_tsv)
+    attach_entities(
         corpus=corpora.train,
         csv_path=paths.train_csv,
         wdid_mapping=wdid_mapping,
         min_relevance=emb.entity_relevance_threshold,
     )
-    attach_entities_to_corpus(
+    attach_entities(
         corpus=corpora.test,
         csv_path=paths.test_csv,
         wdid_mapping=wdid_mapping,
@@ -120,16 +84,12 @@ def prepare_article_embeddings(
     """Precompute and cache missing article embeddings for all corpora."""
     from dataclasses import asdict
 
-    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, config_from_dict
+    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, conf_from_dict
 
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    elif root_logger.level > logging.INFO:
-        root_logger.setLevel(logging.INFO)
+    conf_logging()
     logger = logging.getLogger(__name__)
-    paths = config_from_dict(PathsCnf, paths_cnf)
-    emb = config_from_dict(EmbeddingCnf, emb_cnf)
+    paths = conf_from_dict(PathsCnf, paths_cnf)
+    emb = conf_from_dict(EmbeddingCnf, emb_cnf)
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths.article_embeddings_dir,
         model_name=emb.article_model_name,
@@ -171,17 +131,13 @@ def build_dataset(
     article_embedding_stats: Mapping[str, Any],
 ):
     """Link embeddings and build train/test embedding datasets."""
-    from iptc_entity_pipeline.build_dataset import no_entities, report_entity_stats, get_pooling
-    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, config_from_dict
-    from iptc_entity_pipeline.dataset_builder import build_embedding_dataset
+    from iptc_entity_pipeline.build_dataset import no_entities, report_ent_stats, get_pooling
+    from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, conf_from_dict
+    from iptc_entity_pipeline.dataset_builder import build_emb_data
     from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
     from iptc_entity_pipeline.feature_builder import FeatureBuilder
 
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    elif root_logger.level > logging.INFO:
-        root_logger.setLevel(logging.INFO)
+    conf_logging()
     logger = logging.getLogger(__name__)
     logger.info('Initializing providers for merged entity preparation + linking step')
     logger.info(
@@ -189,8 +145,8 @@ def build_dataset(
         article_embedding_stats.get('total_docs'),
         article_embedding_stats.get('total_computed'),
     )
-    paths = config_from_dict(PathsCnf, paths_cnf)
-    emb = config_from_dict(EmbeddingCnf, emb_cnf)
+    paths = conf_from_dict(PathsCnf, paths_cnf)
+    emb = conf_from_dict(EmbeddingCnf, emb_cnf)
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths.article_embeddings_dir,
         model_name=emb.article_model_name,
@@ -221,21 +177,21 @@ def build_dataset(
 
     task = Task.current_task()
     logger.info('Building linked features for train corpus (%s articles)', len(corpora.train))
-    x_train, train_stats = builder.build_features_for_corpus(
+    x_train, train_stats = builder.build_features(
         corpus=corpora.train,
         clearml_logger=task.get_logger() if task is not None else None,
         return_stats=True,
     )
     logger.info('Building linked features for test corpus (%s articles)', len(corpora.test))
-    x_test, test_stats = builder.build_features_for_corpus(
+    x_test, test_stats = builder.build_features(
         corpus=corpora.test,
         clearml_logger=task.get_logger() if task is not None else None,
         return_stats=True,
     )
-    report_entity_stats(stats=test_stats, clearml_task=task, logger=logger)
-    report_entity_stats(stats=train_stats, clearml_task=task, logger=logger)
-    train_data = build_embedding_dataset(corpus=corpora.train, x_matrix=x_train)
-    test_data = build_embedding_dataset(corpus=corpora.test, x_matrix=x_test)
+    report_ent_stats(stats=test_stats, clearml_task=task, logger=logger)
+    report_ent_stats(stats=train_stats, clearml_task=task, logger=logger)
+    train_data = build_emb_data(corpus=corpora.train, x_matrix=x_train)
+    test_data = build_emb_data(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
     
     return train_data, test_data, feature_dim
@@ -261,38 +217,25 @@ def run_cv(
     """Run mandatory CV over train and select best hyperparameter combination."""
     from dataclasses import asdict
 
-    from iptc_entity_pipeline.config import (
-        CvCnf,
-        EvaluationCnf,
-        HyperparamSpace,
-        TrainingCnf,
-        config_from_dict,
-    )
-    from iptc_entity_pipeline.cross_validation import (
-        build_cv_dataframes,
-        build_objective_metrics,
-        prepare_cv_arrays,
-        select_best_combination,
-    )
+    from iptc_entity_pipeline.config import CvCnf, EvaluationCnf, HyperparamSpace, TrainingCnf, conf_from_dict
 
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    elif root_logger.level > logging.INFO:
-        root_logger.setLevel(logging.INFO)
+    from iptc_entity_pipeline.cross_validation import build_cv_df, build_metrics, prepare_cv, select_best
+   
+
+    conf_logging()
     py_logger = logging.getLogger(__name__)
     task = Task.current_task()
     clearml_logger = task.get_logger()
 
-    space = config_from_dict(HyperparamSpace, hparam_cnf)
-    base_training = config_from_dict(TrainingCnf, train_cnf)
-    eval_cfg = config_from_dict(EvaluationCnf, eval_cnf)
-    cv_cfg = config_from_dict(CvCnf, cv_cnf)
+    space = conf_from_dict(HyperparamSpace, hparam_cnf)
+    base_training = conf_from_dict(TrainingCnf, train_cnf)
+    eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
+    cv_cfg = conf_from_dict(CvCnf, cv_cnf)
 
-    x_full, y_full = prepare_cv_arrays(train_data=train_data)
+    x_full, y_full = prepare_cv(train_data=train_data)
     combinations = space.iter_combinations(base_training=base_training)
 
-    selection = select_best_combination(
+    selection = select_best(
         combinations=combinations,
         train_data=train_data,
         x_full=x_full,
@@ -307,13 +250,13 @@ def run_cv(
         clearml_logger=clearml_logger,
     )
 
-    trials_df, folds_df, cv_dev_df = build_cv_dataframes(
+    trials_df, folds_df, cv_dev_df = build_cv_df(
         trial_rows=selection.trial_rows,
         fold_rows=selection.fold_rows,
         best_trial=selection.best_trial,
     )
 
-    report_cv_outputs(
+    report_cv_curve(
         task=task,
         logger=clearml_logger,
         trials_df=trials_df,
@@ -321,13 +264,13 @@ def run_cv(
         cv_dev_df=cv_dev_df,
         upload_artifacts=upload_artifacts,
     )
-    report_cv_fold_curve_charts(logger=clearml_logger, fold_curves=selection.best_fold_curves)
+    report_cv_fold(logger=clearml_logger, fold_curves=selection.best_fold_curves)
     
     result = {
         'cv_dev_df': cv_dev_df,
         'best_model_config': asdict(selection.best_model_config),
         'best_training_config': asdict(selection.best_training_config),
-        'objective_metrics': build_objective_metrics(best_trial=selection.best_trial),
+        'objective_metrics': build_metrics(best_trial=selection.best_trial),
     }
     return result
 
@@ -345,15 +288,11 @@ def train_best(
     print_logs: bool = True,
 ):
     """Train final model on full train set with best hyperparams from CV."""
-    from iptc_entity_pipeline.config import ModelCnf, TrainingCnf, config_from_dict
+    from iptc_entity_pipeline.config import ModelCnf, TrainingCnf, conf_from_dict
 
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    elif root_logger.level > logging.INFO:
-        root_logger.setLevel(logging.INFO)
-    model_cfg = config_from_dict(ModelCnf, best_model_cnf)
-    train_cfg = config_from_dict(TrainingCnf, train_cnf)
+    conf_logging()
+    model_cfg = conf_from_dict(ModelCnf, best_model_cnf)
+    train_cfg = conf_from_dict(TrainingCnf, train_cnf)
     result = train_model(
         train_data=train_data,
         dev_data=test_data,
@@ -364,7 +303,7 @@ def train_best(
     )
     task = Task.current_task()
     logger = task.get_logger()
-    report_train_test_curve_charts(logger=logger, result=result)
+    report_test_curve(logger=logger, result=result)
     return result.model
 
 @PipelineDecorator.component(
@@ -389,17 +328,13 @@ def eval_final(
 
     import pandas as pd
     from iptc_entity_pipeline.pipeline import EvalResult
-    from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf, config_from_dict
+    from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf, conf_from_dict
 
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    elif root_logger.level > logging.INFO:
-        root_logger.setLevel(logging.INFO)
+    conf_logging()
     task = Task.current_task()
     logger = task.get_logger()
-    eval_cfg = config_from_dict(EvaluationCnf, eval_cnf)
-    emb_cfg = config_from_dict(EmbeddingCnf, emb_cnf)
+    eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
+    emb_cfg = conf_from_dict(EmbeddingCnf, emb_cnf)
     df_corpora_test, df_classes_test, pred_scores = evaluateModel(
         model=trained_model,
         evalData=test_data,
@@ -413,22 +348,22 @@ def eval_final(
         row_cv = cv_dev_df.loc[objective_corpora].to_dict()
     else:
         row_cv = cv_dev_df.iloc[0].to_dict()
-    report_eval_scalars(logger=logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
+    report_eval(logger=logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
     if 'Precision_std' in row_cv:
-        report_cv_std_scalars(
+        report_cv_std(
             logger=logger,
             row=row_cv,
             title='Dev Cross Validation Mean Results',
             iteration=0,
         )
     row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
-    report_eval_scalars(logger=logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
+    report_eval(logger=logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
     if 'All-micro' in df_corpora_test.index:
         row_micro_test = df_corpora_test.loc['All-micro'].to_dict()
-        report_eval_scalars(logger=logger, title='Test Evaluation Results (micro)', row=row_micro_test, iteration=0)
+        report_eval(logger=logger, title='Test Evaluation Results (micro)', row=row_micro_test, iteration=0)
     if objective_corpora in df_corpora_test.index:
         row_objective_test = df_corpora_test.loc[objective_corpora].to_dict()
-        report_eval_scalars(logger=logger, title='Objective Test Evaluation Results', row=row_objective_test, iteration=0)
+        report_eval(logger=logger, title='Objective Test Evaluation Results', row=row_objective_test, iteration=0)
     else:
         logging.getLogger(__name__).warning(
             'Requested objective_corpora "%s" not found in test corpus index; available=%s',
@@ -441,7 +376,7 @@ def eval_final(
     logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
 
     model_name = sanitize_name(value=config_name)
-    save_paths = save_final_model_outputs(
+    save_paths = save_outputs(
         model=trained_model,
         test_data=test_data,
         pred_scores=pred_scores,
@@ -488,7 +423,7 @@ def eval_final(
             averaging_type=eval_cfg.averaging_type,
             top_n=int(comparison_cfg.get('top_n', 20)),
             only_diff=bool(comparison_cfg.get('only_diff', False)),
-            output_path=build_output_path(
+            output_path=build_path(
                 output_root=str(comparison_cfg.get('output_root', output_dir)),
                 config_name=str(comparison_cfg.get('config_name', config_name)),
             ),
@@ -554,11 +489,7 @@ def eval_final(
 )
 def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     """Execute full v1 training and evaluation pipeline."""
-    root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-    elif root_logger.level > logging.INFO:
-        root_logger.setLevel(logging.INFO)
+    conf_logging()
     task = Task.current_task()
     task.connect(cnf, name='pipelineConfig')
     config_name = str(cnf.get('config_name', 'wpentities'))
@@ -674,28 +605,28 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     else:
         row_cv = eval_result.dev_corpora_df.iloc[0].to_dict()
 
-    report_eval_scalars(
+    report_eval(
         logger=logger,
         title='Cross Validation Results',
         row=row_cv,
         iteration=0,
     )
     if 'Precision_std' in row_cv:
-        report_cv_std_scalars(
+        report_cv_std(
             logger=logger,
             row=row_cv,
             title='Cross Validation Results',
             iteration=0,
         )
 
-    report_eval_scalars(
+    report_eval(
         logger=logger,
         title='Test Evaluation Results',
         row=eval_result.objective_metrics,
         iteration=0,
     )
     if 'All-micro' in eval_result.test_corpora_df.index:
-        report_eval_scalars(
+        report_eval(
             logger=logger,
             title='Test Evaluation Results (micro)',
             row=eval_result.test_corpora_df.loc['All-micro'].to_dict(),

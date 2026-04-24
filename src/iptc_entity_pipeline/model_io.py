@@ -35,7 +35,7 @@ class SavedModelPaths:
     eval_corpus_path: str
 
 
-def save_final_model_outputs(
+def save_outputs(
     *,
     model: Any,
     test_data: Any,
