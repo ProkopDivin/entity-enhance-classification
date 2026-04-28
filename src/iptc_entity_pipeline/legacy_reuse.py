@@ -11,8 +11,16 @@ Source provenance:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
+
+import numpy as np
+import pandas as pd
+from clearml import Task
+from geneea.catlib.model.nnet import NeuralCategModel
+from geneea.catlib.vec.dataset import EmbeddingDataset
+from geneea.catlib.vec.vectorizer import Vectorizer
 
 from iptc_entity_pipeline.config import EvaluationCnf
 
@@ -25,13 +33,6 @@ class EpochStats:
     recall: list[float] = field(default_factory=list)
     loss: list[float] = field(default_factory=list)
 
-import numpy as np
-import pandas as pd
-from clearml import Task
-from geneea.catlib.model.nnet import NeuralCategModel
-from geneea.catlib.vec.dataset import EmbeddingDataset
-from geneea.catlib.vec.vectorizer import Vectorizer
-
 
 def createClassificationModel(
     embDim: int,
@@ -39,6 +40,7 @@ def createClassificationModel(
     modelConfig: Dict[str, Union[int, str, float]],
     textVectorizer: Vectorizer[str] | Literal['not None'],
     logConfig: Dict[str, Any],
+    connect_config: bool = True,
 ) -> NeuralCategModel:
     """
     Legacy model constructor kept identical to original behavior.
@@ -48,14 +50,16 @@ def createClassificationModel(
     :param modelConfig: Model configuration dictionary.
     :param textVectorizer: Text vectorizer or legacy marker.
     :param logConfig: Logging configuration.
+    :param connect_config: Register config with ClearML task (disable during CV to avoid flooding).
     :return: Initialized neural classifier model.
     """
-    import logging
+    task = Task.current_task()
+    if task is not None:
+        logger = task.get_logger()
+        logger.report_text('Creating classification model', level=logging.INFO, print_console=logConfig['PRINT_LOGS'])
+        if connect_config:
+            task.connect(modelConfig, name='modelConfig')
 
-    logger = Task.current_task().get_logger()
-    logger.report_text('Creating classification model', level=logging.INFO, print_console=logConfig['PRINT_LOGS'])
-
-    Task.current_task().connect(modelConfig, name='modelConfig')
     model = NeuralCategModel.create(
         embDim=embDim,
         outDim=outDim,
@@ -73,6 +77,7 @@ def trainClassificationModel(
     devData: EmbeddingDataset,
     trainingConfig: Dict[str, Any],
     logConfig: Dict[str, Any],
+    connect_config: bool = True,
 ) -> Tuple[
     NeuralCategModel,
     float,
@@ -92,18 +97,18 @@ def trainClassificationModel(
     :param devData: Development dataset.
     :param trainingConfig: Training configuration.
     :param logConfig: Logging configuration.
+    :param connect_config: Register config with ClearML task (disable during CV to avoid flooding).
     :return: Tuple of trained model and final dev loss.
     """
-    import logging
     import time
 
     import torch
 
-    logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.INFO)
-
-    logger = Task.current_task().get_logger()
+    task = Task.current_task()
+    logger = task.get_logger()
     logger.report_text('Training classification model', level=logging.INFO, print_console=logConfig['PRINT_LOGS'])
-    Task.current_task().connect(trainingConfig, name='trainingConfig')
+    if connect_config:
+        task.connect(trainingConfig, name='trainingConfig')
 
     def parseOptimizer(optimizerConfig) -> Tuple[torch.optim.Optimizer, float]:
         if optimizerConfig['name'] == 'adam':
@@ -217,7 +222,7 @@ def trainClassificationModel(
         recall = total_correct / (total_gold or 1.0)
         if logInfo:
             logger.report_text(
-                f'Test Error: \n Prec: {(100 * precision):>0.2f}% ({total_correct}/{total_pred}),\n exc_info=Recall: {(100 * recall):>0.2f}% ({total_correct}/{total_gold}),\n Avg loss: {test_loss:>8f} \n',
+                f'Test Error: \n Prec: {(100 * precision):>0.2f}% ({total_correct}/{total_pred}),\n Recall: {(100 * recall):>0.2f}% ({total_correct}/{total_gold}),\n Avg loss: {test_loss:>8f} \n',
                 level=logging.INFO,
                 print_console=logConfig['PRINT_LOGS'],
             )
@@ -402,6 +407,7 @@ def evaluateModel(
     customThresholds: Optional[Mapping[str, float]] = None,
     *,
     returnPredictions: bool = False,
+    connect_config: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame] | Tuple[pd.DataFrame, pd.DataFrame, Any]:
     """
     Legacy evaluation entry point.
@@ -414,13 +420,16 @@ def evaluateModel(
     :param evaluation_config: Typed evaluation settings.
     :param customThresholds: Optional per-label thresholds.
     :param returnPredictions: Whether to also return raw prediction scores.
+    :param connect_config: Register config with ClearML task (disable during CV to avoid flooding).
     :return: Corpora/class tables, optionally with raw prediction scores.
     """
     from dataclasses import asdict
 
     from iptc_entity_pipeline.evaluate import evaluate_predictions
 
-    Task.current_task().connect(asdict(evaluation_config), name='evaluationConfig')
+    task = Task.current_task()
+    if task is not None and connect_config:
+        task.connect(asdict(evaluation_config), name='evaluationConfig')
 
     predictions = model.classifyDataset(evalData, thr=evaluation_config.threshold_predict, returnScores=True)
     df_corpora, df_classes = evaluate_predictions(
