@@ -12,6 +12,7 @@ dependencies = [
     'clearml~=1.16',
     'dill~=0.3',
     'numpy~=1.26',
+    'optuna~=4.0',
     'pandas~=2.2',
     'iterative-stratification~=0.1',
     'sentence-transformers~=3.0',
