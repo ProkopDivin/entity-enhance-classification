@@ -292,8 +292,23 @@ def train_best(
     from iptc_entity_pipeline.config import ModelCnf, TrainingCnf, conf_from_dict
 
     conf_logging()
+    logger = logging.getLogger(__name__)
+    task = Task.current_task()
+    clearml_logger = task.get_logger()
+
     model_cfg = conf_from_dict(ModelCnf, best_model_cnf)
     train_cfg = conf_from_dict(TrainingCnf, train_cnf)
+
+    task.connect(best_model_cnf, name='bestModelConfig')
+    task.connect(train_cnf, name='bestTrainingConfig')
+
+    logger.info(
+        f'Training final model: hidden_dim={model_cfg.hidden_dim}, '
+        f'dropouts=({model_cfg.dropouts1}, {model_cfg.dropouts2}), '
+        f'lr={train_cfg.learning_rate}, batch_size={train_cfg.batch_size}, '
+        f'feature_dim={feature_dim}, train_docs={len(train_data.corpus)}, test_docs={len(test_data.corpus)}'
+    )
+
     result = train_model(
         train_data=train_data,
         dev_data=test_data,
@@ -301,10 +316,14 @@ def train_best(
         model_config=model_cfg,
         training_config=train_cfg,
         print_logs=print_logs,
+        validation_split_name='test',
     )
-    task = Task.current_task()
-    logger = task.get_logger()
-    report_test_curve(logger=logger, result=result)
+
+    report_test_curve(logger=clearml_logger, result=result)
+    logger.info(
+        f'Final model training complete: epochs={result.epochs_run}, '
+        f'final_dev_loss={result.final_dev_loss:.6f}'
+    )
     return result.model
 
 @PipelineDecorator.component(
@@ -325,74 +344,59 @@ def eval_final(
     upload_artifacts: bool = False,
 ):
     """Evaluate final model on test and persist CV dev summary with mean/std."""
+    import logging
+    from dataclasses import asdict
     from pathlib import Path
 
-    import pandas as pd
-    from iptc_entity_pipeline.pipeline import EvalResult
     from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf, conf_from_dict
+    from iptc_entity_pipeline.data_loading import sanitize_name
+    from iptc_entity_pipeline.evaluation_comparison import build_path, compare_runs
+    from iptc_entity_pipeline.legacy_reuse import evaluateModel
+    from iptc_entity_pipeline.model_io import export_eval_excel, save_outputs
+    from iptc_entity_pipeline.pipeline import EvalResult
+    from iptc_entity_pipeline.reporting import conf_logging, report_eval_scalars, report_eval_tables
 
-    conf_logging()
-    task = Task.current_task()
-    logger = task.get_logger()
-    eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
-    emb_cfg = conf_from_dict(EmbeddingCnf, emb_cnf)
-    df_corpora_test, df_classes_test, pred_scores = evaluateModel(
-        model=trained_model,
-        evalData=test_data,
-        evaluation_config=eval_cfg,
-        customThresholds=None,
-        returnPredictions=True,
-    )
-
-    objective_row_name = f'All-{eval_cfg.averaging_type}'
-    if objective_corpora in cv_dev_df.index:
-        row_cv = cv_dev_df.loc[objective_corpora].to_dict()
-    else:
-        row_cv = cv_dev_df.iloc[0].to_dict()
-    report_eval(logger=logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
-    if 'Precision_std' in row_cv:
-        report_cv_std(
-            logger=logger,
-            row=row_cv,
-            title='Dev Cross Validation Mean Results',
-            iteration=0,
+    def run_comparison():
+        """Run optional baseline comparison and report results to ClearML."""
+        comparison_cfg = config_mapping.get('evaluation_comparison') or config_mapping.get('comparison') or {}
+        base_run_dir = str(comparison_cfg.get('base_run_dir', '') or eval_cfg.base_run_dir).strip()
+        if not base_run_dir:
+            return None
+        out_dir = Path(save_paths.output_dir)
+        result = compare_runs(
+            current_run_dir=save_paths.output_dir,
+            base_run_dir=base_run_dir,
+            threshold_eval=eval_cfg.threshold_eval,
+            averaging_type=eval_cfg.averaging_type,
+            top_n=int(comparison_cfg.get('top_n', 20)),
+            only_diff=bool(comparison_cfg.get('only_diff', False)),
+            output_path=build_path(
+                output_root=str(comparison_cfg.get('output_root', out_dir)),
+                config_name=str(comparison_cfg.get('config_name', config_name)),
+            ),
         )
-    row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
-    report_eval(logger=logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
-    if 'All-micro' in df_corpora_test.index:
-        row_micro_test = df_corpora_test.loc['All-micro'].to_dict()
-        report_eval(logger=logger, title='Test Evaluation Results (micro)', row=row_micro_test, iteration=0)
-    if objective_corpora in df_corpora_test.index:
-        row_objective_test = df_corpora_test.loc[objective_corpora].to_dict()
-        report_eval(logger=logger, title='Objective Test Evaluation Results', row=row_objective_test, iteration=0)
-    else:
-        logging.getLogger(__name__).warning(
-            'Requested objective_corpora "%s" not found in test corpus index; available=%s',
-            objective_corpora,
-            list(df_corpora_test.index),
+        clearml_logger.report_table(
+            title='Evaluation Comparison', series='Summary', iteration=0, table_plot=result.summary_comparison,
         )
+        clearml_logger.report_table(
+            title='Evaluation Comparison', series='Corpora Comparison', iteration=0,
+            table_plot=result.corpora_comparison,
+        )
+        clearml_logger.report_table(
+            title='Evaluation Comparison', series='Classes Comparison', iteration=0,
+            table_plot=result.classes_comparison,
+        )
+        if upload_artifacts:
+            task.upload_artifact('evaluation_comparison_summary', artifact_object=result.summary_comparison)
+            task.upload_artifact('evaluation_comparison_classes', artifact_object=result.classes_comparison)
+            task.upload_artifact('evaluation_comparison_corpora', artifact_object=result.corpora_comparison)
+            if result.excel_path is not None:
+                task.upload_artifact('evaluation_comparison_xlsx', artifact_object=str(result.excel_path))
+        return result
 
-    logger.report_table(title='Cross Validation Summary', series='Mean+Std', iteration=0, table_plot=cv_dev_df)
-    logger.report_table(title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test)
-    logger.report_table(title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test)
-
-    model_name = sanitize_name(value=config_name)
-    save_paths = save_outputs(
-        model=trained_model,
-        test_data=test_data,
-        pred_scores=pred_scores,
-        eval_cnf=eval_cfg,
-        emb_cnf=emb_cfg,
-        config_mapping=config_mapping,
-        config_name=config_name,
-        feature_dim=feature_dim,
-        upload_artifacts=upload_artifacts,
-    )
-    output_dir = Path(save_paths.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    excel_path = output_dir / f'final_evaluation_tables_{model_name}.xlsx'
-
-    if upload_artifacts:
+    def upload_eval_artifacts():
+        """Upload all eval-step artifacts to ClearML."""
+        objective_row_name = f'All-{eval_cfg.averaging_type}'
         task.upload_artifact('dev_corpora_dataframe', artifact_object=cv_dev_df)
         task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
         task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
@@ -411,69 +415,75 @@ def eval_final(
         task.upload_artifact('Corpora Dataframe', artifact_object=df_corpora_test)
         task.upload_artifact('Classes Dataframe', artifact_object=df_classes_test)
 
-    comparison_cfg = config_mapping.get('evaluation_comparison') or config_mapping.get('comparison') or {}
-    base_run_dir = str(
-        comparison_cfg.get('base_run_dir', '') or eval_cfg.base_run_dir
-    ).strip()
-    comparison_result = None
-    if base_run_dir:
-        comparison_result = compare_runs(
-            current_run_dir=save_paths.output_dir,
-            base_run_dir=base_run_dir,
-            threshold_eval=eval_cfg.threshold_eval,
-            averaging_type=eval_cfg.averaging_type,
-            top_n=int(comparison_cfg.get('top_n', 20)),
-            only_diff=bool(comparison_cfg.get('only_diff', False)),
-            output_path=build_path(
-                output_root=str(comparison_cfg.get('output_root', output_dir)),
-                config_name=str(comparison_cfg.get('config_name', config_name)),
-            ),
-        )
-        logger.report_table(
-            title='Evaluation Comparison',
-            series='Summary',
-            iteration=0,
-            table_plot=comparison_result.summary_comparison,
-        )
-        logger.report_table(
-            title='Evaluation Comparison',
-            series='Corpora Comparison',
-            iteration=0,
-            table_plot=comparison_result.corpora_comparison,
-        )
-        logger.report_table(
-            title='Evaluation Comparison',
-            series='Classes Comparison',
-            iteration=0,
-            table_plot=comparison_result.classes_comparison,
-        )
-        if upload_artifacts:
-            task.upload_artifact('evaluation_comparison_summary', artifact_object=comparison_result.summary_comparison)
-            task.upload_artifact('evaluation_comparison_classes', artifact_object=comparison_result.classes_comparison)
-            task.upload_artifact('evaluation_comparison_corpora', artifact_object=comparison_result.corpora_comparison)
-            if comparison_result.excel_path is not None:
-                task.upload_artifact('evaluation_comparison_xlsx', artifact_object=str(comparison_result.excel_path))
+    conf_logging()
+    logger = logging.getLogger(__name__)
+    task = Task.current_task()
+    clearml_logger = task.get_logger()
 
-    with pd.ExcelWriter(excel_path) as writer:
-        cv_dev_df.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
-        df_corpora_test.to_excel(excel_writer=writer, sheet_name='test_corpora')
-        df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
-        if comparison_result is not None:
-            comparison_result.corpora_comparison.to_excel(excel_writer=writer, sheet_name='comparison_corpora', index=False)
-            comparison_result.classes_comparison.to_excel(excel_writer=writer, sheet_name='comparison_classes', index=False)
-            comparison_result.summary_comparison.to_excel(excel_writer=writer, sheet_name='comparison_summary', index=False)
-            comparison_result.top_improved_categories.to_excel(excel_writer=writer, sheet_name='comparison_top_up', index=False)
-            comparison_result.top_degraded_categories.to_excel(excel_writer=writer, sheet_name='comparison_top_down', index=False)
-            comparison_result.hamming_loss_comparison.to_excel(excel_writer=writer, sheet_name='comparison_hamming', index=False)
-            comparison_result.pr_auc_per_class.to_excel(excel_writer=writer, sheet_name='comparison_pr_auc', index=False)
-            comparison_result.pr_auc_summary.to_excel(excel_writer=writer, sheet_name='comparison_pr_auc_sum', index=False)
-    logger.report_text(f'Saved final evaluation tables to {excel_path}')
+    eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
+    emb_cfg = conf_from_dict(EmbeddingCnf, emb_cnf)
+    task.connect(eval_cnf, name='evaluationConfig')
+    task.connect(emb_cnf, name='embeddingConfig')
 
+    logger.info(f'Evaluating final model on test: test_docs={len(test_data.corpus)}, objective={objective_corpora}')
+
+    df_corpora_test, df_classes_test, pred_scores = evaluateModel(
+        model=trained_model,
+        evalData=test_data,
+        evaluation_config=eval_cfg,
+        customThresholds=None,
+        returnPredictions=True,
+    )
+
+    report_eval_scalars(
+        clearml_logger=clearml_logger,
+        cv_dev_df=cv_dev_df,
+        df_corpora_test=df_corpora_test,
+        objective_corpora=objective_corpora,
+        averaging_type=eval_cfg.averaging_type,
+    )
+    report_eval_tables(
+        clearml_logger=clearml_logger,
+        cv_dev_df=cv_dev_df,
+        df_corpora_test=df_corpora_test,
+        df_classes_test=df_classes_test,
+    )
+
+    save_paths = save_outputs(
+        model=trained_model,
+        test_data=test_data,
+        pred_scores=pred_scores,
+        eval_cnf=eval_cfg,
+        emb_cnf=emb_cfg,
+        config_mapping=config_mapping,
+        config_name=config_name,
+        feature_dim=feature_dim,
+        upload_artifacts=upload_artifacts,
+    )
+
+    comparison_result = run_comparison()
+
+    output_dir = Path(save_paths.output_dir)
+    model_name = sanitize_name(value=config_name)
+    excel_path = output_dir / f'final_evaluation_tables_{model_name}.xlsx'
+    export_eval_excel(
+        excel_path=excel_path,
+        cv_dev_df=cv_dev_df,
+        df_corpora_test=df_corpora_test,
+        df_classes_test=df_classes_test,
+        comparison_result=comparison_result,
+    )
+
+    if upload_artifacts:
+        upload_eval_artifacts()
+
+    objective_row_name = f'All-{eval_cfg.averaging_type}'
     objective_metrics = (
         df_corpora_test.loc[objective_corpora].to_dict()
         if objective_corpora in df_corpora_test.index
-        else row_all_test
+        else df_corpora_test.loc[objective_row_name].to_dict()
     )
+    logger.info(f'Evaluation complete: F1={objective_metrics.get("F1", "N/A")}, config={config_name}')
     return EvalResult(
         dev_corpora_df=cv_dev_df,
         test_corpora_df=df_corpora_test,

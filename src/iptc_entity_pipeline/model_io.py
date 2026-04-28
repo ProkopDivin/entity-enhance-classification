@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import pandas as pd
 from clearml import Task
 
 from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf
@@ -131,3 +132,52 @@ def save_outputs(
         predictions_path=str(predictions_path),
         eval_corpus_path=str(eval_corpus_path),
     )
+
+
+def export_eval_excel(
+    *,
+    excel_path: Path,
+    cv_dev_df: pd.DataFrame,
+    df_corpora_test: pd.DataFrame,
+    df_classes_test: pd.DataFrame,
+    comparison_result: Any = None,
+) -> None:
+    """Write evaluation tables (and optional comparison) to a single Excel workbook.
+
+    :param excel_path: Target ``.xlsx`` path.
+    :param cv_dev_df: Best-trial CV dev summary.
+    :param df_corpora_test: Test corpora metrics.
+    :param df_classes_test: Test per-class metrics.
+    :param comparison_result: Optional ``ComparisonResult`` from baseline comparison.
+    """
+    excel_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(excel_path) as writer:
+        cv_dev_df.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
+        df_corpora_test.to_excel(excel_writer=writer, sheet_name='test_corpora')
+        df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
+        if comparison_result is not None:
+            comparison_result.corpora_comparison.to_excel(
+                excel_writer=writer, sheet_name='comparison_corpora', index=False,
+            )
+            comparison_result.classes_comparison.to_excel(
+                excel_writer=writer, sheet_name='comparison_classes', index=False,
+            )
+            comparison_result.summary_comparison.to_excel(
+                excel_writer=writer, sheet_name='comparison_summary', index=False,
+            )
+            comparison_result.top_improved_categories.to_excel(
+                excel_writer=writer, sheet_name='comparison_top_up', index=False,
+            )
+            comparison_result.top_degraded_categories.to_excel(
+                excel_writer=writer, sheet_name='comparison_top_down', index=False,
+            )
+            comparison_result.hamming_loss_comparison.to_excel(
+                excel_writer=writer, sheet_name='comparison_hamming', index=False,
+            )
+            comparison_result.pr_auc_per_class.to_excel(
+                excel_writer=writer, sheet_name='comparison_pr_auc', index=False,
+            )
+            comparison_result.pr_auc_summary.to_excel(
+                excel_writer=writer, sheet_name='comparison_pr_auc_sum', index=False,
+            )
+    LOGGER.info(f'Saved final evaluation tables to {excel_path}')
