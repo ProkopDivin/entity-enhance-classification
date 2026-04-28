@@ -98,6 +98,7 @@ def train_model(
     model_config: ModelCnf,
     training_config: TrainingCnf,
     print_logs: bool = True,
+    connect_config: bool = True,
 ) -> TrainingResult:
     """
     Create and train the classification model on given fit/dev datasets.
@@ -108,6 +109,7 @@ def train_model(
     :param model_config: Scalar model hyperparameters.
     :param training_config: Training loop parameters.
     :param print_logs: Whether to print ClearML log messages to console.
+    :param connect_config: Register config with ClearML task (disable during CV to avoid flooding).
     :return: Training result with model, loss, and per-epoch curves.
     """
     def calc_f1_curve(*, precision_curve: Sequence[float], recall_curve: Sequence[float]) -> tuple[float, ...]:
@@ -129,6 +131,7 @@ def train_model(
         modelConfig=model_payload(model_config=model_config),
         textVectorizer='not None',
         logConfig=log_config,
+        connect_config=connect_config,
     )
     (
         model,
@@ -146,6 +149,7 @@ def train_model(
         devData=dev_data,
         trainingConfig=train_payload(training_config=training_config),
         logConfig=log_config,
+        connect_config=connect_config,
     )
     return TrainingResult(
         model=model,

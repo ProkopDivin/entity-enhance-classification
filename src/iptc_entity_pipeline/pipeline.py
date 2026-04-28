@@ -82,8 +82,6 @@ def prepare_article_embeddings(
     emb_cnf: Mapping[str, Any],
 ):
     """Precompute and cache missing article embeddings for all corpora."""
-    from dataclasses import asdict
-
     from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, conf_from_dict
 
     conf_logging()
@@ -209,6 +207,7 @@ def run_cv(
     train_cnf: Mapping[str, Any],
     eval_cnf: Mapping[str, Any],
     cv_cnf: Mapping[str, Any],
+    optuna_cnf: Mapping[str, Any],
     objective_corpora: str,
     print_logs: bool = True,
     debug: bool = False,
@@ -217,13 +216,11 @@ def run_cv(
     """Run mandatory CV over train and select best hyperparameter combination."""
     from dataclasses import asdict
 
-    from iptc_entity_pipeline.config import CvCnf, EvaluationCnf, HyperparamSpace, TrainingCnf, conf_from_dict
-
-    from iptc_entity_pipeline.cross_validation import build_cv_df, build_metrics, prepare_cv, select_best
-   
+    from iptc_entity_pipeline.config import CvCnf, EvaluationCnf, HyperparamSpace, OptunaCnf, TrainingCnf, conf_from_dict
+    from iptc_entity_pipeline.cross_validation import build_cv_df, build_cv_result, prepare_cv, select_best
 
     conf_logging()
-    py_logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)
     task = Task.current_task()
     clearml_logger = task.get_logger()
 
@@ -231,22 +228,30 @@ def run_cv(
     base_training = conf_from_dict(TrainingCnf, train_cnf)
     eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
     cv_cfg = conf_from_dict(CvCnf, cv_cnf)
+    optuna_cfg = conf_from_dict(OptunaCnf, optuna_cnf)
+
+    task.connect(asdict(space), name='hyperparamSpace')
+    task.connect(asdict(base_training), name='trainingConfig')
+    task.connect(asdict(eval_cfg), name='evaluationConfig')
+    task.connect(asdict(cv_cfg), name='cvConfig')
+    task.connect(asdict(optuna_cfg), name='optunaConfig')
 
     x_full, y_full = prepare_cv(train_data=train_data)
-    combinations = space.iter_combinations(base_training=base_training)
+    logger.info(f'CV data prepared: x_shape={x_full.shape}, y_shape={y_full.shape}, feature_dim={feature_dim}')
 
     selection = select_best(
-        combinations=combinations,
+        space=space,
+        base_training=base_training,
         train_data=train_data,
         x_full=x_full,
         y_full=y_full,
         feature_dim=feature_dim,
         eval_cfg=eval_cfg,
         cv_cfg=cv_cfg,
+        optuna_cfg=optuna_cfg,
         objective_corpora=objective_corpora,
         debug=debug,
         print_logs=print_logs,
-        py_logger=py_logger,
         clearml_logger=clearml_logger,
     )
 
@@ -254,6 +259,7 @@ def run_cv(
         trial_rows=selection.trial_rows,
         fold_rows=selection.fold_rows,
         best_trial=selection.best_trial,
+        objective_corpora=objective_corpora,
     )
 
     report_cv_curve(
@@ -265,14 +271,9 @@ def run_cv(
         upload_artifacts=upload_artifacts,
     )
     report_cv_fold(logger=clearml_logger, fold_curves=selection.best_fold_curves)
-    
-    result = {
-        'cv_dev_df': cv_dev_df,
-        'best_model_config': asdict(selection.best_model_config),
-        'best_training_config': asdict(selection.best_training_config),
-        'objective_metrics': build_metrics(best_trial=selection.best_trial),
-    }
-    return result
+    logger.info(f'CV complete: best_trial F1={selection.best_trial["F1_mean"]:.4f}')
+
+    return build_cv_result(cv_dev_df=cv_dev_df, selection=selection)
 
 @PipelineDecorator.component(
     return_values=['trainedModel'],
@@ -500,6 +501,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     train_cnf = cnf['train']
     eval_cnf = cnf['eval']
     cv_cnf = cnf.get('cv', {'folds': 5, 'random_seed': 43})
+    optuna_cnf = cnf.get('optuna', {})
     hparam_cnf = cnf['hparam']
     obj_corpora = cnf['objective_corpora']
     down_smpl = cnf.get('downsample_corpora', {})
@@ -558,13 +560,14 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         train_cnf=train_cnf,
         eval_cnf=eval_cnf,
         cv_cnf=cv_cnf,
+        optuna_cnf=optuna_cnf,
         objective_corpora=obj_corpora,
         print_logs=print_logs,
         debug=debug,
         upload_artifacts=upload_artifacts,
     )
     if upload_artifacts:
-        task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result['objective_metrics']))
+        task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result.objective_metrics))
 
     log_stage(
         task=task,
@@ -575,8 +578,8 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         train_data=train_data,
         test_data=test_data,
         feature_dim=feature_dim,
-        best_model_cnf=cv_result['best_model_config'],
-        train_cnf=cv_result['best_training_config'],
+        best_model_cnf=cv_result.best_model_config,
+        train_cnf=cv_result.best_training_config,
         print_logs=print_logs,
     )
 
@@ -587,7 +590,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     )
     eval_result = eval_final(
         trained_model=trained_model,
-        cv_dev_df=cv_result['cv_dev_df'],
+        cv_dev_df=cv_result.cv_dev_df,
         test_data=test_data,
         eval_cnf=eval_cnf,
         emb_cnf=emb_cnf,

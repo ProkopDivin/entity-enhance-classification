@@ -1,9 +1,8 @@
 """Configuration dataclasses for the IPTC entity-enhanced pipeline."""
 
 from dataclasses import Field, asdict, dataclass, field, fields, replace
-from itertools import product
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
 
@@ -74,8 +73,7 @@ class TrainingCnf:
 class HyperparamSpace:
     """Grid-search space for tunable hyperparameters.
 
-    Each list field defines candidate values to try.  Use
-    :meth:`iter_combinations` to expand the full Cartesian product.
+    Each field defines candidate values for the Optuna sampler.
     """
 
     hidden_dims: tuple[int, ...] = (1024,)
@@ -83,25 +81,6 @@ class HyperparamSpace:
     dropouts2: tuple[float, ...] = (0.3,)
     batch_sizes: tuple[int, ...] = (100,)
     learning_rates: tuple[float, ...] = (0.00037,)
-
-    def iter_combinations(
-        self, base_training: TrainingCnf,
-    ) -> list[tuple[ModelCnf, TrainingCnf]]:
-        """Expand grid into all ``(ModelCnf, TrainingCnf)`` combinations.
-
-        :param base_training: Base training config whose non-grid fields are preserved.
-        :return: List of ``(ModelCnf, TrainingCnf)`` tuples.
-        """
-        return [
-            (
-                ModelCnf(hidden_dim=hd, dropouts1=d1, dropouts2=d2),
-                replace(base_training, batch_size=bs, learning_rate=lr),
-            )
-            for hd, d1, d2, bs, lr in product(
-                self.hidden_dims, self.dropouts1, self.dropouts2,
-                self.batch_sizes, self.learning_rates,
-            )
-        ]
 
 
 @dataclass(frozen=True)
@@ -125,6 +104,19 @@ class CvCnf:
 
 
 @dataclass(frozen=True)
+class OptunaCnf:
+    """Optuna optimization behavior for CV hyperparameter search."""
+
+    sampler: Literal['grid', 'tpe', 'random'] = 'grid'
+    direction: str = 'maximize'
+    n_trials: int = 30
+    seed: int = 43
+    pruner: str = 'median'
+    startup_trials: int = 5
+    warmup_steps: int = 2
+
+
+@dataclass(frozen=True)
 class BaseCnf:
     """Top-level pipeline config grouped by concern."""
 
@@ -134,6 +126,7 @@ class BaseCnf:
     train: TrainingCnf = field(default_factory=TrainingCnf)
     eval: EvaluationCnf = field(default_factory=EvaluationCnf)
     cv: CvCnf = field(default_factory=CvCnf)
+    optuna: OptunaCnf = field(default_factory=OptunaCnf)
     hparam: HyperparamSpace = field(default_factory=HyperparamSpace)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
@@ -159,11 +152,51 @@ class BaseCnfWithHPO(BaseCnf):
             learning_rates=(0.00037,),
         )
     ) 
+    optuna: OptunaCnf = field(
+        default_factory=lambda: replace(OptunaCnf(), sampler='grid')
+    )
 
 @dataclass(frozen=True)
-class WpEntitiesCnf(BaseCnfWithHPO):
+class BaseCnfWithHPO2(BaseCnf):
+    """Base configuration with hyperparameter space."""
+    debug: bool = field(default_factory=lambda: False)
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(100, 384, 1024, 2048, 4096, 8192, 16384,),
+            dropouts1=(0.0, 0.1,),
+            dropouts2=(0.0, 0.15, 0.3, 0.5,),
+            learning_rates=(0.00037,),
+        )
+    ) 
+    
+    
+
+@dataclass(frozen=True)
+class WpEntitiesCnf(BaseCnfWithHPO2):
     """Default entity-enhanced configuration."""
 
+@dataclass(frozen=True)
+class WpEntitiesCnf2(BaseCnfWithHPO2):
+    """Default entity-enhanced configuration."""
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=294613))
+    
+@dataclass(frozen=True)
+class WpEntitiesCnf3(BaseCnfWithHPO2):
+    """Default entity-enhanced configuration."""
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=999751))
+
+@dataclass(frozen=True)
+class WpEntitiesCnf4(BaseCnfWithHPO2):
+    """Default entity-enhanced configuration."""
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=212654))
+
+@dataclass(frozen=True)
+class WpEntitiesCnf5(BaseCnfWithHPO2):
+    """Default entity-enhanced configuration."""
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=984621))
+    
+    
 @dataclass(frozen=True)
 class WPEntitiesMeanCnf(BaseCnf):
     """Entity-enhanced configuration with mean pooling."""
@@ -194,6 +227,28 @@ class ArticleOnlyCnf(BaseCnfWithHPO):
         default_factory=lambda: replace(EmbeddingCnf(), use_entity_embeddings=False)
     )
 
+@dataclass(frozen=True)
+class ArticleOnlyCnf2(ArticleOnlyCnf):
+    """Article-only configuration without entity embeddings."""
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=294613))
+    
+
+@dataclass(frozen=True)
+class ArticleOnlyCnf3(ArticleOnlyCnf):
+    """Article-only configuration without entity embeddings."""
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=999751))
+    
+    
+@dataclass(frozen=True)
+class ArticleOnlyCnf4(ArticleOnlyCnf):
+    """Article-only configuration without entity embeddings."""
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=212654))
+    
+    
+@dataclass(frozen=True)
+class ArticleOnlyCnf5(ArticleOnlyCnf):
+    """Article-only configuration without entity embeddings."""
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=984621))   
 
 
 @dataclass(frozen=True)
@@ -219,7 +274,8 @@ class DebugCnf(BaseCnf):
         )
     )
     cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), folds=2))
-    debug: bool = False
+    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=2))
+    debug: bool = True
 
 
 
@@ -619,7 +675,7 @@ class BestWPEntitiesENNLCnf(BaseCnfWithHPO):
     
     
 @dataclass(frozen=True)
-class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO):
+class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO2):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
@@ -699,6 +755,14 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
         'wikipedia2vec_entities': Wikipedia2VecEntitiesCnf(),
         'best_wikipedia2vec_entities': BestWikipedia2VecEntitiesCnf(),
+        'wpentities_2': WpEntitiesCnf2(),
+        'wpentities_3': WpEntitiesCnf3(),
+        'wpentities_4': WpEntitiesCnf4(),
+        'wpentities_5': WpEntitiesCnf5(),
+        'article_only_2': ArticleOnlyCnf2(),
+        'article_only_3': ArticleOnlyCnf3(),
+        'article_only_4': ArticleOnlyCnf4(),
+        'article_only_5': ArticleOnlyCnf5(),
     }
 
 
