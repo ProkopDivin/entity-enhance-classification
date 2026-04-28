@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from iptc_entity_pipeline.config import ModelCnf, TrainingCnf
 from iptc_entity_pipeline.dataset_builder import to_numpy_array
-from iptc_entity_pipeline.legacy_reuse import createClassificationModel, trainClassificationModel
+from iptc_entity_pipeline.legacy_reuse import LegacyTrainResult, createClassificationModel, trainClassificationModel
 
 LOGGER = logging.getLogger(__name__)
 
@@ -63,12 +63,12 @@ def model_payload(*, model_config: ModelCnf) -> dict[str, Any]:
     }
 
 
-def train_payload(*, training_config: TrainingCnf) -> dict[str, Any]:
+def train_payload(*, training_config: TrainingCnf, validation_split_name: str = 'dev') -> dict[str, Any]:
     """Build training payload expected by legacy training entrypoint."""
     return {
         'epochs': training_config.epochs,
         'batchSize': training_config.batch_size,
-        'validationSplitName': 'dev',
+        'validationSplitName': validation_split_name,
         'earlyStoppingPatience': training_config.early_stopping_patience,
         'earlyStoppingMinDelta': training_config.early_stopping_min_delta,
         'optimizerConfig': {
@@ -99,6 +99,7 @@ def train_model(
     training_config: TrainingCnf,
     print_logs: bool = True,
     connect_config: bool = True,
+    validation_split_name: str = 'dev',
 ) -> TrainingResult:
     """
     Create and train the classification model on given fit/dev datasets.
@@ -110,6 +111,7 @@ def train_model(
     :param training_config: Training loop parameters.
     :param print_logs: Whether to print ClearML log messages to console.
     :param connect_config: Register config with ClearML task (disable during CV to avoid flooding).
+    :param validation_split_name: Label for validation split in ClearML charts (e.g. 'dev' or 'test').
     :return: Training result with model, loss, and per-epoch curves.
     """
     def calc_f1_curve(*, precision_curve: Sequence[float], recall_curve: Sequence[float]) -> tuple[float, ...]:
@@ -133,36 +135,26 @@ def train_model(
         logConfig=log_config,
         connect_config=connect_config,
     )
-    (
-        model,
-        final_dev_loss,
-        epochs_run,
-        train_precisions,
-        train_recalls,
-        train_losses,
-        dev_precisions,
-        dev_recalls,
-        dev_losses,
-    ) = trainClassificationModel(
+    result = trainClassificationModel(
         model=model,
         trainData=train_data,
         devData=dev_data,
-        trainingConfig=train_payload(training_config=training_config),
+        trainingConfig=train_payload(training_config=training_config, validation_split_name=validation_split_name),
         logConfig=log_config,
         connect_config=connect_config,
     )
     return TrainingResult(
-        model=model,
-        final_dev_loss=final_dev_loss,
-        epochs_run=epochs_run,
-        train_precision_per_epoch=tuple(train_precisions),
-        dev_precision_per_epoch=tuple(dev_precisions),
-        train_recall_per_epoch=tuple(train_recalls),
-        dev_recall_per_epoch=tuple(dev_recalls),
-        train_loss_per_epoch=tuple(train_losses),
-        dev_loss_per_epoch=tuple(dev_losses),
-        train_f1_per_epoch=calc_f1_curve(precision_curve=train_precisions, recall_curve=train_recalls),
-        dev_f1_per_epoch=calc_f1_curve(precision_curve=dev_precisions, recall_curve=dev_recalls),
+        model=result.model,
+        final_dev_loss=result.final_dev_loss,
+        epochs_run=result.epochs_run,
+        train_precision_per_epoch=tuple(result.train_precisions),
+        dev_precision_per_epoch=tuple(result.dev_precisions),
+        train_recall_per_epoch=tuple(result.train_recalls),
+        dev_recall_per_epoch=tuple(result.dev_recalls),
+        train_loss_per_epoch=tuple(result.train_losses),
+        dev_loss_per_epoch=tuple(result.dev_losses),
+        train_f1_per_epoch=calc_f1_curve(precision_curve=result.train_precisions, recall_curve=result.train_recalls),
+        dev_f1_per_epoch=calc_f1_curve(precision_curve=result.dev_precisions, recall_curve=result.dev_recalls),
     )
 
 

@@ -168,6 +168,66 @@ def report_test_curve(*, logger: Any, result: TrainingResult) -> None:
         )
 
 
+def report_eval_scalars(
+    *,
+    clearml_logger: Any,
+    cv_dev_df: Any,
+    df_corpora_test: Any,
+    objective_corpora: str,
+    averaging_type: str,
+) -> None:
+    """Report CV dev and test evaluation scalar metrics to ClearML.
+
+    :param clearml_logger: ClearML logger instance.
+    :param cv_dev_df: Best-trial CV dev summary DataFrame (indexed by objective_corpora).
+    :param df_corpora_test: Test corpora evaluation DataFrame.
+    :param objective_corpora: Primary corpus name for objective metrics.
+    :param averaging_type: Averaging type (e.g. 'datapoint', 'micro').
+    """
+    if objective_corpora in cv_dev_df.index:
+        row_cv = cv_dev_df.loc[objective_corpora].to_dict()
+    else:
+        row_cv = cv_dev_df.iloc[0].to_dict()
+    report_eval(logger=clearml_logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
+    if 'Precision_std' in row_cv:
+        report_cv_std(logger=clearml_logger, row=row_cv, title='Dev Cross Validation Mean Results', iteration=0)
+
+    objective_row_name = f'All-{averaging_type}'
+    row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
+    report_eval(logger=clearml_logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
+
+    if 'All-micro' in df_corpora_test.index:
+        row_micro = df_corpora_test.loc['All-micro'].to_dict()
+        report_eval(logger=clearml_logger, title='Test Evaluation Results (micro)', row=row_micro, iteration=0)
+
+    if objective_corpora in df_corpora_test.index:
+        row_obj = df_corpora_test.loc[objective_corpora].to_dict()
+        report_eval(logger=clearml_logger, title='Objective Test Evaluation Results', row=row_obj, iteration=0)
+    else:
+        LOGGER.warning(
+            'Requested objective_corpora "%s" not found in test corpus index; available=%s',
+            objective_corpora,
+            list(df_corpora_test.index),
+        )
+
+
+def report_eval_tables(
+    *,
+    clearml_logger: Any,
+    cv_dev_df: Any,
+    df_corpora_test: Any,
+    df_classes_test: Any,
+) -> None:
+    """Report evaluation summary tables to ClearML."""
+    clearml_logger.report_table(title='Cross Validation Summary', series='Mean+Std', iteration=0, table_plot=cv_dev_df)
+    clearml_logger.report_table(
+        title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test,
+    )
+    clearml_logger.report_table(
+        title='Test Evaluation', series='Classes Dataframe', iteration=0, table_plot=df_classes_test,
+    )
+
+
 def conf_logging(*, level: int = logging.INFO) -> None:
     """Ensure component worker processes emit INFO logs to console."""
     root_logger = logging.getLogger()

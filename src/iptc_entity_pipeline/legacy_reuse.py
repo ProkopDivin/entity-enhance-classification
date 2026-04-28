@@ -1,22 +1,25 @@
-"""Legacy model/train/eval helpers copied from original IPTC pipeline.
+"""Legacy model/train/eval helpers ported from original IPTC pipeline.
 
 Source provenance:
 - Source file: /home/share/clearml-pipelines/iptc/IPTC-pipeline-GE-2905/iptc_pipeline.py
-- Functions copied for behavior preservation: createClassificationModel,
+- Functions ported for behavior preservation: createClassificationModel,
   trainClassificationModel, evaluateModel.
 """
 
-# CamelCase names are preserved intentionally in this module to match the
-# original legacy implementation and reduce behavior drift during migration.
+# CamelCase names are preserved intentionally for the three public entry
+# points to match the original legacy implementation.
 
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Literal, Mapping
 
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn as nn
 from clearml import Task
 from geneea.catlib.model.nnet import NeuralCategModel
 from geneea.catlib.vec.dataset import EmbeddingDataset
@@ -24,6 +27,12 @@ from geneea.catlib.vec.vectorizer import Vectorizer
 
 from iptc_entity_pipeline.config import EvaluationCnf
 
+LOGGER = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
 
 @dataclass
 class EpochStats:
@@ -34,12 +43,182 @@ class EpochStats:
     loss: list[float] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class LegacyTrainResult:
+    """Typed result replacing the raw 9-tuple from trainClassificationModel."""
+
+    model: NeuralCategModel
+    final_dev_loss: float
+    epochs_run: int
+    train_precisions: list[float]
+    train_recalls: list[float]
+    train_losses: list[float]
+    dev_precisions: list[float]
+    dev_recalls: list[float]
+    dev_losses: list[float]
+
+
+# ---------------------------------------------------------------------------
+# Loss / optimizer / scheduler factories
+# ---------------------------------------------------------------------------
+
+class FocalLoss(nn.Module):
+    """Focal loss for imbalanced multi-label classification."""
+
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0, reduction: str = 'mean') -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        bce = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        targets_f = targets.type(torch.float32)
+        at = self.alpha * targets_f + (1 - self.alpha) * (1 - targets_f)
+        pt = torch.exp(-bce)
+        loss = at * (1 - pt) ** self.gamma * bce
+        if self.reduction == 'mean':
+            return torch.mean(loss)
+        if self.reduction == 'sum':
+            return torch.sum(loss)
+        return loss
+
+
+def _parse_optimizer(config: dict[str, Any]) -> tuple[Any, float]:
+    """Build optimizer factory and learning rate from config dict."""
+    if config['name'] == 'adam':
+        lr = config['adamConfig']['lr']
+
+        def factory(params: Any, lr: float) -> torch.optim.Optimizer:
+            return torch.optim.Adam(params, lr=lr)
+
+        return factory, lr
+    raise ValueError(f'Unknown optimizer: {config["name"]}')
+
+
+def _parse_lr_scheduler(config: dict[str, Any]) -> Any:
+    """Build LR scheduler factory from config dict."""
+    name = config['name']
+    if name == 'stepLR':
+        sched_cfg = config['stepLRConfig']
+
+        def factory(opt: torch.optim.Optimizer) -> Any:
+            return torch.optim.lr_scheduler.StepLR(
+                opt, step_size=sched_cfg['stepSize'], gamma=sched_cfg['gamma'],
+            )
+
+        return factory
+    if name == 'cosineAnnealingLR':
+        sched_cfg = config['cosineAnnealingLRConfig']
+
+        def factory(opt: torch.optim.Optimizer) -> Any:
+            return torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=sched_cfg['T_max'])
+
+        return factory
+    raise ValueError(f'Unknown lr scheduler: {name}')
+
+
+def _parse_loss(
+    config: dict[str, Any],
+    train_data: EmbeddingDataset,
+    device: torch.device,
+) -> nn.Module:
+    """Build loss function from config dict."""
+    name = config['name']
+    if name == 'bceWithLogitsLoss':
+        return nn.BCEWithLogitsLoss()
+    if name == 'focalLoss':
+        return FocalLoss(config['focalLossConfig']['alpha'], config['focalLossConfig']['gamma'])
+    if name == 'bceWithLogitsLossWeighted':
+        corpus = train_data.corpus
+        freqs: dict[str, int] = {cat: 0 for cat in corpus.catList}
+        for doc in corpus:
+            for cat in doc.cats:
+                freqs[cat] += 1
+        pos_weights = [
+            (len(corpus) - freqs[cat]) / freqs[cat] if freqs[cat] > 0 else 1.0
+            for cat in corpus.catList
+        ]
+        return nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weights).to(device))
+    raise ValueError(f'Unknown loss: {name}')
+
+
+# ---------------------------------------------------------------------------
+# Validation / early-stopping helpers
+# ---------------------------------------------------------------------------
+
+def _validate_split(
+    *,
+    model: NeuralCategModel,
+    dataloader: torch.utils.data.DataLoader,
+    loss_fn: nn.Module,
+    thr: float = 0.0,
+) -> tuple[float, float, float]:
+    """Compute precision, recall, and mean loss over a dataloader split.
+
+    :return: ``(precision, recall, mean_loss)`` tuple.
+    """
+    total_gold = 0.0
+    total_pred = 0.0
+    total_correct = 0.0
+    total_loss = 0.0
+    num_batches = len(dataloader)
+
+    with torch.no_grad():
+        model._nn.eval()
+        for x_batch, y_batch in dataloader:
+            x_batch = x_batch.to(model._device)
+            y_batch = y_batch.to(model._device)
+            pred = model._nn(x_batch)
+            total_loss += loss_fn(pred, y_batch).item()
+            total_pred += (pred > thr).type(torch.float).sum().item()
+            total_gold += (y_batch > 0.5).type(torch.float).sum().item()
+            total_correct += torch.logical_and(pred > thr, y_batch > 0.5).type(torch.float).sum().item()
+
+    mean_loss = total_loss / num_batches
+    precision = total_correct / (total_pred or 1.0)
+    recall = total_correct / (total_gold or 1.0)
+    return precision, recall, mean_loss
+
+
+def _clone_state_cpu(model: NeuralCategModel) -> dict[str, Any]:
+    """Snapshot model weights to CPU for early-stopping checkpoint."""
+    return {k: v.detach().cpu().clone() for k, v in model._nn.state_dict().items()}
+
+
+def _restore_state_cpu(model: NeuralCategModel, state: dict[str, Any]) -> None:
+    """Restore model weights from a CPU snapshot."""
+    model._nn.load_state_dict({k: v.to(model._device) for k, v in state.items()})
+
+
+def _log_validation(
+    *,
+    clearml_logger: Any,
+    precision: float,
+    recall: float,
+    loss: float,
+    print_logs: bool,
+) -> None:
+    """Emit human-readable validation results to ClearML logger."""
+    clearml_logger.report_text(
+        f'Test Error: \n Prec: {100 * precision:>0.2f}%,\n'
+        f' Recall: {100 * recall:>0.2f}%,\n'
+        f' Avg loss: {loss:>8f} \n',
+        level=logging.INFO,
+        print_console=print_logs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public entry points (camelCase preserved for legacy compatibility)
+# ---------------------------------------------------------------------------
+
 def createClassificationModel(
     embDim: int,
     outDim: int,
-    modelConfig: Dict[str, Union[int, str, float]],
+    modelConfig: dict[str, int | str | float],
     textVectorizer: Vectorizer[str] | Literal['not None'],
-    logConfig: Dict[str, Any],
+    logConfig: dict[str, Any],
     connect_config: bool = True,
 ) -> NeuralCategModel:
     """
@@ -50,7 +229,7 @@ def createClassificationModel(
     :param modelConfig: Model configuration dictionary.
     :param textVectorizer: Text vectorizer or legacy marker.
     :param logConfig: Logging configuration.
-    :param connect_config: Register config with ClearML task (disable during CV to avoid flooding).
+    :param connect_config: Register config with ClearML task (disable during CV).
     :return: Initialized neural classifier model.
     """
     task = Task.current_task()
@@ -60,7 +239,7 @@ def createClassificationModel(
         if connect_config:
             task.connect(modelConfig, name='modelConfig')
 
-    model = NeuralCategModel.create(
+    return NeuralCategModel.create(
         embDim=embDim,
         outDim=outDim,
         hiddenDim=modelConfig['hiddenDim'],
@@ -68,27 +247,15 @@ def createClassificationModel(
         textVectorizer=textVectorizer,
     )
 
-    return model
-
 
 def trainClassificationModel(
     model: NeuralCategModel,
     trainData: EmbeddingDataset,
     devData: EmbeddingDataset,
-    trainingConfig: Dict[str, Any],
-    logConfig: Dict[str, Any],
+    trainingConfig: dict[str, Any],
+    logConfig: dict[str, Any],
     connect_config: bool = True,
-) -> Tuple[
-    NeuralCategModel,
-    float,
-    int,
-    List[float],
-    List[float],
-    List[float],
-    List[float],
-    List[float],
-    List[float],
-]:
+) -> LegacyTrainResult:
     """
     Legacy training loop kept equivalent to original pipeline.
 
@@ -97,306 +264,145 @@ def trainClassificationModel(
     :param devData: Development dataset.
     :param trainingConfig: Training configuration.
     :param logConfig: Logging configuration.
-    :param connect_config: Register config with ClearML task (disable during CV to avoid flooding).
-    :return: Tuple of trained model and final dev loss.
+    :param connect_config: Register config with ClearML task (disable during CV).
+    :return: Typed training result with model, loss, and per-epoch curves.
     """
-    import time
-
-    import torch
-
     task = Task.current_task()
-    logger = task.get_logger()
-    logger.report_text('Training classification model', level=logging.INFO, print_console=logConfig['PRINT_LOGS'])
+    clearml_logger = task.get_logger()
+    print_logs = logConfig['PRINT_LOGS']
+    clearml_logger.report_text('Training classification model', level=logging.INFO, print_console=print_logs)
     if connect_config:
         task.connect(trainingConfig, name='trainingConfig')
 
-    def parseOptimizer(optimizerConfig) -> Tuple[torch.optim.Optimizer, float]:
-        if optimizerConfig['name'] == 'adam':
-
-            def optimizerFactory(p, lr):
-                return torch.optim.Adam(p, lr=lr)
-
-            lr = optimizerConfig['adamConfig']['lr']
-        else:
-            raise ValueError('Unknown optimizer')
-
-        return optimizerFactory, lr
-
-    def parseLrScheduler(lrSchedulerConfig):
-        if lrSchedulerConfig['name'] == 'stepLR':
-            lrSchedConfig = lrSchedulerConfig['stepLRConfig']
-
-            def lrSchedFactory(opt):
-                return torch.optim.lr_scheduler.StepLR(
-                    opt,
-                    step_size=lrSchedConfig['stepSize'],
-                    gamma=lrSchedConfig['gamma'],
-                )
-
-        elif lrSchedulerConfig['name'] == 'cosineAnnealingLR':
-            lrSchedConfig = lrSchedulerConfig['cosineAnnealingLRConfig']
-
-            def lrSchedFactory(opt):
-                return torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=lrSchedConfig['T_max'])
-
-        else:
-            raise ValueError('Unknown lr scheduler')
-
-        return lrSchedFactory
-
-    def parseLoss(lossConfig: Dict[str, Any], trainData: EmbeddingDataset, device: torch.device):
-        import torch.nn as nn
-        import torch.nn.functional as F
-
-        if lossConfig['name'] == 'bceWithLogitsLoss':
-            loss_fn = nn.BCEWithLogitsLoss()
-        elif lossConfig['name'] == 'focalLoss':
-
-            class FocalLoss(nn.Module):
-                def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
-                    super(FocalLoss, self).__init__()
-                    self.alpha = alpha
-                    self.gamma = gamma
-                    self.reduction = reduction
-
-                def forward(self, inputs, targets):
-                    bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-                    targets = targets.type(torch.float32)
-                    at = self.alpha * targets + (1 - self.alpha) * (1 - targets)
-                    pt = torch.exp(-bce_loss)
-                    focal_loss = at * (1 - pt) ** self.gamma * bce_loss
-
-                    if self.reduction == 'mean':
-                        return torch.mean(focal_loss)
-                    if self.reduction == 'sum':
-                        return torch.sum(focal_loss)
-                    return focal_loss
-
-            loss_fn = FocalLoss(
-                lossConfig['focalLossConfig']['alpha'],
-                lossConfig['focalLossConfig']['gamma'],
-            )
-        elif lossConfig['name'] == 'bceWithLogitsLossWeighted':
-            trainCorpus = trainData.corpus
-            freqs = {cat: 0 for cat in trainCorpus.catList}
-            for doc in trainCorpus:
-                for cat in doc.cats:
-                    freqs[cat] += 1
-            pos_weights = [
-                (len(trainCorpus) - freqs[cat]) / freqs[cat] if freqs[cat] > 0 else 1.0 for cat in trainCorpus.catList
-            ]
-            loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weights).to(device))
-        else:
-            raise ValueError('Unknown loss')
-
-        return loss_fn
-
-    def validation(
-        model: NeuralCategModel,
-        dataloader: torch.utils.data.DataLoader,
-        lossFn: torch.nn.Module,
-        thr: float = 0.0,
-        logInfo: bool = True,
-    ) -> Tuple[float, float, float]:
-        total_gold = 0
-        total_pred = 0
-        num_batches = len(dataloader)
-        test_loss, total_correct = 0, 0
-
-        with torch.no_grad():
-            model._nn.eval()
-            for X, y in dataloader:
-                X = X.to(model._device)
-                y = y.to(model._device)
-                pred = model._nn(X)
-                test_loss += lossFn(pred, y).item()
-                pred_cnt = (pred > thr).type(torch.float).sum().item()
-                gold_cnt = (y > 0.5).type(torch.float).sum().item()
-                correct = torch.logical_and(pred > thr, y > 0.5).type(torch.float).sum().item()
-                total_correct += correct
-                total_pred += pred_cnt
-                total_gold += gold_cnt
-
-        test_loss /= num_batches
-        precision = total_correct / (total_pred or 1.0)
-        recall = total_correct / (total_gold or 1.0)
-        if logInfo:
-            logger.report_text(
-                f'Test Error: \n Prec: {(100 * precision):>0.2f}% ({total_correct}/{total_pred}),\n Recall: {(100 * recall):>0.2f}% ({total_correct}/{total_gold}),\n Avg loss: {test_loss:>8f} \n',
-                level=logging.INFO,
-                print_console=logConfig['PRINT_LOGS'],
-            )
-        return precision, recall, test_loss
-
     validation_split_name = str(trainingConfig.get('validationSplitName', 'dev')).strip().lower() or 'dev'
-    validation_title_name = validation_split_name.capitalize()
+    validation_title = validation_split_name.capitalize()
 
-    optimizerFactory, lr = parseOptimizer(trainingConfig['optimizerConfig'])
-    lrSchedFactory = parseLrScheduler(trainingConfig['lrSchedulerConfig'])
-    loss_fn = parseLoss(trainingConfig['lossConfig'], trainData, model._device)
+    opt_factory, lr = _parse_optimizer(trainingConfig['optimizerConfig'])
+    sched_factory = _parse_lr_scheduler(trainingConfig['lrSchedulerConfig'])
+    loss_fn = _parse_loss(trainingConfig['lossConfig'], trainData, model._device)
 
-    optimizer = optimizerFactory(model._nn.parameters(), lr)
-    lrSched = lrSchedFactory(optimizer)
+    optimizer = opt_factory(model._nn.parameters(), lr)
+    scheduler = sched_factory(optimizer)
     model.catList = list(trainData.catList)
-    logger.report_text(
-        f'Training model with {len(model.catList)} categories',
-        level=logging.INFO,
-        print_console=logConfig['PRINT_LOGS'],
+    clearml_logger.report_text(
+        f'Training model with {len(model.catList)} categories', level=logging.INFO, print_console=print_logs,
     )
 
     train_loader = torch.utils.data.DataLoader(
-        trainData,
-        batch_size=trainingConfig['batchSize'],
-        shuffle=True,
-        drop_last=True,
+        trainData, batch_size=trainingConfig['batchSize'], shuffle=True, drop_last=True,
     )
     dev_loader = torch.utils.data.DataLoader(devData, batch_size=trainingConfig['batchSize'])
-    task = Task.current_task()
-    logger = task.get_logger()
 
     train_stats = EpochStats()
     dev_stats = EpochStats()
     es_patience = int(trainingConfig.get('earlyStoppingPatience', 0))
     es_min_delta = float(trainingConfig.get('earlyStoppingMinDelta', 0.0))
 
-    def _is_better_loss(*, current_loss: float, best_loss: float) -> bool:
-        return current_loss < best_loss - es_min_delta
-
-    def _clone_state_dict_cpu() -> Dict[str, Any]:
-        return {k: v.detach().cpu().clone() for k, v in model._nn.state_dict().items()}
-
-    def _load_state_dict_from_cpu(state: Dict[str, Any]) -> None:
-        model._nn.load_state_dict({k: v.to(model._device) for k, v in state.items()})
-
-    best_state_cpu: Optional[Dict[str, Any]] = None
-    best_dev_loss: Optional[float] = None
+    best_state_cpu: dict[str, Any] | None = None
+    best_dev_loss: float | None = None
     epochs_without_improvement = 0
 
-    start_training_time = time.time()
-    for t in range(trainingConfig['epochs']):
+    start_time = time.time()
+    for epoch in range(trainingConfig['epochs']):
         last_time = time.time()
-        logger.report_text(
-            f'Epoch {t + 1}\n-------------------------------time: {time.time() - last_time}',
-            level=logging.INFO,
-            print_console=logConfig['PRINT_LOGS'],
+        clearml_logger.report_text(
+            f'Epoch {epoch + 1}\n-------------------------------time: {time.time() - last_time}',
+            level=logging.INFO, print_console=print_logs,
         )
-        model._trainEpoch(train_loader, loss_fn, optimizer, lrSched)
-        logger.report_text(
-            f'time make train epoch: {time.time() - last_time}',
-            level=logging.INFO,
-            print_console=logConfig['PRINT_LOGS'],
+        model._trainEpoch(train_loader, loss_fn, optimizer, scheduler)
+        clearml_logger.report_text(
+            f'time make train epoch: {time.time() - last_time}', level=logging.INFO, print_console=print_logs,
         )
-        last_time = time.time()
-        dev_precision, dev_recall, dev_loss = validation(model, dev_loader, loss_fn)
-        logger.report_text(
-            f'time {validation_split_name} validation done: {time.time() - last_time}',
-            level=logging.INFO,
-            print_console=logConfig['PRINT_LOGS'],
-        )
-        last_time = time.time()
 
-        dev_stats.precision.append(dev_precision)
-        dev_stats.recall.append(dev_recall)
+        last_time = time.time()
+        dev_prec, dev_rec, dev_loss = _validate_split(model=model, dataloader=dev_loader, loss_fn=loss_fn)
+        _log_validation(
+            clearml_logger=clearml_logger, precision=dev_prec, recall=dev_rec, loss=dev_loss, print_logs=print_logs,
+        )
+        clearml_logger.report_text(
+            f'time {validation_split_name} validation done: {time.time() - last_time}',
+            level=logging.INFO, print_console=print_logs,
+        )
+
+        last_time = time.time()
+        dev_stats.precision.append(dev_prec)
+        dev_stats.recall.append(dev_rec)
         dev_stats.loss.append(dev_loss)
-        logger.report_scalar(
-            title=f'{validation_title_name} Training Stats',
-            series='Precision',
-            value=dev_precision,
-            iteration=t,
+        clearml_logger.report_scalar(
+            title=f'{validation_title} Training Stats', series='Precision', value=dev_prec, iteration=epoch,
         )
-        logger.report_scalar(
-            title=f'{validation_title_name} Training Stats',
-            series='Recall',
-            value=dev_recall,
-            iteration=t,
+        clearml_logger.report_scalar(
+            title=f'{validation_title} Training Stats', series='Recall', value=dev_rec, iteration=epoch,
         )
-        logger.report_scalar(
-            title=f'{validation_title_name} Training Stats',
-            series='Loss',
-            value=dev_loss,
-            iteration=t,
+        clearml_logger.report_scalar(
+            title=f'{validation_title} Training Stats', series='Loss', value=dev_loss, iteration=epoch,
         )
 
         if es_patience > 0:
-            if best_dev_loss is None or _is_better_loss(current_loss=dev_loss, best_loss=best_dev_loss):
+            if best_dev_loss is None or dev_loss < best_dev_loss - es_min_delta:
                 best_dev_loss = dev_loss
-                best_state_cpu = _clone_state_dict_cpu()
+                best_state_cpu = _clone_state_cpu(model)
                 epochs_without_improvement = 0
-                logger.report_text(
-                    f'Early stopping: new best {validation_split_name} loss={dev_loss:.6f} at epoch {t + 1}',
-                    level=logging.INFO,
-                    print_console=logConfig['PRINT_LOGS'],
+                clearml_logger.report_text(
+                    f'Early stopping: new best {validation_split_name} loss={dev_loss:.6f} at epoch {epoch + 1}',
+                    level=logging.INFO, print_console=print_logs,
                 )
             else:
                 epochs_without_improvement += 1
-                logger.report_text(
+                clearml_logger.report_text(
                     f'Early stopping: epochs without improvement: {epochs_without_improvement}',
-                    level=logging.INFO,
-                    print_console=logConfig['PRINT_LOGS'],
+                    level=logging.INFO, print_console=print_logs,
                 )
 
-        logger.report_text(
-            f'time done: {time.time() - last_time}',
-            level=logging.INFO,
-            print_console=logConfig['PRINT_LOGS'],
+        clearml_logger.report_text(
+            f'time done: {time.time() - last_time}', level=logging.INFO, print_console=print_logs,
         )
-        last_time = time.time()
 
-        train_precision, train_recall, train_loss = validation(model, train_loader, loss_fn, logInfo=False)
-        logger.report_text(
-            f'time train validation done: {time.time() - last_time}',
-            level=logging.INFO,
-            print_console=logConfig['PRINT_LOGS'],
-        )
         last_time = time.time()
-        train_stats.precision.append(train_precision)
-        train_stats.recall.append(train_recall)
+        train_prec, train_rec, train_loss = _validate_split(model=model, dataloader=train_loader, loss_fn=loss_fn)
+        clearml_logger.report_text(
+            f'time train validation done: {time.time() - last_time}', level=logging.INFO, print_console=print_logs,
+        )
+
+        last_time = time.time()
+        train_stats.precision.append(train_prec)
+        train_stats.recall.append(train_rec)
         train_stats.loss.append(train_loss)
-        logger.report_scalar(title='Train Training Stats', series='Precision', value=train_precision, iteration=t)
-        logger.report_scalar(title='Train Training Stats', series='Recall', value=train_recall, iteration=t)
-        logger.report_scalar(title='Train Training Stats', series='Loss', value=train_loss, iteration=t)
+        clearml_logger.report_scalar(title='Train Training Stats', series='Precision', value=train_prec, iteration=epoch)
+        clearml_logger.report_scalar(title='Train Training Stats', series='Recall', value=train_rec, iteration=epoch)
+        clearml_logger.report_scalar(title='Train Training Stats', series='Loss', value=train_loss, iteration=epoch)
 
         if es_patience > 0 and epochs_without_improvement >= es_patience:
-            logger.report_text(
+            clearml_logger.report_text(
                 f'Early stopping: no improvement in {validation_split_name} loss for {es_patience} epoch(s); '
-                f'stopping after epoch {t + 1} (best loss={best_dev_loss:.6f})',
-                level=logging.INFO,
-                print_console=logConfig['PRINT_LOGS'],
+                f'stopping after epoch {epoch + 1} (best loss={best_dev_loss:.6f})',
+                level=logging.INFO, print_console=print_logs,
             )
             break
 
     if es_patience > 0 and best_state_cpu is not None:
-        _load_state_dict_from_cpu(best_state_cpu)
-        logger.report_text(
+        _restore_state_cpu(model, best_state_cpu)
+        clearml_logger.report_text(
             f'Early stopping: restored weights from best {validation_split_name} epoch',
-            level=logging.INFO,
-            print_console=logConfig['PRINT_LOGS'],
+            level=logging.INFO, print_console=print_logs,
         )
 
-    logger.report_text(
-        f'time: {time.time() - start_training_time}',
-        level=logging.INFO,
-        print_console=logConfig['PRINT_LOGS'],
+    clearml_logger.report_text(
+        f'time: {time.time() - start_time}', level=logging.INFO, print_console=print_logs,
     )
     model._nn.eval()
     final_dev_loss = best_dev_loss if best_dev_loss is not None else (dev_stats.loss[-1] if dev_stats.loss else 0.0)
-    epochs_run = len(dev_stats.loss)
-    train_precisions = list(train_stats.precision)
-    train_recalls = list(train_stats.recall)
-    train_losses = list(train_stats.loss)
-    dev_precisions = list(dev_stats.precision)
-    dev_recalls = list(dev_stats.recall)
-    dev_losses = list(dev_stats.loss)
-    return (
-        model,
-        final_dev_loss,
-        epochs_run,
-        train_precisions,
-        train_recalls,
-        train_losses,
-        dev_precisions,
-        dev_recalls,
-        dev_losses,
+
+    return LegacyTrainResult(
+        model=model,
+        final_dev_loss=final_dev_loss,
+        epochs_run=len(dev_stats.loss),
+        train_precisions=list(train_stats.precision),
+        train_recalls=list(train_stats.recall),
+        train_losses=list(train_stats.loss),
+        dev_precisions=list(dev_stats.precision),
+        dev_recalls=list(dev_stats.recall),
+        dev_losses=list(dev_stats.loss),
     )
 
 
@@ -404,11 +410,11 @@ def evaluateModel(
     model: NeuralCategModel,
     evalData: EmbeddingDataset,
     evaluation_config: EvaluationCnf,
-    customThresholds: Optional[Mapping[str, float]] = None,
+    customThresholds: Mapping[str, float] | None = None,
     *,
     returnPredictions: bool = False,
     connect_config: bool = True,
-) -> Tuple[pd.DataFrame, pd.DataFrame] | Tuple[pd.DataFrame, pd.DataFrame, Any]:
+) -> tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, Any]:
     """
     Legacy evaluation entry point.
 
@@ -420,7 +426,7 @@ def evaluateModel(
     :param evaluation_config: Typed evaluation settings.
     :param customThresholds: Optional per-label thresholds.
     :param returnPredictions: Whether to also return raw prediction scores.
-    :param connect_config: Register config with ClearML task (disable during CV to avoid flooding).
+    :param connect_config: Register config with ClearML task (disable during CV).
     :return: Corpora/class tables, optionally with raw prediction scores.
     """
     from dataclasses import asdict
