@@ -42,7 +42,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         '-c',
         default='wpentities',
         choices=list_config_names(),
-        help='Config variant to run (e.g. "wpentities", "article_only").',
+        help='Config variant to run (e.g. "wpentities", "article_only", "entity_only").',
     )
     return parser
 

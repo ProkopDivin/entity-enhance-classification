@@ -54,7 +54,6 @@ class EntityPoolingResult:
 
 class EntityPoolingStrategy(ABC):
     """Abstract entity pooling interface."""
-
     @abstractmethod
     def _get_weighted_wdids(self, *, doc: DocWithEntities) -> list[tuple[str, float]]:
         """Return wdIds and their weights for one document."""
@@ -110,6 +109,7 @@ class EntityPoolingStrategy(ABC):
             found_embeddings=len(entity_embeddings),
             missing_embeddings=len(missing_wdids),
         )
+        
 
 
 class SumEntityPooling(EntityPoolingStrategy):
@@ -174,7 +174,7 @@ class WeightedMeanEntityPooling(EntityPoolingStrategy):
             return np.zeros(embedding_dim, dtype=np.float32)
 
         embeddings_matrix = np.vstack(entity_embeddings).astype(np.float32)
-        weighted_embeddings = embeddings_matrix * weights_arr[:, np.newaxis]
+        weighted_embeddings = embeddings_matrix * weights_arr[:, np.newaxis]   
         return (np.sum(weighted_embeddings, axis=0, dtype=np.float32) / total_weight).astype(np.float32)
 
 

@@ -88,6 +88,16 @@ def prepare_article_embeddings(
     logger = logging.getLogger(__name__)
     paths = conf_from_dict(PathsCnf, paths_cnf)
     emb = conf_from_dict(EmbeddingCnf, emb_cnf)
+    if not emb.use_article_embeddings:
+        logger.info('Article embeddings disabled by config; skipping article embedding preparation')
+        return {
+            'train': {},
+            'test': {},
+            'total_docs': 0,
+            'total_computed': 0,
+            'total_cached_or_present': 0,
+        }
+
     article_provider = ArticleEmbeddingProvider(
         embeddings_dir=paths.article_embeddings_dir,
         model_name=emb.article_model_name,
@@ -137,21 +147,28 @@ def build_dataset(
 
     conf_logging()
     logger = logging.getLogger(__name__)
-    logger.info('Initializing providers for merged entity preparation + linking step')
+    paths = conf_from_dict(PathsCnf, paths_cnf)
+    emb = conf_from_dict(EmbeddingCnf, emb_cnf)
+    if not emb.use_article_embeddings and not emb.use_entity_embeddings:
+        raise ValueError('Invalid embedding config: both use_article_embeddings and use_entity_embeddings are False')
+
+    logger.info('Initializing providers for entity preparation + linking step')
     logger.info(
         'Using prepared article embedding cache from previous step: total=%s, computed_missing=%s',
         article_embedding_stats.get('total_docs'),
         article_embedding_stats.get('total_computed'),
     )
-    paths = conf_from_dict(PathsCnf, paths_cnf)
-    emb = conf_from_dict(EmbeddingCnf, emb_cnf)
-    article_provider = ArticleEmbeddingProvider(
-        embeddings_dir=paths.article_embeddings_dir,
-        model_name=emb.article_model_name,
-        embed_svc_url=emb.embed_svc_url,
-        embedding_dim=emb.article_embedding_dim,
-    )
+    article_provider = None
+    if emb.use_article_embeddings:
+        article_provider = ArticleEmbeddingProvider(
+            embeddings_dir=paths.article_embeddings_dir,
+            model_name=emb.article_model_name,
+            embed_svc_url=emb.embed_svc_url,
+            embedding_dim=emb.article_embedding_dim,
+        )
+
     if not emb.use_entity_embeddings:
+        assert article_provider is not None
         dataset_bundle = no_entities(
             corpora=corpora,
             article_provider=article_provider,
@@ -170,6 +187,7 @@ def build_dataset(
         article_embedding_provider=article_provider,
         entity_embedding_store=entity_store,
         pooling_strategy=pooling,
+        use_article_embeddings=emb.use_article_embeddings,
         combine_method=emb.combine_method,
     )
 
@@ -515,10 +533,14 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     hparam_cnf = cnf['hparam']
     obj_corpora = cnf['objective_corpora']
     down_smpl = cnf.get('downsample_corpora', {})
+    use_art_emb = bool(emb_cnf.get('use_article_embeddings', True))
     use_ent_emb = bool(emb_cnf.get('use_entity_embeddings', True))
     print_logs = bool(cnf.get('print_logs', True))
     debug = bool(cnf.get('debug', False))
     upload_artifacts = bool(cnf.get('upload_artifacts', False))
+
+    if not use_art_emb and not use_ent_emb:
+        raise ValueError('Invalid embedding config: both use_article_embeddings and use_entity_embeddings are False')
 
     log_stage(
         task=task,
@@ -532,7 +554,11 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     )
     log_stage(
         task=task,
-        message='Stage 2/6: Preparing article embeddings (train/test)',
+        message=(
+            'Stage 2/6: Preparing article embeddings (train/test)'
+            if use_art_emb
+            else 'Stage 2/6: Skipping article embeddings (article embeddings disabled)'
+        ),
         print_logs=print_logs,
     )
     article_embedding_stats = prepare_article_embeddings(
@@ -547,8 +573,12 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         task=task,
         message=(
             'Stage 3/6: Preparing entity embeddings, linking, and building datasets'
-            if use_ent_emb
-            else 'Stage 3/6: Building article-only datasets (entity embeddings disabled)'
+            if use_art_emb and use_ent_emb
+            else (
+                'Stage 3/6: Building entity-only datasets (article embeddings disabled)'
+                if use_ent_emb
+                else 'Stage 3/6: Building article-only datasets (entity embeddings disabled)'
+            )
         ),
         print_logs=print_logs,
     )
