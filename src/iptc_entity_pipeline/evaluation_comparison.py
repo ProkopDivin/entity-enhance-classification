@@ -16,20 +16,15 @@ from __future__ import annotations
 import argparse
 import logging
 import pickle
-import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 
-if __package__ is None or __package__ == '':
-    src_root = Path(__file__).resolve().parents[1]
-    if str(src_root) not in sys.path:
-        sys.path.insert(0, str(src_root))
-
+from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.data_loading import sanitize_name
 from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, evaluate_predictions, get_cat_name, get_iptc_topics
 from iptc_entity_pipeline.model_io import EVAL_CORPUS_FILENAME, PREDICTIONS_FILENAME
@@ -50,7 +45,40 @@ SUPPORT_BUCKETS: tuple[tuple[int, int, str], ...] = (
 )
 LANG_PREFIXES: tuple[str, ...] = ('en', 'es', 'nl', 'fr', 'de', 'cs')
 EUROSPORT_TOKEN = 'eurosport'
+ENTITY_TABLE_LIMIT = 1000
+ENTITY_RANDOM_SEED = 42
 
+_CMP_METRICS: tuple[tuple[str, str], ...] = (
+    ('precision', 'Precision'),
+    ('recall', 'Recall'),
+    ('f1', 'F1'),
+)
+
+_RESULT_SHEETS: tuple[tuple[str, str, bool], ...] = (
+    ('corpora_comparison', 'corpora_comparison', False),
+    ('classes_comparison', 'classes_comparison', False),
+    ('summary_comparison', 'summary_comparison', False),
+    ('top_improved_categories', 'top_improved', False),
+    ('top_degraded_categories', 'top_degraded', False),
+    ('top_improved_stats', 'top_improved_stats', False),
+    ('top_degraded_stats', 'top_degraded_stats', False),
+    ('hamming_loss_comparison', 'hamming_loss', False),
+    ('pr_auc_per_class', 'pr_auc_per_class', False),
+    ('pr_auc_summary', 'pr_auc_summary', False),
+    ('entity_impact_improvers', 'entity_impact_improvers', False),
+    ('entity_impact_decaders', 'entity_impact_decaders', False),
+    ('entity_impact_random', 'entity_impact_random', False),
+    ('article_f1_diff_avg_stats', 'article_f1_diff_avg_stats', False),
+    ('current_corpora', 'current_corpora', True),
+    ('current_classes', 'current_classes', True),
+    ('base_corpora', 'base_corpora', True),
+    ('base_classes', 'base_classes', True),
+)
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class ComparisonResult:
@@ -66,6 +94,10 @@ class ComparisonResult:
     hamming_loss_comparison: pd.DataFrame
     pr_auc_per_class: pd.DataFrame
     pr_auc_summary: pd.DataFrame
+    entity_impact_improvers: pd.DataFrame
+    entity_impact_decaders: pd.DataFrame
+    entity_impact_random: pd.DataFrame
+    article_f1_diff_avg_stats: pd.DataFrame
     current_corpora: pd.DataFrame
     current_classes: pd.DataFrame
     base_corpora: pd.DataFrame
@@ -134,6 +166,35 @@ class RunEval:
     classes_df: pd.DataFrame
 
 
+@dataclass(frozen=True)
+class ArticleEntity:
+    """One normalized entity mention attached to an article."""
+
+    gkb_id: str | None
+    wdids: tuple[str, ...]
+    entity_type: str | None
+    std_form: str | None
+    relevance: float | None
+    mention_count: int | None
+
+
+@dataclass(frozen=True)
+class ArticleEvalRecord:
+    """Normalized article payload used before DataFrame conversion."""
+
+    article_id: str
+    corpus_name: str
+    gold_categories: tuple[str, ...]
+    pred_scores: tuple[tuple[str, float], ...]
+    article_text: str | None
+    article_length: int | None
+    entities: tuple[ArticleEntity, ...]
+
+
+# ---------------------------------------------------------------------------
+# Run loading and comparison orchestration
+# ---------------------------------------------------------------------------
+
 def load_run(*, run_dir: str | Path) -> tuple[list[list[tuple[str, float]]], Any]:
     """Load raw predictions and eval corpus from a saved run directory.
 
@@ -182,18 +243,20 @@ def compare_runs(
     base_pred, base_corpus = load_run(run_dir=base_run_dir)
 
     gold_map = GoldLabelMap.from_corpus(corpus=current_corpus)
+    evaluation_config = EvaluationCnf(
+        threshold_eval=threshold_eval,
+        averaging_type=averaging_type,
+    )
 
     current_run = build_run(
         pred_scores=current_pred,
         eval_corpus=current_corpus,
-        threshold_eval=threshold_eval,
-        averaging_type=averaging_type,
+        evaluation_config=evaluation_config,
     )
     base_run = build_run(
         pred_scores=base_pred,
         eval_corpus=base_corpus,
-        threshold_eval=threshold_eval,
-        averaging_type=averaging_type,
+        evaluation_config=evaluation_config,
     )
 
     corpora_cmp_full = build_cmp_df(
@@ -225,19 +288,35 @@ def compare_runs(
         improved_df=top_improved_df,
         degraded_df=top_degraded_df,
     )
+    current_aligned_df = subset_by_ids(df=current_run.aligned_df, article_ids=shared_ids)
+    base_aligned_df = subset_by_ids(df=base_run.aligned_df, article_ids=shared_ids)
     hamming_df = build_hamming_df(
-        current_df=subset_by_ids(df=current_run.aligned_df, article_ids=shared_ids),
-        base_df=subset_by_ids(df=base_run.aligned_df, article_ids=shared_ids),
+        current_df=current_aligned_df,
+        base_df=base_aligned_df,
         gold_map=gold_map,
         cat_ids=cat_ids,
         threshold_eval=threshold_eval,
     )
     pr_auc_df, pr_auc_summary_df = build_pr_auc_dfs(
-        current_df=subset_by_ids(df=current_run.aligned_df, article_ids=shared_ids),
-        base_df=subset_by_ids(df=base_run.aligned_df, article_ids=shared_ids),
+        current_df=current_aligned_df,
+        base_df=base_aligned_df,
         gold_map=gold_map,
         cat_ids=cat_ids,
     )
+    article_f1_df = build_article_f1_diff_df(
+        current_df=current_aligned_df,
+        base_df=base_aligned_df,
+        gold_map=gold_map,
+        cat_ids=cat_ids,
+        threshold_eval=threshold_eval,
+    )
+    entity_improvers_df, entity_decaders_df, entity_random_df = build_entity_impact_tables(
+        current_df=current_aligned_df,
+        article_f1_df=article_f1_df,
+        limit=ENTITY_TABLE_LIMIT,
+        random_seed=ENTITY_RANDOM_SEED,
+    )
+    article_avg_stats_df = build_article_f1_diff_avg_stats(df=article_f1_df, limit=ENTITY_TABLE_LIMIT)
 
     excel_path = Path(output_path) if output_path is not None else None
     result = ComparisonResult(
@@ -251,6 +330,10 @@ def compare_runs(
         hamming_loss_comparison=hamming_df,
         pr_auc_per_class=pr_auc_df,
         pr_auc_summary=pr_auc_summary_df,
+        entity_impact_improvers=entity_improvers_df,
+        entity_impact_decaders=entity_decaders_df,
+        entity_impact_random=entity_random_df,
+        article_f1_diff_avg_stats=article_avg_stats_df,
         current_corpora=current_run.corpora_df,
         current_classes=current_run.classes_df,
         base_corpora=base_run.corpora_df,
@@ -264,22 +347,22 @@ def compare_runs(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Run evaluation helpers
+# ---------------------------------------------------------------------------
+
 def build_run(
     *,
     pred_scores: Sequence[Any],
     eval_corpus: Any,
-    threshold_eval: float,
-    averaging_type: str,
+    evaluation_config: EvaluationCnf,
 ) -> RunEval:
     """Evaluate one run and build its aligned per-article dataframe."""
     corpora_df, classes_df = evaluate_predictions(
         pred_wgh_cats=pred_scores,
         eval_corpus=eval_corpus,
-        thr=threshold_eval,
+        evaluation_config=evaluation_config,
         cat_to_thr=None,
-        per_corpus=True,
-        per_class=True,
-        averaging_type=averaging_type,
     )
     aligned_df = build_aligned_df(eval_corpus=eval_corpus, pred_scores=pred_scores)
     return RunEval(aligned_df=aligned_df, corpora_df=corpora_df, classes_df=classes_df)
@@ -287,22 +370,217 @@ def build_run(
 
 def build_aligned_df(*, eval_corpus: Any, pred_scores: Sequence[Any]) -> pd.DataFrame:
     """Build per-article dataframe with gold categories and dense ``prob_*`` columns."""
+    records = build_article_records(eval_corpus=eval_corpus, pred_scores=pred_scores)
+    return records_to_df(records=records)
+
+
+def build_article_records(*, eval_corpus: Any, pred_scores: Sequence[Any]) -> list[ArticleEvalRecord]:
+    """Build normalized article records from corpus docs and prediction tuples."""
     if len(pred_scores) != len(eval_corpus):
         raise ValueError(
             f'Misaligned predictions: predictions={len(pred_scores)} corpus={len(eval_corpus)}'
         )
-    rows = []
+    records: list[ArticleEvalRecord] = []
     for doc, doc_pred in zip(eval_corpus, pred_scores):
-        rows.append(
-            {
-                'article_id': str(doc.id),
-                'corpus_name': str(doc.metadata.get('corpusName', '')),
-                'gold_categories': tuple(sorted(norm_cat_ids(cat_ids=doc.cats))),
-                'pred_scores': [(str(cat_id), float(score)) for cat_id, score in doc_pred],
-            }
+        metadata = _doc_metadata(doc=doc)
+        records.append(
+            ArticleEvalRecord(
+                article_id=str(doc.id),
+                corpus_name=str(metadata.get('corpusName', '')),
+                gold_categories=tuple(sorted(norm_cat_ids(cat_ids=doc.cats))),
+                pred_scores=tuple((str(cat_id), float(score)) for cat_id, score in doc_pred),
+                article_text=_extract_article_text(doc=doc),
+                article_length=_extract_article_length(doc=doc, metadata=metadata),
+                entities=_extract_entities(doc=doc, metadata=metadata),
+            )
         )
+    return records
+
+
+def records_to_df(*, records: Sequence[ArticleEvalRecord]) -> pd.DataFrame:
+    """Convert article records to the aligned DataFrame used by metric code."""
+    rows = [
+        {
+            'article_id': record.article_id,
+            'corpus_name': record.corpus_name,
+            'gold_categories': record.gold_categories,
+            'pred_scores': list(record.pred_scores),
+            'article_text': record.article_text,
+            'article_length': record.article_length,
+            'entities': list(record.entities),
+        }
+        for record in records
+    ]
     base_df = pd.DataFrame(rows)
     return add_prob_columns(df=base_df)
+
+
+def _doc_metadata(*, doc: Any) -> Mapping[str, Any]:
+    """Return document metadata mapping or an empty mapping."""
+    metadata = getattr(doc, 'metadata', None)
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _extract_article_text(*, doc: Any) -> str | None:
+    """Extract article text from document text payload."""
+    text = getattr(doc, 'text', None)
+    if isinstance(text, str) and text:
+        return text
+    return None
+
+
+def _extract_article_length(*, doc: Any, metadata: Mapping[str, Any]) -> int | None:
+    """Extract known typed article length if available."""
+    for key in ('article_length', 'articleLength', 'length'):
+        value = _mapping_value(item=metadata, keys=(key,))
+        converted = _as_int(value=value)
+        if converted is not None:
+            return converted
+
+    text = getattr(doc, 'text', None)
+    if isinstance(text, str) and text:
+        return len(text)
+    return None
+
+
+def _extract_entities(*, doc: Any, metadata: Mapping[str, Any]) -> tuple[ArticleEntity, ...]:
+    """Extract normalized entities from doc attributes or metadata."""
+    raw_entities = getattr(doc, 'entities', None)
+    if raw_entities is None:
+        raw_entities = _mapping_value(item=metadata, keys=('entities', 'article_entities', 'entity_list'))
+    if not isinstance(raw_entities, Sequence) or isinstance(raw_entities, (str, bytes)):
+        return ()
+    entities = [_parse_entity(item=item) for item in raw_entities]
+    return tuple(entity for entity in entities if entity is not None)
+
+
+def _parse_entity(*, item: Any) -> ArticleEntity | None:
+    """Normalize entity from known source shapes (raw CSV dict or LinkedEntity)."""
+    raw_payload: Mapping[str, Any] | None = None
+
+    if isinstance(item, Mapping):
+        # Raw entities from CSV use keys like: gkbId, stdForm, type, mentions, feats.relevance.
+        raw_payload = item
+        gkb_raw = raw_payload.get('gkbId')
+        wdids_raw = raw_payload.get('wdid') or raw_payload.get('wdids')
+        entity_type_raw = raw_payload.get('type')
+        std_form_raw = raw_payload.get('stdForm')
+        relevance_raw = raw_payload.get('relevance')
+        mentions_raw = raw_payload.get('mentions')
+    else:
+        # Linked entities attached in data_loading.py expose normalized attrs + raw_entity payload.
+        gkb_raw = getattr(item, 'gkb_id', None)
+        wdids_raw = getattr(item, 'wd_ids', None)
+        relevance_raw = getattr(item, 'relevance', None)
+        mentions_raw = getattr(item, 'mention_count', None)
+        raw_maybe = getattr(item, 'raw_entity', None)
+        if isinstance(raw_maybe, Mapping):
+            raw_payload = raw_maybe
+        entity_type_raw = raw_payload.get('type') if raw_payload is not None else None
+        std_form_raw = raw_payload.get('stdForm') if raw_payload is not None else None
+
+    if relevance_raw is None and raw_payload is not None:
+        feats_raw = raw_payload.get('feats')
+        if isinstance(feats_raw, Mapping):
+            relevance_raw = feats_raw.get('relevance')
+
+    gkb_id = _as_str(value=gkb_raw)
+    wdids = _as_wdid_tuple(value=wdids_raw)
+    entity_type = _as_str(value=entity_type_raw)
+    std_form = _as_str(value=std_form_raw)
+    relevance = _as_float(value=relevance_raw)
+    mention_count = _as_mentions_count(value=mentions_raw)
+
+    if (
+        gkb_id is None
+        and not wdids
+        and entity_type is None
+        and std_form is None
+        and relevance is None
+        and mention_count is None
+    ):
+        return None
+    return ArticleEntity(
+        gkb_id=gkb_id,
+        wdids=wdids,
+        entity_type=entity_type,
+        std_form=std_form,
+        relevance=relevance,
+        mention_count=mention_count,
+    )
+
+
+def _mapping_value(*, item: Mapping[str, Any], keys: Sequence[str]) -> Any:
+    """Return first present mapping key value."""
+    for key in keys:
+        if key in item:
+            return item[key]
+    return None
+
+
+def _as_wdid_tuple(*, value: Any) -> tuple[str, ...]:
+    """Normalize one-or-many Wikidata ids to an immutable tuple."""
+    if value is None:
+        return ()
+
+    wdids: list[str] = []
+    if isinstance(value, str):
+        normalized = value.replace('|', ',')
+        chunks = [chunk.strip() for chunk in normalized.split(',')]
+        wdids.extend(chunk for chunk in chunks if chunk)
+    elif isinstance(value, Sequence):
+        for item in value:
+            normalized = _as_str(value=item)
+            if normalized:
+                wdids.append(normalized)
+    else:
+        normalized = _as_str(value=value)
+        if normalized:
+            wdids.append(normalized)
+
+    seen: set[str] = set()
+    unique_wdids = []
+    for item in wdids:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique_wdids.append(item)
+    return tuple(unique_wdids)
+
+
+def _as_float(*, value: Any) -> float | None:
+    """Best-effort cast to float."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_int(*, value: Any) -> int | None:
+    """Best-effort cast to int."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_mentions_count(*, value: Any) -> int | None:
+    """Normalize mention count from integer-like value or mentions list."""
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return len(value)
+    return _as_int(value=value)
+
+
+def _as_str(*, value: Any) -> str | None:
+    """Best-effort cast to non-empty string."""
+    if value is None:
+        return None
+    value_str = str(value).strip()
+    return value_str if value_str else None
 
 
 def add_prob_columns(*, df: pd.DataFrame) -> pd.DataFrame:
@@ -351,6 +629,10 @@ def norm_cat_ids(*, cat_ids: Sequence[str]) -> list[str]:
     return [cat.id for cat in norm_cats if cat.id and cat.id not in REMOVED_CAT_IDS]
 
 
+# ---------------------------------------------------------------------------
+# Comparison table builders
+# ---------------------------------------------------------------------------
+
 def build_cmp_df(
     *,
     current_df: pd.DataFrame,
@@ -359,6 +641,7 @@ def build_cmp_df(
     info_cols: Sequence[str],
 ) -> pd.DataFrame:
     """Join current/base metric tables and compute current-base deltas."""
+    metric_cols = [col for _, col in _CMP_METRICS]
     df = current_df.reset_index().merge(
         base_df.reset_index(),
         on=key_col,
@@ -366,23 +649,54 @@ def build_cmp_df(
         suffixes=('_current', '_base'),
         sort=False,
     )
-    for metric in ['Precision', 'Recall', 'F1']:
+    for metric in metric_cols:
         df[f'{metric}_diff'] = df[f'{metric}_current'] - df[f'{metric}_base']
 
     cols = [key_col]
     for info_col in info_cols:
         cols.extend([f'{info_col}_current', f'{info_col}_base'])
-    for metric in ['Precision', 'Recall', 'F1']:
+    for metric in metric_cols:
         cols.extend([f'{metric}_current', f'{metric}_base', f'{metric}_diff'])
     return df.reindex(columns=cols)
 
 
 def diff_only_df(*, df: pd.DataFrame, key_col: str) -> pd.DataFrame:
     """Drop base metric columns while preserving current values and diffs."""
-    drop_cols = {f'{metric}_base' for metric in ['Precision', 'Recall', 'F1']}
+    drop_cols = {f'{col}_base' for _, col in _CMP_METRICS}
     cols = [key_col]
     cols.extend(col for col in df.columns if col != key_col and col not in drop_cols)
     return df.loc[:, cols]
+
+
+# ---------------------------------------------------------------------------
+# Summary and metric row helpers
+# ---------------------------------------------------------------------------
+
+def _metric_row(*, summary_key: str, current: pd.Series, base: pd.Series) -> dict[str, Any]:
+    """Build one summary row from current/base metric series."""
+    row: dict[str, Any] = {'summary_key': summary_key}
+    for key, col in _CMP_METRICS:
+        row[f'{key}_current'] = current[col]
+        row[f'{key}_base'] = base[col]
+        row[f'{key}_diff'] = current[col] - base[col]
+    return row
+
+
+def _avg_metrics_row(*, summary_key: str, sub_df: pd.DataFrame) -> dict[str, Any]:
+    """Macro-average precision/recall/f1 over the rows of ``sub_df``."""
+    row: dict[str, Any] = {'summary_key': summary_key}
+    if sub_df.empty:
+        nan = float('nan')
+        for key, _ in _CMP_METRICS:
+            row[f'{key}_current'] = nan
+            row[f'{key}_base'] = nan
+            row[f'{key}_diff'] = nan
+        return row
+    for key, col in _CMP_METRICS:
+        row[f'{key}_current'] = float(sub_df[f'{col}_current'].mean())
+        row[f'{key}_base'] = float(sub_df[f'{col}_base'].mean())
+        row[f'{key}_diff'] = float(sub_df[f'{col}_diff'].mean())
+    return row
 
 
 def build_summary_df(
@@ -444,51 +758,9 @@ def build_summary_df(
     return pd.DataFrame(rows)
 
 
-def _metric_row(*, summary_key: str, current: pd.Series, base: pd.Series) -> dict[str, Any]:
-    """Build one summary row from current/base metric series."""
-    return {
-        'summary_key': summary_key,
-        'precision_current': current['Precision'],
-        'precision_base': base['Precision'],
-        'precision_diff': current['Precision'] - base['Precision'],
-        'recall_current': current['Recall'],
-        'recall_base': base['Recall'],
-        'recall_diff': current['Recall'] - base['Recall'],
-        'f1_current': current['F1'],
-        'f1_base': base['F1'],
-        'f1_diff': current['F1'] - base['F1'],
-    }
-
-
-def _avg_metrics_row(*, summary_key: str, sub_df: pd.DataFrame) -> dict[str, Any]:
-    """Macro-average precision/recall/f1 over the rows of ``sub_df``."""
-    if sub_df.empty:
-        nan = float('nan')
-        return {
-            'summary_key': summary_key,
-            'precision_current': nan,
-            'precision_base': nan,
-            'precision_diff': nan,
-            'recall_current': nan,
-            'recall_base': nan,
-            'recall_diff': nan,
-            'f1_current': nan,
-            'f1_base': nan,
-            'f1_diff': nan,
-        }
-    return {
-        'summary_key': summary_key,
-        'precision_current': float(sub_df['Precision_current'].mean()),
-        'precision_base': float(sub_df['Precision_base'].mean()),
-        'precision_diff': float(sub_df['Precision_diff'].mean()),
-        'recall_current': float(sub_df['Recall_current'].mean()),
-        'recall_base': float(sub_df['Recall_base'].mean()),
-        'recall_diff': float(sub_df['Recall_diff'].mean()),
-        'f1_current': float(sub_df['F1_current'].mean()),
-        'f1_base': float(sub_df['F1_base'].mean()),
-        'f1_diff': float(sub_df['F1_diff'].mean()),
-    }
-
+# ---------------------------------------------------------------------------
+# Top-change analysis
+# ---------------------------------------------------------------------------
 
 def build_top_change_dfs(*, classes_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build ranked improved and degraded category tables."""
@@ -589,6 +861,10 @@ def top_level_from_label(label: str) -> str:
     return inner[:paren_idx].strip() if paren_idx != -1 else inner
 
 
+# ---------------------------------------------------------------------------
+# Article-level alignment helpers
+# ---------------------------------------------------------------------------
+
 def shared_article_ids(*, current_df: pd.DataFrame, base_df: pd.DataFrame) -> list[str]:
     """Return article ids shared by current and base runs in current order."""
     base_ids = set(base_df['article_id'])
@@ -604,6 +880,189 @@ def subset_by_ids(*, df: pd.DataFrame, article_ids: Sequence[str]) -> pd.DataFra
         return df.iloc[0:0].copy()
     return df.set_index('article_id', drop=False).loc[list(article_ids)].reset_index(drop=True)
 
+
+# ---------------------------------------------------------------------------
+# Article-level F1 deltas and entity impact
+# ---------------------------------------------------------------------------
+
+
+def build_article_f1_diff_df(
+    *,
+    current_df: pd.DataFrame,
+    base_df: pd.DataFrame,
+    gold_map: GoldLabelMap,
+    cat_ids: Sequence[str],
+    threshold_eval: float,
+) -> pd.DataFrame:
+    """Compute per-article F1 for current/base and their delta."""
+    article_ids = list(current_df['article_id'])
+    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
+    current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
+    base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
+    current_f1 = compute_article_f1(scores=current_scores, gold_matrix=gold_matrix, threshold_eval=threshold_eval)
+    base_f1 = compute_article_f1(scores=base_scores, gold_matrix=gold_matrix, threshold_eval=threshold_eval)
+    article_f1_df = pd.DataFrame(
+        {
+            'article_id': article_ids,
+            'corpus_name': current_df['corpus_name'].tolist(),
+            'f1_current': current_f1,
+            'f1_base': base_f1,
+        }
+    )
+    article_f1_df['f1_diff'] = article_f1_df['f1_current'] - article_f1_df['f1_base']
+    if 'article_length' in current_df.columns:
+        article_f1_df['article_length'] = pd.to_numeric(current_df['article_length'], errors='coerce')
+    return article_f1_df
+
+
+def compute_article_f1(*, scores: np.ndarray, gold_matrix: np.ndarray, threshold_eval: float) -> np.ndarray:
+    """Compute per-article F1 scores from score and gold matrices."""
+    pred_matrix = scores >= threshold_eval
+    gold_bool = gold_matrix.astype(bool)
+    tp = np.logical_and(pred_matrix, gold_bool).sum(axis=1, dtype=np.int32)
+    fp = np.logical_and(pred_matrix, np.logical_not(gold_bool)).sum(axis=1, dtype=np.int32)
+    fn = np.logical_and(np.logical_not(pred_matrix), gold_bool).sum(axis=1, dtype=np.int32)
+    denom = 2 * tp + fp + fn
+    f1 = np.zeros_like(denom, dtype=float)
+    valid = denom > 0
+    f1[valid] = (2 * tp[valid]) / denom[valid]
+    return f1
+
+
+def build_entity_impact_tables(
+    *,
+    current_df: pd.DataFrame,
+    article_f1_df: pd.DataFrame,
+    limit: int,
+    random_seed: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Build improvers/decaders/random entity impact tables."""
+    entity_df = build_entity_impact_df(current_df=current_df, article_f1_df=article_f1_df)
+    if entity_df.empty:
+        empty = entity_df.reindex(columns=entity_impact_columns())
+        return (
+            append_avg_footer_row(df=empty, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'}),
+            append_avg_footer_row(df=empty, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'}),
+            append_avg_footer_row(df=empty, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'}),
+        )
+
+    improvers = entity_df[entity_df['entity_score'] > 0].sort_values(by='entity_score', ascending=False).head(limit)
+    decaders = entity_df[entity_df['entity_score'] < 0].sort_values(by='entity_score', ascending=True).head(limit)
+    random_n = min(limit, len(entity_df))
+    random_df = entity_df.sample(n=random_n, random_state=random_seed) if random_n > 0 else entity_df.iloc[0:0].copy()
+    improvers = append_avg_footer_row(df=improvers, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'})
+    decaders = append_avg_footer_row(df=decaders, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'})
+    random_df = append_avg_footer_row(df=random_df, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'})
+    return improvers, decaders, random_df
+
+
+def build_entity_impact_df(*, current_df: pd.DataFrame, article_f1_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate entity impact from article F1 deltas."""
+    exploded = explode_entities(df=current_df)
+    if exploded.empty:
+        return pd.DataFrame(columns=entity_impact_columns())
+
+    exploded = exploded.merge(article_f1_df[['article_id', 'f1_diff']], on='article_id', how='inner')
+    if exploded.empty:
+        return pd.DataFrame(columns=entity_impact_columns())
+
+    score_df = exploded[['gkbid', 'article_id', 'f1_diff']].drop_duplicates(subset=['gkbid', 'article_id'])
+    score_agg = score_df.groupby('gkbid', as_index=False).agg(
+        entity_score=('f1_diff', 'sum'),
+        article_count=('article_id', 'nunique'),
+    )
+    relevance_agg = exploded.groupby('gkbid', as_index=False).agg(avg_relevance=('relevance', 'mean'))
+    mentions_per_article = exploded.groupby(['gkbid', 'article_id'], as_index=False).agg(
+        mention_per_article=('mention_count', 'mean')
+    )
+    mention_agg = mentions_per_article.groupby('gkbid', as_index=False).agg(
+        avg_mentions_count=('mention_per_article', 'mean')
+    )
+    stdform = choose_stdform_by_gkbid(df=exploded)
+    entity_df = (
+        score_agg.merge(relevance_agg, on='gkbid', how='left')
+        .merge(mention_agg, on='gkbid', how='left')
+        .merge(stdform, on='gkbid', how='left')
+    )
+    entity_df = entity_df.reindex(columns=entity_impact_columns())
+    return entity_df
+
+
+def explode_entities(*, df: pd.DataFrame) -> pd.DataFrame:
+    """Explode article entities into one row per entity occurrence."""
+    if 'entities' not in df.columns or 'article_id' not in df.columns:
+        return pd.DataFrame(columns=['article_id', 'gkbid', 'stdform', 'relevance', 'mention_count'])
+    entity_rows = df[['article_id', 'entities']].copy()
+    entity_rows = entity_rows.explode('entities')
+    entity_rows = entity_rows.dropna(subset=['entities'])
+    if entity_rows.empty:
+        return pd.DataFrame(columns=['article_id', 'gkbid', 'stdform', 'relevance', 'mention_count'])
+    entity_rows['gkbid'] = entity_rows['entities'].map(lambda item: item.gkb_id if item is not None else None)
+    entity_rows['stdform'] = entity_rows['entities'].map(lambda item: item.std_form if item is not None else None)
+    entity_rows['relevance'] = entity_rows['entities'].map(lambda item: item.relevance if item is not None else None)
+    entity_rows['mention_count'] = entity_rows['entities'].map(
+        lambda item: item.mention_count if item is not None else None
+    )
+    entity_rows = entity_rows.drop(columns=['entities'])
+    entity_rows['gkbid'] = entity_rows['gkbid'].astype(object)
+    entity_rows = entity_rows[entity_rows['gkbid'].notna() & (entity_rows['gkbid'].astype(str).str.len() > 0)]
+    entity_rows['relevance'] = pd.to_numeric(entity_rows['relevance'], errors='coerce')
+    entity_rows['mention_count'] = pd.to_numeric(entity_rows['mention_count'], errors='coerce')
+    return entity_rows
+
+
+def choose_stdform_by_gkbid(*, df: pd.DataFrame) -> pd.DataFrame:
+    """Select representative stdform per gkbid by most frequent non-empty value."""
+    names = df[['gkbid', 'stdform']].dropna(subset=['gkbid']).copy()
+    names['stdform'] = names['stdform'].fillna('').astype(str).str.strip()
+    names = names[names['stdform'] != '']
+    if names.empty:
+        return pd.DataFrame(columns=['gkbid', 'stdform'])
+    counts = names.groupby(['gkbid', 'stdform'], as_index=False).size()
+    counts = counts.sort_values(by=['gkbid', 'size', 'stdform'], ascending=[True, False, True])
+    return counts.drop_duplicates(subset=['gkbid'], keep='first')[['gkbid', 'stdform']]
+
+
+def build_article_f1_diff_avg_stats(*, df: pd.DataFrame, limit: int) -> pd.DataFrame:
+    """Build three-row average stats table from article F1 deltas."""
+    top_improving = df.nlargest(limit, 'f1_diff')
+    top_decreasing = df.nsmallest(limit, 'f1_diff')
+    rows = [
+        article_avg_row(segment='top_1000_improving_articles', df=top_improving),
+        article_avg_row(segment='top_1000_decreasing_articles', df=top_decreasing),
+        article_avg_row(segment='all_articles', df=df),
+    ]
+    return pd.DataFrame(rows)
+
+
+def article_avg_row(*, segment: str, df: pd.DataFrame) -> dict[str, Any]:
+    """Build one row of numeric mean stats for an article subset."""
+    row: dict[str, Any] = {'segment': segment, 'article_count': int(len(df))}
+    numeric_cols = [
+        col for col in ('f1_current', 'f1_base', 'f1_diff', 'article_length') if col in df.columns
+    ]
+    for col in numeric_cols:
+        row[col] = float(pd.to_numeric(df[col], errors='coerce').mean()) if not df.empty else float('nan')
+    return row
+
+
+def append_avg_footer_row(*, df: pd.DataFrame, id_col_values: Mapping[str, str]) -> pd.DataFrame:
+    """Append one footer row with numeric means and fixed identifier labels."""
+    footer: dict[str, Any] = {**id_col_values}
+    numeric_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
+    for col in numeric_cols:
+        footer[col] = float(df[col].mean()) if not df.empty else float('nan')
+    return pd.concat([df, pd.DataFrame([footer], columns=df.columns)], ignore_index=True)
+
+
+def entity_impact_columns() -> list[str]:
+    """Return output column order for entity impact tables."""
+    return ['gkbid', 'stdform', 'avg_relevance', 'avg_mentions_count', 'entity_score', 'article_count']
+
+
+# ---------------------------------------------------------------------------
+# Hamming loss
+# ---------------------------------------------------------------------------
 
 def build_hamming_df(
     *,
@@ -635,6 +1094,10 @@ def compute_hamming(
     pred_matrix = (score_matrix >= threshold_eval).astype(np.int8)
     return float(np.mean(pred_matrix != gold_matrix))
 
+
+# ---------------------------------------------------------------------------
+# PR-AUC
+# ---------------------------------------------------------------------------
 
 def build_pr_auc_dfs(
     *,
@@ -767,22 +1230,26 @@ def _safe_mean(*, values: pd.Series) -> float:
     return float(cleaned.mean()) if not cleaned.empty else float('nan')
 
 
-def _avg_filtered(*, values_dict: Mapping[str, float], predicate: Any) -> float:
+def _avg_filtered(*, values_dict: Mapping[str, float], predicate: Callable[[str], bool]) -> float:
     """Mean of dict values whose key matches ``predicate`` and is not NaN."""
     matched = [v for k, v in values_dict.items() if predicate(k) and not np.isnan(v)]
     return float(np.mean(matched)) if matched else float('nan')
 
 
-def _prefix_predicate(prefix: str) -> Any:
+def _prefix_predicate(prefix: str) -> Callable[[str], bool]:
     """Predicate matching corpus names starting with ``<prefix>_``."""
     return lambda name: name.startswith(f'{prefix}_')
 
 
-def _contains_predicate(token: str) -> Any:
+def _contains_predicate(token: str) -> Callable[[str], bool]:
     """Predicate matching corpus names containing ``token`` (case-insensitive)."""
     lower = token.lower()
     return lambda name: lower in name.lower()
 
+
+# ---------------------------------------------------------------------------
+# Score matrix and average precision
+# ---------------------------------------------------------------------------
 
 def micro_pr_auc(*, gold_matrix: np.ndarray, scores: np.ndarray) -> float:
     """Compute micro PR-AUC by flattening across all classes."""
@@ -837,43 +1304,23 @@ def average_precision(*, y_true: np.ndarray, y_score: np.ndarray) -> float:
     return float(np.sum((recall[1:] - recall[:-1]) * precision[1:]))
 
 
+# ---------------------------------------------------------------------------
+# Serialization (CSV / Excel)
+# ---------------------------------------------------------------------------
+
 def write_csv(*, result: ComparisonResult, output_path: Path) -> None:
     """Persist comparison outputs into CSV files."""
     output_path.mkdir(parents=True, exist_ok=True)
-    result.corpora_comparison.to_csv(output_path / 'corpora_comparison.csv', index=False)
-    result.classes_comparison.to_csv(output_path / 'classes_comparison.csv', index=False)
-    result.summary_comparison.to_csv(output_path / 'summary_comparison.csv', index=False)
-    result.top_improved_categories.to_csv(output_path / 'top_improved.csv', index=False)
-    result.top_degraded_categories.to_csv(output_path / 'top_degraded.csv', index=False)
-    result.top_improved_stats.to_csv(output_path / 'top_improved_stats.csv', index=False)
-    result.top_degraded_stats.to_csv(output_path / 'top_degraded_stats.csv', index=False)
-    result.hamming_loss_comparison.to_csv(output_path / 'hamming_loss.csv', index=False)
-    result.pr_auc_per_class.to_csv(output_path / 'pr_auc_per_class.csv', index=False)
-    result.pr_auc_summary.to_csv(output_path / 'pr_auc_summary.csv', index=False)
-    result.current_corpora.to_csv(output_path / 'current_corpora.csv', index=False)
-    result.current_classes.to_csv(output_path / 'current_classes.csv', index=False)
-    result.base_corpora.to_csv(output_path / 'base_corpora.csv', index=False)
-    result.base_classes.to_csv(output_path / 'base_classes.csv', index=False)
+    for attr, filename, _ in _RESULT_SHEETS:
+        getattr(result, attr).to_csv(output_path / f'{filename}.csv', index=False)
 
 
 def write_excel(*, result: ComparisonResult, output_path: Path) -> None:
     """Persist comparison outputs into one Excel workbook."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path) as writer:
-        result.corpora_comparison.to_excel(writer, sheet_name='corpora_comparison', index=False)
-        result.classes_comparison.to_excel(writer, sheet_name='classes_comparison', index=False)
-        result.summary_comparison.to_excel(writer, sheet_name='summary_comparison', index=False)
-        result.top_improved_categories.to_excel(writer, sheet_name='top_improved', index=False)
-        result.top_degraded_categories.to_excel(writer, sheet_name='top_degraded', index=False)
-        result.top_improved_stats.to_excel(writer, sheet_name='top_improved_stats', index=False)
-        result.top_degraded_stats.to_excel(writer, sheet_name='top_degraded_stats', index=False)
-        result.hamming_loss_comparison.to_excel(writer, sheet_name='hamming_loss', index=False)
-        result.pr_auc_per_class.to_excel(writer, sheet_name='pr_auc_per_class', index=False)
-        result.pr_auc_summary.to_excel(writer, sheet_name='pr_auc_summary', index=False)
-        result.current_corpora.to_excel(writer, sheet_name='current_corpora')
-        result.current_classes.to_excel(writer, sheet_name='current_classes')
-        result.base_corpora.to_excel(writer, sheet_name='base_corpora')
-        result.base_classes.to_excel(writer, sheet_name='base_classes')
+        for attr, sheet_name, include_index in _RESULT_SHEETS:
+            getattr(result, attr).to_excel(writer, sheet_name=sheet_name, index=include_index)
 
 
 def log_top_changes(*, result: ComparisonResult, top_n: int) -> None:
@@ -885,6 +1332,10 @@ def log_top_changes(*, result: ComparisonResult, top_n: int) -> None:
     if result.excel_path is not None:
         LOG.info('Saved comparison report to %s', result.excel_path)
 
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def build_path(*, output_root: str | Path, config_name: str) -> Path:
     """Create timestamped comparison workbook path."""
@@ -907,7 +1358,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--config-name', default='comparison', help='Output name fragment.')
     parser.add_argument('--threshold-eval', type=float, default=0.5, help='Evaluation threshold.')
-    parser.add_argument('--averaging-type', default='datapoint', choices=['datapoint', 'micro', 'macro'])
+    parser.add_argument('--averaging-type', default='micro', choices=['datapoint', 'micro', 'macro'])
     parser.add_argument('--top-n', type=int, default=20, help='Preview size for improved/degraded categories.')
     parser.add_argument('--only-diff', action='store_true', help='Drop base metric columns from comparison sheets.')
     parser.add_argument(
