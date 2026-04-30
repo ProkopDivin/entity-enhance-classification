@@ -42,9 +42,10 @@ WBGETENTITIES_BATCH = 50
 HTTP_TIMEOUT_S = 30
 HTTP_RETRY = 8
 HTTP_BACKOFF_S = 2.0
-HTTP_RATE_LIMIT_DEFAULT_WAIT_S = 15.0
+HTTP_RATE_LIMIT_DEFAULT_WAIT_S = 30.0
 HTTP_RATE_LIMIT_MAX_WAIT_S = 90.0
 DEFAULT_BATCH_SLEEP_S = 3.0
+TEXT_FETCH_SLEEP_S = 0.2
 
 LOGGER = logging.getLogger(__name__)
 
@@ -238,6 +239,140 @@ def _resolve_batch_titles(*, batch: list[str], langs: tuple[str, ...]) -> dict[s
     for qid in batch:
         resolved.setdefault(qid, {lang: None for lang in langs})
     return resolved
+
+
+def _extract_plain_text(*, payload: dict) -> str | None:
+    """
+    Extract plain text from a Wikipedia API ``query/pages`` payload.
+
+    :param payload: JSON payload returned by Wikipedia query API.
+    :return: Plain text extract or ``None`` when page is missing.
+    """
+    query = payload.get('query') or {}
+    pages = query.get('pages')
+    if not isinstance(pages, dict) or not pages:
+        return None
+    first_page = next(iter(pages.values()))
+    if not isinstance(first_page, dict):
+        return None
+    if 'missing' in first_page:
+        return None
+    extract = first_page.get('extract')
+    if not isinstance(extract, str):
+        return None
+    text = extract.strip()
+    if not text:
+        return None
+    return text
+
+
+def _build_summary(*, text: str | None) -> str | None:
+    """
+    Build a compact summary from full plain text.
+
+    Summary is the first non-empty paragraph.
+
+    :param text: Full plain text.
+    :return: First paragraph or ``None``.
+    """
+    if not text:
+        return None
+    for chunk in text.split('\n\n'):
+        paragraph = chunk.strip()
+        if paragraph:
+            return paragraph
+    return None
+
+
+def _fetch_page_plain_text(*, lang: str, title: str) -> str | None:
+    """
+    Fetch full plain text for one Wikipedia page.
+
+    :param lang: Wikipedia language code.
+    :param title: Wikipedia page title.
+    :return: Full plain text extract or ``None``.
+    """
+    url = f'https://{lang}.wikipedia.org/w/api.php'
+    payload = _http_get_json(
+        url=url,
+        params={
+            'action': 'query',
+            'format': 'json',
+            'prop': 'extracts',
+            'explaintext': '1',
+            'redirects': '1',
+            'titles': title,
+            'maxlag': '5',
+        },
+    )
+    return _extract_plain_text(payload=payload)
+
+
+def fetch_page_texts(
+    *,
+    qids: Iterable[str],
+    langs: tuple[str, ...],
+    qid_to_titles: dict[str, dict[str, str | None]],
+    out_dir: Path,
+    overwrite: bool = False,
+    sleep_s: float = TEXT_FETCH_SLEEP_S,
+) -> dict[str, int]:
+    """
+    Fetch summary and full plain text per QID/language and persist sidecar JSON files.
+
+    :param qids: Ordered QID list.
+    :param langs: Requested language codes.
+    :param qid_to_titles: Mapping of QID to per-language title.
+    :param out_dir: Directory where page text sidecars are stored.
+    :param overwrite: If False, skip files that already exist.
+    :param sleep_s: Politeness delay between HTTP calls.
+    :return: Counters keyed by status category.
+    """
+    counts = {
+        'pairs_total': 0,
+        'pairs_with_title': 0,
+        'saved': 0,
+        'missing_page': 0,
+        'missing_title': 0,
+        'skipped_existing': 0,
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for qid in qids:
+        title_map = qid_to_titles.get(qid) or {}
+        for lang in langs:
+            counts['pairs_total'] += 1
+            title = title_map.get(lang)
+            if not title:
+                counts['missing_title'] += 1
+                continue
+            counts['pairs_with_title'] += 1
+
+            out_path = out_dir / f'{qid}_{lang}_wiki_text.json'
+            if out_path.exists() and not overwrite:
+                counts['skipped_existing'] += 1
+                continue
+
+            plain_text = _fetch_page_plain_text(lang=lang, title=title)
+            summary = _build_summary(text=plain_text)
+            status = CACHE_STATUS_OK if plain_text else 'missing_page'
+            if status == 'missing_page':
+                counts['missing_page'] += 1
+
+            payload = {
+                'qid': qid,
+                'lang': lang,
+                'title': title,
+                'status': status,
+                'summary': summary,
+                'plain_text': plain_text,
+            }
+            with open(out_path, 'w', encoding='utf-8') as out_file:
+                json.dump(payload, out_file, ensure_ascii=False, indent=2)
+            counts['saved'] += 1
+
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+    return counts
 
 
 def _ensure_decompressed(*, model_path: Path) -> Path:
@@ -615,8 +750,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help='Politeness delay between API batches (seconds).',
     )
     parser.add_argument('--overwrite', action='store_true', help='Overwrite existing per-entity files.')
+    parser.add_argument(
+        '--skip-page-text',
+        action='store_true',
+        help='Skip downloading Wikipedia summary and full plain-text sidecars.',
+    )
     parser.add_argument('--skip-download', action='store_true', help='Do not download/check the model, assume it exists.')
-    parser.add_argument('--titles-only', action='store_true', help='Only build the QID->title cache, skip embedding step.')
+    parser.add_argument(
+        '--skip-embeddings',
+        '--titles-only',
+        dest='skip_embeddings',
+        action='store_true',
+        help='Skip embedding step after title/page-text fetching. Alias: --titles-only.',
+    )
     parser.add_argument(
         '--recount-only',
         action='store_true',
@@ -650,6 +796,7 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.out_dir)
     model_dir = Path(args.model_dir)
     cache_path = out_dir / '_qid_to_title.tsv'
+    text_out_dir = out_dir / '_wiki_texts'
     missing_log_path = out_dir / '_missing_qids.txt'
     langs = _flatten_lang_args(raw_langs=args.langs)
     try:
@@ -707,6 +854,20 @@ def main(argv: list[str] | None = None) -> int:
             len(qid_to_titles),
             ','.join(langs),
         )
+        if not args.skip_page_text:
+            text_counts = fetch_page_texts(
+                qids=qid_to_titles.keys(),
+                langs=langs,
+                qid_to_titles=qid_to_titles,
+                out_dir=text_out_dir,
+                overwrite=args.overwrite,
+            )
+            LOGGER.info(
+                'Wikipedia text cache complete. saved=%d missing_page=%d skipped_existing=%d',
+                text_counts['saved'],
+                text_counts['missing_page'],
+                text_counts['skipped_existing'],
+            )
 
         out_dir.mkdir(parents=True, exist_ok=True)
         missing_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -766,8 +927,23 @@ def main(argv: list[str] | None = None) -> int:
         resolved = sum(1 for qid in qids if (qid_to_titles.get(qid) or {}).get(lang))
         LOGGER.info('Resolved %d / %d QIDs to %swiki titles', resolved, len(qids), lang)
 
-    if args.titles_only:
-        LOGGER.info('--titles-only set, exiting before embedding step')
+    if not args.skip_page_text:
+        text_counts = fetch_page_texts(
+            qids=qids,
+            langs=langs,
+            qid_to_titles=qid_to_titles,
+            out_dir=text_out_dir,
+            overwrite=args.overwrite,
+        )
+        LOGGER.info(
+            'Wikipedia text cache complete. saved=%d missing_page=%d skipped_existing=%d',
+            text_counts['saved'],
+            text_counts['missing_page'],
+            text_counts['skipped_existing'],
+        )
+
+    if args.skip_embeddings:
+        LOGGER.info('--skip-embeddings set, exiting before embedding step')
         return 0
 
     out_dir.mkdir(parents=True, exist_ok=True)
