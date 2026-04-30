@@ -193,20 +193,45 @@ def _restore_state_cpu(model: NeuralCategModel, state: dict[str, Any]) -> None:
 
 def _log_validation(
     *,
-    clearml_logger: Any,
+    c_log: Any,
     precision: float,
     recall: float,
     loss: float,
     print_logs: bool,
 ) -> None:
     """Emit human-readable validation results to ClearML logger."""
-    clearml_logger.report_text(
+    c_log.report_text(
         f'Test Error: \n Prec: {100 * precision:>0.2f}%,\n'
         f' Recall: {100 * recall:>0.2f}%,\n'
         f' Avg loss: {loss:>8f} \n',
         level=logging.INFO,
         print_console=print_logs,
     )
+
+
+def _log_info(*, logger: Any, message: str, print_logs: bool) -> None:
+    """Log one INFO message to ClearML text logs."""
+    logger.report_text(message, level=logging.INFO, print_console=print_logs)
+
+
+def _log_elapsed(*, logger: Any, label: str, started_at: float, print_logs: bool) -> None:
+    """Log elapsed seconds since ``started_at`` to ClearML text logs."""
+    _log_info(logger=logger, message=f'{label}: {time.time() - started_at}', print_logs=print_logs)
+
+
+def _report_stats_scalars(
+    *,
+    logger: Any,
+    title: str,
+    precision: float,
+    recall: float,
+    loss: float,
+    iteration: int,
+) -> None:
+    """Report precision/recall/loss series for one iteration."""
+    logger.report_scalar(title=title, series='Precision', value=precision, iteration=iteration)
+    logger.report_scalar(title=title, series='Recall', value=recall, iteration=iteration)
+    logger.report_scalar(title=title, series='Loss', value=loss, iteration=iteration)
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +260,7 @@ def createClassificationModel(
     task = Task.current_task()
     if task is not None:
         logger = task.get_logger()
-        logger.report_text('Creating classification model', level=logging.INFO, print_console=logConfig['PRINT_LOGS'])
+        _log_info(logger=logger, message='Creating classification model', print_logs=logConfig['PRINT_LOGS'])
         if connect_config:
             task.connect(modelConfig, name='modelConfig')
 
@@ -270,7 +295,7 @@ def trainClassificationModel(
     task = Task.current_task()
     clearml_logger = task.get_logger()
     print_logs = logConfig['PRINT_LOGS']
-    clearml_logger.report_text('Training classification model', level=logging.INFO, print_console=print_logs)
+    _log_info(logger=clearml_logger, message='Training classification model', print_logs=print_logs)
     if connect_config:
         task.connect(trainingConfig, name='trainingConfig')
 
@@ -284,8 +309,8 @@ def trainClassificationModel(
     optimizer = opt_factory(model._nn.parameters(), lr)
     scheduler = sched_factory(optimizer)
     model.catList = list(trainData.catList)
-    clearml_logger.report_text(
-        f'Training model with {len(model.catList)} categories', level=logging.INFO, print_console=print_logs,
+    _log_info(
+        logger=clearml_logger, message=f'Training model with {len(model.catList)} categories', print_logs=print_logs,
     )
 
     train_loader = torch.utils.data.DataLoader(
@@ -305,37 +330,28 @@ def trainClassificationModel(
     start_time = time.time()
     for epoch in range(trainingConfig['epochs']):
         last_time = time.time()
-        clearml_logger.report_text(
-            f'Epoch {epoch + 1}\n-------------------------------time: {time.time() - last_time}',
-            level=logging.INFO, print_console=print_logs,
-        )
+        epoch_msg = f'Epoch {epoch + 1}\n-------------------------------time: {time.time() - last_time}'
+        _log_info(logger=clearml_logger, message=epoch_msg, print_logs=print_logs)
         model._trainEpoch(train_loader, loss_fn, optimizer, scheduler)
-        clearml_logger.report_text(
-            f'time make train epoch: {time.time() - last_time}', level=logging.INFO, print_console=print_logs,
-        )
+        _log_elapsed(logger=clearml_logger, label='time make train epoch', started_at=last_time, print_logs=print_logs)
 
         last_time = time.time()
         dev_prec, dev_rec, dev_loss = _validate_split(model=model, dataloader=dev_loader, loss_fn=loss_fn)
-        _log_validation(
-            clearml_logger=clearml_logger, precision=dev_prec, recall=dev_rec, loss=dev_loss, print_logs=print_logs,
-        )
-        clearml_logger.report_text(
-            f'time {validation_split_name} validation done: {time.time() - last_time}',
-            level=logging.INFO, print_console=print_logs,
-        )
+        _log_validation(c_log=clearml_logger, precision=dev_prec, recall=dev_rec, loss=dev_loss, print_logs=print_logs)
+        validation_done_label = f'time {validation_split_name} validation done'
+        _log_elapsed(logger=clearml_logger, label=validation_done_label, started_at=last_time, print_logs=print_logs)
 
         last_time = time.time()
         dev_stats.precision.append(dev_prec)
         dev_stats.recall.append(dev_rec)
         dev_stats.loss.append(dev_loss)
-        clearml_logger.report_scalar(
-            title=f'{validation_title} Training Stats', series='Precision', value=dev_prec, iteration=epoch,
-        )
-        clearml_logger.report_scalar(
-            title=f'{validation_title} Training Stats', series='Recall', value=dev_rec, iteration=epoch,
-        )
-        clearml_logger.report_scalar(
-            title=f'{validation_title} Training Stats', series='Loss', value=dev_loss, iteration=epoch,
+        _report_stats_scalars(
+            logger=clearml_logger,
+            title=f'{validation_title} Training Stats',
+            precision=dev_prec,
+            recall=dev_rec,
+            loss=dev_loss,
+            iteration=epoch,
         )
 
         if es_patience > 0:
@@ -343,34 +359,37 @@ def trainClassificationModel(
                 best_dev_loss = dev_loss
                 best_state_cpu = _clone_state_cpu(model)
                 epochs_without_improvement = 0
-                clearml_logger.report_text(
-                    f'Early stopping: new best {validation_split_name} loss={dev_loss:.6f} at epoch {epoch + 1}',
-                    level=logging.INFO, print_console=print_logs,
+                _log_info(
+                    logger=clearml_logger,
+                    message=f'Early stopping: new best {validation_split_name} loss={dev_loss:.6f} at epoch {epoch + 1}',
+                    print_logs=print_logs,
                 )
             else:
                 epochs_without_improvement += 1
-                clearml_logger.report_text(
-                    f'Early stopping: epochs without improvement: {epochs_without_improvement}',
-                    level=logging.INFO, print_console=print_logs,
+                _log_info(
+                    logger=clearml_logger,
+                    message=f'Early stopping: epochs without improvement: {epochs_without_improvement}',
+                    print_logs=print_logs,
                 )
 
-        clearml_logger.report_text(
-            f'time done: {time.time() - last_time}', level=logging.INFO, print_console=print_logs,
-        )
+        _log_elapsed(logger=clearml_logger, label='time done', started_at=last_time, print_logs=print_logs)
 
         last_time = time.time()
         train_prec, train_rec, train_loss = _validate_split(model=model, dataloader=train_loader, loss_fn=loss_fn)
-        clearml_logger.report_text(
-            f'time train validation done: {time.time() - last_time}', level=logging.INFO, print_console=print_logs,
-        )
+        _log_elapsed(logger=clearml_logger, label='time train validation done', started_at=last_time, print_logs=print_logs)
 
         last_time = time.time()
         train_stats.precision.append(train_prec)
         train_stats.recall.append(train_rec)
         train_stats.loss.append(train_loss)
-        clearml_logger.report_scalar(title='Train Training Stats', series='Precision', value=train_prec, iteration=epoch)
-        clearml_logger.report_scalar(title='Train Training Stats', series='Recall', value=train_rec, iteration=epoch)
-        clearml_logger.report_scalar(title='Train Training Stats', series='Loss', value=train_loss, iteration=epoch)
+        _report_stats_scalars(
+            logger=clearml_logger,
+            title='Train Training Stats',
+            precision=train_prec,
+            recall=train_rec,
+            loss=train_loss,
+            iteration=epoch,
+        )
 
         if es_patience > 0 and epochs_without_improvement >= es_patience:
             clearml_logger.report_text(
@@ -387,9 +406,7 @@ def trainClassificationModel(
             level=logging.INFO, print_console=print_logs,
         )
 
-    clearml_logger.report_text(
-        f'time: {time.time() - start_time}', level=logging.INFO, print_console=print_logs,
-    )
+    _log_elapsed(logger=clearml_logger, label='time', started_at=start_time, print_logs=print_logs)
     model._nn.eval()
     final_dev_loss = best_dev_loss if best_dev_loss is not None else (dev_stats.loss[-1] if dev_stats.loss else 0.0)
 
@@ -441,11 +458,8 @@ def evaluateModel(
     df_corpora, df_classes = evaluate_predictions(
         pred_wgh_cats=predictions,
         eval_corpus=evalData.corpus,
-        thr=evaluation_config.threshold_eval,
+        evaluation_config=evaluation_config,
         cat_to_thr=customThresholds,
-        per_corpus=evaluation_config.per_corpus,
-        per_class=evaluation_config.per_class,
-        averaging_type=evaluation_config.averaging_type,
     )
     if returnPredictions:
         return df_corpora, df_classes, predictions

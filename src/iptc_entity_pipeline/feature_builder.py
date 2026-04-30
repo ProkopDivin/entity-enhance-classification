@@ -43,16 +43,20 @@ class FeatureBuilder:
     def __init__(
         self,
         *,
-        article_embedding_provider: ArticleEmbeddingProvider,
+        article_embedding_provider: ArticleEmbeddingProvider | None,
         entity_embedding_store: EntityEmbeddingStore,
         pooling_strategy: EntityPoolingStrategy,
+        use_article_embeddings: bool = True,
         combine_method: str = 'concat',
     ) -> None:
         if combine_method != 'concat':
             raise ValueError(f'Unsupported v1 combine method: {combine_method}')
+        if use_article_embeddings and article_embedding_provider is None:
+            raise ValueError('article_embedding_provider is required when use_article_embeddings=True')
         self._article_embedding_provider = article_embedding_provider
         self._entity_embedding_store = entity_embedding_store
         self._pooling_strategy = pooling_strategy
+        self._use_article_embeddings = use_article_embeddings
         self._combine_method = combine_method
 
     @staticmethod
@@ -130,7 +134,7 @@ class FeatureBuilder:
         :param corpus: ``geneea.catlib.data.Corpus`` object with entities attached to each doc.
         :param clearml_logger: Optional ClearML task logger used to report summary text.
         :param return_stats: If ``True``, return matrix together with coverage stats.
-        :return: Feature matrix of shape ``[docs, article_dim + entity_dim]``.
+        :return: Feature matrix of shape ``[docs, article_dim + entity_dim]`` or ``[docs, entity_dim]``.
         """
         entity_dim = self._entity_embedding_store.infer_embedding_dim()
         rows: list[np.ndarray] = []
@@ -138,7 +142,6 @@ class FeatureBuilder:
         tracking = self._init_tracking()
 
         for _, doc in enumerate(corpus):
-            article_embedding = self._article_embedding_provider.get_embedding(article_id=doc.id)
             pooling_result = self._pooling_strategy.pool(
                 doc=doc,
                 entity_embedding_store=self._entity_embedding_store,
@@ -149,7 +152,12 @@ class FeatureBuilder:
                 pooling_result=pooling_result,
                 tracking=tracking,
             )
-            row = np.concatenate([article_embedding, pooling_result.pooled_embedding]).astype(np.float32)
+            if self._use_article_embeddings:
+                assert self._article_embedding_provider is not None
+                article_embedding = self._article_embedding_provider.get_embedding(article_id=doc.id)
+                row = np.concatenate([article_embedding, pooling_result.pooled_embedding]).astype(np.float32)
+            else:
+                row = np.asarray(pooling_result.pooled_embedding, dtype=np.float32)
             rows.append(row)
 
         final_stats_message = self._final_message(tracking=tracking, total_docs=total_docs)

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal, Mapping
 
 DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
+ALL_ENTITY_LANGS = ('en', 'de', 'es', 'nl', 'fr', 'cs')
 
 
 def conf_from_dict(cls, d: Mapping[str, Any]):
@@ -37,6 +38,7 @@ class EmbeddingCnf:
     entity_langs: tuple[str, ...] = ()
     entity_relevance_threshold: float = 0.0
     use_entity_relevance_weights: bool = False
+    use_article_embeddings: bool = True
     use_entity_embeddings: bool = True
     combine_method: str = 'concat'
     entity_pooling: str = 'sum'
@@ -54,11 +56,12 @@ class ModelCnf:
 @dataclass(frozen=True)
 class TrainingCnf:
     """Scalar training loop parameters for a single training run."""
-
+    
+    learning_rate: float = 0.00037
     epochs: int = 100
     batch_size: int = 100
     optimizer_name: str = 'adam'
-    learning_rate: float = 0.00037
+   
     lr_scheduler_name: str = 'stepLR'
     step_size: int = 1
     gamma: float = 1
@@ -220,11 +223,42 @@ class WPEntitiesWeightedMeanCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class ArticleOnlyCnf(BaseCnfWithHPO):
+class ArticleOnlyCnf(BaseCnfWithHPO2):
     """Article-only configuration without entity embeddings."""
 
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), use_entity_embeddings=False)
+    )
+
+
+@dataclass(frozen=True)
+class EntityOnlyCnf(BaseCnfWithHPO):
+    """Entity-only configuration without article embeddings."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False)
+    )
+    
+    
+@dataclass(frozen=True)
+class W2VEntityOnlyCnf(BaseCnfWithHPO):
+    """Entity-only configuration without article embeddings."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False)
+    )
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+        )
+    )
+
+@dataclass(frozen=True)
+class NoEmbeddingsCnf(BaseCnf):
+    """No embeddings configuration."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False, use_entity_embeddings=False)
     )
 
 @dataclass(frozen=True)
@@ -273,6 +307,14 @@ class DebugCnf(BaseCnf):
             learning_rates=(0.00037,),
         )
     )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            use_entity_relevance_weights=True,
+            entity_pooling='weighted_mean',
+        )
+    )
+
     cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), folds=2))
     cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=2))
     debug: bool = True
@@ -313,7 +355,7 @@ class WPEntitiesEnCsCnf(BaseCnf):
 class WPEntitiesAllLangsCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration with all supported entity embedding languages."""
     emb: EmbeddingCnf = field(
-        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'de', 'es', 'nl', 'fr', 'cs'))
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS)
     )
 
 
@@ -639,7 +681,7 @@ class BestWpentitiesAllLangsCnf(BaseCnfWithHPO):
         )
     )
     emb: EmbeddingCnf = field(
-        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'de', 'es', 'nl', 'fr', 'cs'))
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS)
     )
 
 
@@ -685,6 +727,20 @@ class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO2):
 
 
 @dataclass(frozen=True)
+class Wikipedia2VecEntitiesAllLangsCnf(BaseCnfWithHPO):
+    """Wikipedia2Vec entity embedding config with all supported languages."""
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+        )
+    )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS)
+    )
+
+
+@dataclass(frozen=True)
 class BestWikipedia2VecEntitiesCnf(BaseCnfWithHPO):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
@@ -698,6 +754,18 @@ class BestWikipedia2VecEntitiesCnf(BaseCnfWithHPO):
             dropouts1=(0.0,),
             dropouts2=(0.0, ),
             learning_rates=(0.00037,),
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
+    """Entity-enhanced configuration using Wikidata description embeddings."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/WikidataDescription',
         )
     )
 
@@ -740,6 +808,10 @@ def _config_map() -> dict[str, BaseCnf]:
     return {
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),
+        'entity_only': EntityOnlyCnf(),
+        'wp_entity_only': EntityOnlyCnf(),
+        'wv_entity_only': W2VEntityOnlyCnf(),
+        'no_embeddings': NoEmbeddingsCnf(),
         'wpentities': WpEntitiesCnf(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
         'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumCnf(),
@@ -754,7 +826,9 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities_nl': BestWpentitiesNlCnf(),
         'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
         'wikipedia2vec_entities': Wikipedia2VecEntitiesCnf(),
+        'wikipedia2vec_entities_all_langs': Wikipedia2VecEntitiesAllLangsCnf(),
         'best_wikipedia2vec_entities': BestWikipedia2VecEntitiesCnf(),
+        'wikidata_description_entities': WikidataDescriptionEntitiesCnf(),
         'wpentities_2': WpEntitiesCnf2(),
         'wpentities_3': WpEntitiesCnf3(),
         'wpentities_4': WpEntitiesCnf4(),
@@ -775,6 +849,7 @@ def get_config(config_name: str) -> BaseCnf:
     - ``debug``: minimal config loading from ``data/debug`` for fast local testing.
     - ``wpentities``: entity-enhanced default setup (gold-chrono-per-dataset).
     - ``article_only``: article embeddings only (entity embeddings disabled).
+    - ``entity_only``: entity embeddings only (article embeddings disabled).
 
     :param config_name: Config variant name.
     :return: Selected config object.

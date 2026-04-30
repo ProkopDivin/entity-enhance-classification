@@ -1,0 +1,53 @@
+# Substring aliases applied left-to-right when turning a config name into the
+# LaTeX display tag. Substitutions are applied in declaration order.
+aliases:
+  wpentities: wpe
+  wikipedia2vec: w2v
+  best_: ''
+
+# Baseline row prepended to every table.
+# - ``display_tag`` is shown in the LaTeX table as the first row.
+# - ``config_name`` is used to locate ``<saved_models>/<config_name>_<TS>``
+#   so we can read CV F1 / std for the baseline.
+baseline:
+  display_tag: article_only
+  config_name: best_article_only
+
+# Legacy comparison directories (e.g. inside ``_old_analysis``) do not follow
+# the canonical ``<config>_vs_<base>_<TS>`` naming convention, so we map their
+# short prefixes to the underlying config name. The display tag is still
+# derived from the resolved config name through ``aliases`` for consistency.
+overrides:
+  - prefix: wpe_base
+    config_name: best_wpentities
+  - prefix: nl_base
+    config_name: best_wpentities_nl
+  - prefix: en-nl_base
+    config_name: best_wpentities_en_nl
+  - prefix: th5_base
+    config_name: wpentities_rel_th_5
+  - prefix: w-mean_base
+    config_name: wpentities_weighted_mean
+  - prefix: r-w-sum_base
+    config_name: wpentities_relevance_weighted_sum
+  - prefix: m-w-sum_base
+    config_name: wpentities_mention_weighted_sum
+  - prefix: all-langs_base
+    config_name: best_wpentities_all_langs
+
+# Optional: specific row order for non-baseline rows. Tags missing from this
+# list are appended in alphabetical order after the listed ones.
+display_order:
+  - wpe
+  - wpe_nl
+  - wpe_en_nl
+  - wpe_rel_th_5
+  - wpe_weighted_mean
+  - wpe_relevance_weighted_sum
+  - wpe_mention_weighted_sum
+  - wpe_all_langs
+  - w2v_entities
+  - w2v_entities_all_langs
+  - wikidata_description_entities
+  - wp_entity_only
+  - wv_entity_only

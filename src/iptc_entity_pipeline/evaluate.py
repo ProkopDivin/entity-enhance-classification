@@ -8,6 +8,8 @@ from typing import Any, Mapping, NamedTuple, Sequence
 
 import pandas as pd
 
+from iptc_entity_pipeline.config import EvaluationCnf
+
 LOGGER = logging.getLogger(__name__)
 
 REMOVED_CAT_IDS = frozenset({'20000419'})
@@ -249,11 +251,8 @@ def evaluate_predictions(
     *,
     pred_wgh_cats: Sequence[Any],
     eval_corpus: Any,
-    thr: float,
+    evaluation_config: EvaluationCnf,
     cat_to_thr: Mapping[str, float] | None = None,
-    per_corpus: bool = True,
-    per_class: bool = True,
-    averaging_type: str = 'datapoint',
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Filter, normalize, and evaluate predictions into corpora + class tables.
@@ -263,23 +262,24 @@ def evaluate_predictions(
 
     :param pred_wgh_cats: Raw weighted prediction scores per document.
     :param eval_corpus: Corpus with gold labels.
-    :param thr: Evaluation threshold.
+    :param evaluation_config: Grouped evaluation config.
     :param cat_to_thr: Optional per-label thresholds.
-    :param per_corpus: Whether to include per-corpus rows.
-    :param per_class: Whether to include per-class rows.
-    :param averaging_type: One of ``'datapoint'``, ``'micro'``, ``'macro'``.
     :return: Tuple of (corpora DataFrame, classes DataFrame).
     """
-    pred_cats = filter_and_normalize(pred_wgh_cats=pred_wgh_cats, thr=thr, cat_to_thr=cat_to_thr)
+    pred_cats = filter_and_normalize(
+        pred_wgh_cats=pred_wgh_cats,
+        thr=evaluation_config.threshold_eval,
+        cat_to_thr=cat_to_thr,
+    )
     corpora_df = evaluate_corpora(
         pred_cats=pred_cats,
         eval_corpus=eval_corpus,
-        per_corpus=per_corpus,
-        averaging_type=averaging_type,
+        per_corpus=evaluation_config.per_corpus,
+        averaging_type=evaluation_config.averaging_type,
     )
     classes_df = evaluate_classes(
         pred_cats=pred_cats,
         eval_corpus=eval_corpus,
-        per_class=per_class,
+        per_class=evaluation_config.per_class,
     )
     return corpora_df, classes_df
