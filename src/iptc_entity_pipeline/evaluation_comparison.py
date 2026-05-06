@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import pickle
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,6 +48,12 @@ LANG_PREFIXES: tuple[str, ...] = ('en', 'es', 'nl', 'fr', 'de', 'cs')
 EUROSPORT_TOKEN = 'eurosport'
 ENTITY_TABLE_LIMIT = 1000
 ENTITY_RANDOM_SEED = 42
+MCNEMAR_ALPHA = 0.05
+MCNEMAR_MIN_DISAGREEMENTS = 25
+BOOTSTRAP_PR_AUC_ITERATIONS = 1000
+BOOTSTRAP_PR_AUC_SEED = 43
+BOOTSTRAP_PR_AUC_ALPHA = 0.05
+BOOTSTRAP_PR_AUC_MIN_POSITIVES = 15
 
 _CMP_METRICS: tuple[tuple[str, str], ...] = (
     ('precision', 'Precision'),
@@ -73,6 +80,10 @@ _RESULT_SHEETS: tuple[tuple[str, str, bool], ...] = (
     ('current_classes', 'current_classes', True),
     ('base_corpora', 'base_corpora', True),
     ('base_classes', 'base_classes', True),
+)
+_TOP_CHANGE_CATEGORY_SHEETS: tuple[tuple[str, str, bool], ...] = (
+    ('top_improved_categories', 'top_improved', False),
+    ('top_degraded_categories', 'top_degraded', False),
 )
 
 
@@ -223,6 +234,7 @@ def compare_runs(
     averaging_type: str = 'datapoint',
     top_n: int = 20,
     only_diff: bool = False,
+    top_changes_only: bool = False,
     output_path: str | Path | None = None,
 ) -> ComparisonResult:
     """Compare current and base runs loaded from their saved directories.
@@ -236,13 +248,13 @@ def compare_runs(
     :param averaging_type: One of ``'datapoint'``, ``'micro'``, ``'macro'``.
     :param top_n: Preview size for improved/degraded categories logging.
     :param only_diff: Drop base metric columns from comparison sheets.
+    :param top_changes_only: Persist only top improved/degraded category tables.
     :param output_path: Optional Excel workbook path.
     :return: Structured :class:`ComparisonResult`.
     """
     current_pred, current_corpus = load_run(run_dir=current_run_dir)
     base_pred, base_corpus = load_run(run_dir=base_run_dir)
 
-    gold_map = GoldLabelMap.from_corpus(corpus=current_corpus)
     evaluation_config = EvaluationCnf(
         threshold_eval=threshold_eval,
         averaging_type=averaging_type,
@@ -259,37 +271,93 @@ def compare_runs(
         evaluation_config=evaluation_config,
     )
 
-    corpora_cmp_full = build_cmp_df(
-        current_df=current_run.corpora_df,
-        base_df=base_run.corpora_df,
-        key_col='Corpus Name',
-        info_cols=['Data Count', 'Docs No Labels', 'Decent Labels'],
-    )
     classes_cmp_full = build_cmp_df(
         current_df=current_run.classes_df,
         base_df=base_run.classes_df,
         key_col='IPTC Category',
         info_cols=['Data Count'],
     )
-    corpora_cmp_df = diff_only_df(df=corpora_cmp_full, key_col='Corpus Name') if only_diff else corpora_cmp_full
-    classes_cmp_df = diff_only_df(df=classes_cmp_full, key_col='IPTC Category') if only_diff else classes_cmp_full
-
+    top_improved_df, top_degraded_df = build_top_change_dfs(classes_df=classes_cmp_full)
+    gold_map = GoldLabelMap.from_corpus(corpus=current_corpus)
     shared_ids = shared_article_ids(current_df=current_run.aligned_df, base_df=base_run.aligned_df)
     cat_ids = gold_map.cat_ids(prob_dfs=[current_run.aligned_df, base_run.aligned_df])
+    current_aligned_df = subset_by_ids(df=current_run.aligned_df, article_ids=shared_ids)
+    base_aligned_df = subset_by_ids(df=base_run.aligned_df, article_ids=shared_ids)
+    mcnemar_df = build_mcnemar_significance_df(
+        current_df=current_aligned_df,
+        base_df=base_aligned_df,
+        gold_map=gold_map,
+        cat_ids=cat_ids,
+        threshold_eval=threshold_eval,
+    )
+    top_improved_df, top_degraded_df = add_mcnemar_to_top_change_dfs(
+        improved_df=top_improved_df,
+        degraded_df=top_degraded_df,
+        mcnemar_df=mcnemar_df,
+    )
+    bootstrap_df = build_bootstrap_pr_auc_df(
+        current_df=current_aligned_df,
+        base_df=base_aligned_df,
+        gold_map=gold_map,
+        cat_ids=cat_ids,
+        n_iterations=BOOTSTRAP_PR_AUC_ITERATIONS,
+        seed=BOOTSTRAP_PR_AUC_SEED,
+        alpha=BOOTSTRAP_PR_AUC_ALPHA,
+        min_positives=BOOTSTRAP_PR_AUC_MIN_POSITIVES,
+    )
+    top_improved_df, top_degraded_df = add_bootstrap_pr_auc_to_top_change_dfs(
+        improved_df=top_improved_df,
+        degraded_df=top_degraded_df,
+        bootstrap_df=bootstrap_df,
+    )
+    if top_changes_only:
+        empty_df = pd.DataFrame()
+        excel_path = Path(output_path) if output_path is not None else None
+        result = ComparisonResult(
+            corpora_comparison=empty_df,
+            classes_comparison=empty_df,
+            summary_comparison=empty_df,
+            top_improved_categories=top_improved_df,
+            top_degraded_categories=top_degraded_df,
+            top_improved_stats=empty_df,
+            top_degraded_stats=empty_df,
+            hamming_loss_comparison=empty_df,
+            pr_auc_per_class=empty_df,
+            pr_auc_summary=empty_df,
+            entity_impact_improvers=empty_df,
+            entity_impact_decaders=empty_df,
+            entity_impact_random=empty_df,
+            article_f1_diff_avg_stats=empty_df,
+            current_corpora=current_run.corpora_df,
+            current_classes=current_run.classes_df,
+            base_corpora=base_run.corpora_df,
+            base_classes=base_run.classes_df,
+            excel_path=excel_path,
+        )
+        if excel_path is not None:
+            write_csv(result=result, output_path=excel_path.parent, result_sheets=_TOP_CHANGE_CATEGORY_SHEETS)
+            write_excel(result=result, output_path=excel_path, result_sheets=_TOP_CHANGE_CATEGORY_SHEETS)
+            log_top_changes(result=result, top_n=top_n)
+        return result
 
+    corpora_cmp_full = build_cmp_df(
+        current_df=current_run.corpora_df,
+        base_df=base_run.corpora_df,
+        key_col='Corpus Name',
+        info_cols=['Data Count', 'Docs No Labels', 'Decent Labels'],
+    )
+    corpora_cmp_df = diff_only_df(df=corpora_cmp_full, key_col='Corpus Name') if only_diff else corpora_cmp_full
+    classes_cmp_df = diff_only_df(df=classes_cmp_full, key_col='IPTC Category') if only_diff else classes_cmp_full
     summary_df = build_summary_df(
         current_run=current_run,
         base_run=base_run,
         classes_cmp=classes_cmp_full,
         corpora_cmp=corpora_cmp_full,
     )
-    top_improved_df, top_degraded_df = build_top_change_dfs(classes_df=classes_cmp_full)
     top_improved_stats_df, top_degraded_stats_df = build_top_change_stats_dfs(
         improved_df=top_improved_df,
         degraded_df=top_degraded_df,
     )
-    current_aligned_df = subset_by_ids(df=current_run.aligned_df, article_ids=shared_ids)
-    base_aligned_df = subset_by_ids(df=base_run.aligned_df, article_ids=shared_ids)
     hamming_df = build_hamming_df(
         current_df=current_aligned_df,
         base_df=base_aligned_df,
@@ -341,8 +409,9 @@ def compare_runs(
         excel_path=excel_path,
     )
     if excel_path is not None:
-        write_csv(result=result, output_path=excel_path.parent)
-        write_excel(result=result, output_path=excel_path)
+        result_sheets = _TOP_CHANGE_CATEGORY_SHEETS if top_changes_only else _RESULT_SHEETS
+        write_csv(result=result, output_path=excel_path.parent, result_sheets=result_sheets)
+        write_excel(result=result, output_path=excel_path, result_sheets=result_sheets)
         log_top_changes(result=result, top_n=top_n)
     return result
 
@@ -792,6 +861,325 @@ def build_top_change_dfs(*, classes_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.
         na_position='last',
     )
     return improved_df.reindex(columns=cols), degraded_df.reindex(columns=cols)
+
+
+def build_mcnemar_significance_df(
+    *,
+    current_df: pd.DataFrame,
+    base_df: pd.DataFrame,
+    gold_map: GoldLabelMap,
+    cat_ids: Sequence[str],
+    threshold_eval: float,
+    alpha: float = MCNEMAR_ALPHA,
+    min_disagreements: int = MCNEMAR_MIN_DISAGREEMENTS,
+) -> pd.DataFrame:
+    """Run per-class McNemar tests on paired current/base predictions.
+
+    ``n10`` counts articles where the current model is correct and the base
+    model is wrong. ``n01`` counts the opposite. Rows with too few
+    disagreements do not pass significance and receive ``NaN`` p-values.
+    """
+    article_ids = list(current_df['article_id'])
+    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(bool)
+    current_pred = build_score_matrix(df=current_df, cat_ids=cat_ids) >= threshold_eval
+    base_pred = build_score_matrix(df=base_df, cat_ids=cat_ids) >= threshold_eval
+    current_correct = current_pred == gold_matrix
+    base_correct = base_pred == gold_matrix
+    not_gold_matrix = np.logical_not(gold_matrix)
+
+    rows = []
+    for idx, cat_id in enumerate(cat_ids):
+        n10 = int(np.logical_and(current_correct[:, idx], np.logical_not(base_correct[:, idx])).sum())
+        n01 = int(np.logical_and(np.logical_not(current_correct[:, idx]), base_correct[:, idx]).sum())
+        disagreements = n10 + n01
+        skipped = int(disagreements < min_disagreements)
+        p_value = (
+            float('nan')
+            if skipped
+            else mcnemar_p_value(n10=n10, n01=n01)
+        )
+        rows.append(
+            {
+                'IPTC Category': safe_cat_label(cat_id=cat_id),
+                'cat_id': cat_id,
+                'mcnemar_p_value': p_value,
+                'mcnemar_n10_current_only_correct': n10,
+                'mcnemar_n01_base_only_correct': n01,
+                'mcnemar_disagreements': disagreements,
+                'current_false_positives': int(np.logical_and(current_pred[:, idx], not_gold_matrix[:, idx]).sum()),
+                'current_false_negatives': int(
+                    np.logical_and(np.logical_not(current_pred[:, idx]), gold_matrix[:, idx]).sum()
+                ),
+                'base_false_positives': int(np.logical_and(base_pred[:, idx], not_gold_matrix[:, idx]).sum()),
+                'base_false_negatives': int(
+                    np.logical_and(np.logical_not(base_pred[:, idx]), gold_matrix[:, idx]).sum()
+                ),
+                'mcnemar_current_significant': int(not skipped and p_value < alpha and n10 > n01),
+                'mcnemar_base_significant': int(not skipped and p_value < alpha and n01 > n10),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def mcnemar_p_value(*, n10: int, n01: int) -> float:
+    """Return asymptotic McNemar p-value with continuity correction."""
+    disagreements = n10 + n01
+    if disagreements == 0:
+        return 1.0
+    statistic = (abs(n10 - n01) - 1) ** 2 / disagreements
+    return math.erfc(math.sqrt(statistic / 2))
+
+
+def add_mcnemar_to_top_change_dfs(
+    *,
+    improved_df: pd.DataFrame,
+    degraded_df: pd.DataFrame,
+    mcnemar_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Attach McNemar significance columns to top improved/degraded tables."""
+    return (
+        _add_mcnemar_to_top_change_df(
+            df=improved_df,
+            mcnemar_df=mcnemar_df,
+            pass_col='mcnemar_current_significant',
+        ),
+        _add_mcnemar_to_top_change_df(
+            df=degraded_df,
+            mcnemar_df=mcnemar_df,
+            pass_col='mcnemar_base_significant',
+        ),
+    )
+
+
+def _add_mcnemar_to_top_change_df(
+    *,
+    df: pd.DataFrame,
+    mcnemar_df: pd.DataFrame,
+    pass_col: str,
+) -> pd.DataFrame:
+    """Merge McNemar rows and expose a direction-aware pass flag."""
+    cols = [
+        'IPTC Category',
+        'mcnemar_p_value',
+        'mcnemar_n10_current_only_correct',
+        'mcnemar_n01_base_only_correct',
+        'mcnemar_disagreements',
+        'current_false_positives',
+        'current_false_negatives',
+        'base_false_positives',
+        'base_false_negatives',
+        pass_col,
+    ]
+    result = df.merge(mcnemar_df.reindex(columns=cols), on='IPTC Category', how='left')
+    result['mcnemar_pass'] = result[pass_col].fillna(0).astype(int)
+    result = result.drop(columns=[pass_col])
+    metric_cols = [
+        'mcnemar_pass',
+        'mcnemar_p_value',
+        'mcnemar_n10_current_only_correct',
+        'mcnemar_n01_base_only_correct',
+        'mcnemar_disagreements',
+        'current_false_positives',
+        'current_false_negatives',
+        'base_false_positives',
+        'base_false_negatives',
+    ]
+    base_cols = [col for col in result.columns if col not in metric_cols]
+    return result.loc[:, base_cols + metric_cols]
+
+
+def bootstrap_pr_auc_test(
+    *,
+    y_true: np.ndarray,
+    prob_base: np.ndarray,
+    prob_current: np.ndarray,
+    n_iterations: int = BOOTSTRAP_PR_AUC_ITERATIONS,
+    min_positives: int = BOOTSTRAP_PR_AUC_MIN_POSITIVES,
+    rng: np.random.Generator | None = None,
+) -> dict[str, Any]:
+    """Bootstrap one-label PR-AUC current-base differences."""
+    y_true = np.asarray(y_true, dtype=np.int8)
+    prob_base = np.asarray(prob_base, dtype=float)
+    prob_current = np.asarray(prob_current, dtype=float)
+    positive_count = int(y_true.sum())
+    if positive_count < min_positives:
+        return _bootstrap_pr_auc_empty_result(positive_count=positive_count)
+
+    generator = rng if rng is not None else np.random.default_rng(BOOTSTRAP_PR_AUC_SEED)
+    n_samples = len(y_true)
+    differences = []
+    for _ in range(n_iterations):
+        indices = generator.integers(0, n_samples, n_samples)
+        y_boot = y_true[indices]
+        if int(y_boot.sum()) == 0:
+            continue
+
+        base_auc = average_precision(y_true=y_boot, y_score=prob_base[indices])
+        current_auc = average_precision(y_true=y_boot, y_score=prob_current[indices])
+        if np.isnan(base_auc) or np.isnan(current_auc):
+            continue
+        differences.append(current_auc - base_auc)
+
+    if not differences:
+        return _bootstrap_pr_auc_empty_result(positive_count=positive_count)
+
+    diffs = np.asarray(differences, dtype=float)
+    return {
+        'bootstrap_pr_auc_p_value_current': float((np.sum(diffs <= 0) + 1) / (len(diffs) + 1)),
+        'bootstrap_pr_auc_p_value_base': float((np.sum(diffs >= 0) + 1) / (len(diffs) + 1)),
+        'bootstrap_pr_auc_mean_diff': float(np.mean(diffs)),
+        'bootstrap_pr_auc_positive_count': positive_count,
+        'bootstrap_pr_auc_iterations': int(len(diffs)),
+    }
+
+
+def _bootstrap_pr_auc_empty_result(*, positive_count: int) -> dict[str, Any]:
+    """Return a skipped bootstrap result with stable output keys."""
+    return {
+        'bootstrap_pr_auc_p_value_current': float('nan'),
+        'bootstrap_pr_auc_p_value_base': float('nan'),
+        'bootstrap_pr_auc_mean_diff': float('nan'),
+        'bootstrap_pr_auc_positive_count': positive_count,
+        'bootstrap_pr_auc_iterations': 0,
+    }
+
+
+def build_bootstrap_pr_auc_df(
+    *,
+    current_df: pd.DataFrame,
+    base_df: pd.DataFrame,
+    gold_map: GoldLabelMap,
+    cat_ids: Sequence[str],
+    n_iterations: int = BOOTSTRAP_PR_AUC_ITERATIONS,
+    seed: int = BOOTSTRAP_PR_AUC_SEED,
+    alpha: float = BOOTSTRAP_PR_AUC_ALPHA,
+    min_positives: int = BOOTSTRAP_PR_AUC_MIN_POSITIVES,
+) -> pd.DataFrame:
+    """Build per-class bootstrap PR-AUC significance rows with FDR correction."""
+    article_ids = list(current_df['article_id'])
+    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
+    current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
+    base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
+    rng = np.random.default_rng(seed)
+
+    rows = []
+    for idx, cat_id in enumerate(cat_ids):
+        row = {
+            'IPTC Category': safe_cat_label(cat_id=cat_id),
+            'cat_id': cat_id,
+        }
+        row.update(
+            bootstrap_pr_auc_test(
+                y_true=gold_matrix[:, idx],
+                prob_base=base_scores[:, idx],
+                prob_current=current_scores[:, idx],
+                n_iterations=n_iterations,
+                min_positives=min_positives,
+                rng=rng,
+            )
+        )
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    return add_bootstrap_fdr_columns(df=df, alpha=alpha)
+
+
+def add_bootstrap_fdr_columns(*, df: pd.DataFrame, alpha: float) -> pd.DataFrame:
+    """Add Benjamini-Hochberg corrected p-values and direction-specific pass flags."""
+    result = df.copy()
+    for direction in ('current', 'base'):
+        p_col = f'bootstrap_pr_auc_p_value_{direction}'
+        fdr_col = f'bootstrap_pr_auc_p_value_fdr_{direction}'
+        pass_col = f'bootstrap_pr_auc_{direction}_significant'
+        valid_mask = result[p_col].notna()
+        result[fdr_col] = np.nan
+        if valid_mask.any():
+            corrected = benjamini_hochberg(p_values=result.loc[valid_mask, p_col].to_numpy(dtype=float))
+            result.loc[valid_mask, fdr_col] = corrected
+        if direction == 'current':
+            direction_mask = result['bootstrap_pr_auc_mean_diff'] > 0
+        else:
+            direction_mask = result['bootstrap_pr_auc_mean_diff'] < 0
+        result[pass_col] = ((result[fdr_col] < alpha) & direction_mask).astype(int)
+    return result
+
+
+def benjamini_hochberg(*, p_values: Sequence[float]) -> np.ndarray:
+    """Apply Benjamini-Hochberg FDR correction preserving input order."""
+    p_array = np.asarray(p_values, dtype=float)
+    if p_array.size == 0:
+        return np.asarray([], dtype=float)
+
+    order = np.argsort(p_array)
+    ranked = p_array[order]
+    ranks = np.arange(1, len(ranked) + 1, dtype=float)
+    adjusted_ranked = ranked * len(ranked) / ranks
+    adjusted_ranked = np.minimum.accumulate(adjusted_ranked[::-1])[::-1]
+    adjusted_ranked = np.minimum(adjusted_ranked, 1.0)
+    adjusted = np.empty_like(adjusted_ranked)
+    adjusted[order] = adjusted_ranked
+    return adjusted
+
+
+def add_bootstrap_pr_auc_to_top_change_dfs(
+    *,
+    improved_df: pd.DataFrame,
+    degraded_df: pd.DataFrame,
+    bootstrap_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Attach direction-aware bootstrap PR-AUC columns to top change tables."""
+    return (
+        _add_bootstrap_pr_auc_to_top_change_df(
+            df=improved_df,
+            bootstrap_df=bootstrap_df,
+            direction='current',
+        ),
+        _add_bootstrap_pr_auc_to_top_change_df(
+            df=degraded_df,
+            bootstrap_df=bootstrap_df,
+            direction='base',
+        ),
+    )
+
+
+def _add_bootstrap_pr_auc_to_top_change_df(
+    *,
+    df: pd.DataFrame,
+    bootstrap_df: pd.DataFrame,
+    direction: str,
+) -> pd.DataFrame:
+    """Merge bootstrap PR-AUC rows and expose generic direction-aware columns."""
+    p_col = f'bootstrap_pr_auc_p_value_{direction}'
+    fdr_col = f'bootstrap_pr_auc_p_value_fdr_{direction}'
+    pass_col = f'bootstrap_pr_auc_{direction}_significant'
+    cols = [
+        'IPTC Category',
+        p_col,
+        fdr_col,
+        'bootstrap_pr_auc_mean_diff',
+        'bootstrap_pr_auc_positive_count',
+        'bootstrap_pr_auc_iterations',
+        pass_col,
+    ]
+    renamed = bootstrap_df.reindex(columns=cols).rename(
+        columns={
+            p_col: 'bootstrap_pr_auc_p_value',
+            fdr_col: 'bootstrap_pr_auc_p_value_fdr',
+            pass_col: 'bootstrap_pr_auc_pass',
+        }
+    )
+    result = df.merge(renamed, on='IPTC Category', how='left')
+    result['bootstrap_pr_auc_pass'] = result['bootstrap_pr_auc_pass'].fillna(0).astype(int)
+    metric_cols = [
+        'bootstrap_pr_auc_pass',
+        'bootstrap_pr_auc_p_value',
+        'bootstrap_pr_auc_p_value_fdr',
+        'bootstrap_pr_auc_mean_diff',
+        'bootstrap_pr_auc_positive_count',
+        'bootstrap_pr_auc_iterations',
+    ]
+    base_cols = [col for col in result.columns if col not in metric_cols]
+    return result.loc[:, base_cols + metric_cols]
 
 
 CHANGE_THRESHOLDS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7)
@@ -1308,18 +1696,28 @@ def average_precision(*, y_true: np.ndarray, y_score: np.ndarray) -> float:
 # Serialization (CSV / Excel)
 # ---------------------------------------------------------------------------
 
-def write_csv(*, result: ComparisonResult, output_path: Path) -> None:
+def write_csv(
+    *,
+    result: ComparisonResult,
+    output_path: Path,
+    result_sheets: Sequence[tuple[str, str, bool]] = _RESULT_SHEETS,
+) -> None:
     """Persist comparison outputs into CSV files."""
     output_path.mkdir(parents=True, exist_ok=True)
-    for attr, filename, _ in _RESULT_SHEETS:
+    for attr, filename, _ in result_sheets:
         getattr(result, attr).to_csv(output_path / f'{filename}.csv', index=False)
 
 
-def write_excel(*, result: ComparisonResult, output_path: Path) -> None:
+def write_excel(
+    *,
+    result: ComparisonResult,
+    output_path: Path,
+    result_sheets: Sequence[tuple[str, str, bool]] = _RESULT_SHEETS,
+) -> None:
     """Persist comparison outputs into one Excel workbook."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path) as writer:
-        for attr, sheet_name, include_index in _RESULT_SHEETS:
+        for attr, sheet_name, include_index in result_sheets:
             getattr(result, attr).to_excel(writer, sheet_name=sheet_name, index=include_index)
 
 
@@ -1362,6 +1760,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--top-n', type=int, default=20, help='Preview size for improved/degraded categories.')
     parser.add_argument('--only-diff', action='store_true', help='Drop base metric columns from comparison sheets.')
     parser.add_argument(
+        '--top-changes-only',
+        action='store_true',
+        help='Write only top_improved and top_degraded category tables.',
+    )
+    parser.add_argument(
         '--output-root',
         default='results/comparisons',
         help='Directory where the Excel report should be written.',
@@ -1381,6 +1784,7 @@ def main() -> None:
         averaging_type=args.averaging_type,
         top_n=args.top_n,
         only_diff=args.only_diff,
+        top_changes_only=args.top_changes_only,
         output_path=output_path,
     )
 
