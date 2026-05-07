@@ -96,12 +96,15 @@ Useful arguments:
   - `wpentities_relevance_weighted_sum`
   - `wpentities_mention_weighted_sum`
   - `article_only`
+  - `entity_only`
   - `wpentities_en_nl`
   - `wpentities_nl`
   - `wpentities_all_langs`
   - `wpentities_rel_th_5`
   - `best_wpentities`
   - `best_article_only`
+  - `wikipedia2vec_entities_all_langs`
+  - `wikidata_description_entities`
 
 ## Wikipedia2Vec Embedding Prefetch
 
@@ -170,4 +173,4 @@ Run new worker(agent)
    ```
 
 
-python3 -m iptc_entity_pipeline.run_pipeline --local --config article_only
+python3 -m iptc_entity_pipeline.run_pipeline --local --config entity_only
