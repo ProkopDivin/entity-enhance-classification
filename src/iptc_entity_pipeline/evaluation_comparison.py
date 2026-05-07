@@ -14,6 +14,7 @@ Gold labels for cross-run metrics are derived from the *current* run's corpus.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import pickle
@@ -32,6 +33,12 @@ from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, evaluate_predictions,
 from iptc_entity_pipeline.model_io import EVAL_CORPUS_FILENAME, PREDICTIONS_FILENAME
 
 LOG = logging.getLogger(__name__)
+
+# Supported on-disk filenames carrying per-class thresholds for a saved run.
+# ``custom_thresholds.json`` matches the legacy IPTC pipeline convention; the
+# alternative ``thresholds.json`` is kept for backward compatibility with runs
+# saved by earlier versions of this pipeline before the rename.
+THRESHOLD_FILENAMES: tuple[str, ...] = ('custom_thresholds.json', 'thresholds.json')
 
 AGG_CLASS_ROWS = frozenset({'All - micro avg', 'All - macro avg', 'All - datapoint avg'})
 AGG_CORPUS_ROWS = frozenset({'All-macro', 'All-micro', 'All-datapoint'})
@@ -228,6 +235,57 @@ def load_run(*, run_dir: str | Path) -> tuple[list[list[tuple[str, float]]], Any
     return pred_scores, eval_corpus
 
 
+def load_custom_thresholds(*, run_dir: str | Path) -> dict[str, float]:
+    """Load per-class thresholds from a saved-run directory.
+
+    Tries each filename in :data:`THRESHOLD_FILENAMES` in order and returns
+    the first successfully parsed JSON object as a ``{cat_id: threshold}``
+    mapping. Returns an empty dict if no file is present or the file is not
+    a JSON object.
+
+    :param run_dir: Saved-run directory possibly containing a thresholds JSON.
+    :return: Mapping ``category_id -> threshold`` (empty when not available).
+    """
+    run_path = Path(run_dir)
+    for filename in THRESHOLD_FILENAMES:
+        candidate = run_path / filename
+        if not candidate.is_file():
+            continue
+        with open(candidate, encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, Mapping):
+            LOG.warning(f'Custom thresholds file is not a JSON object: {candidate}')
+            continue
+        thresholds = {str(cid): float(thr) for cid, thr in data.items()}
+        LOG.info(f'Loaded {len(thresholds)} per-class thresholds from {candidate}')
+        return thresholds
+    return {}
+
+
+def thresholds_vector(
+    *,
+    cat_ids: Sequence[str],
+    cat_to_thr: Mapping[str, float] | None,
+    default_threshold: float,
+) -> np.ndarray:
+    """Build a per-class threshold vector aligned with ``cat_ids``.
+
+    Classes missing from ``cat_to_thr`` (or all classes when ``cat_to_thr`` is
+    ``None``/empty) fall back to ``default_threshold``.
+
+    :param cat_ids: Category id sequence defining the column order.
+    :param cat_to_thr: Optional ``cat_id -> threshold`` map.
+    :param default_threshold: Fallback threshold for unmapped classes.
+    :return: 1-D ``float64`` array of shape ``(len(cat_ids),)``.
+    """
+    if not cat_to_thr:
+        return np.full(len(cat_ids), float(default_threshold), dtype=float)
+    return np.asarray(
+        [float(cat_to_thr.get(cid, default_threshold)) for cid in cat_ids],
+        dtype=float,
+    )
+
+
 def compare_runs(
     *,
     current_run_dir: str | Path,
@@ -239,25 +297,40 @@ def compare_runs(
     top_changes_only: bool = False,
     run_bootstrap_pr_auc_test: bool = False,
     output_path: str | Path | None = None,
+    use_saved_thresholds: bool = True,
 ) -> ComparisonResult:
     """Compare current and base runs loaded from their saved directories.
 
     Gold labels are derived from the current run's pickled corpus and reused
     for both runs' cross-run metrics (Hamming loss, PR-AUC).
 
+    Per-class thresholds (saved as ``custom_thresholds.json`` or, for older
+    runs, ``thresholds.json``) are auto-loaded per run when
+    ``use_saved_thresholds`` is ``True``. Each run uses its own thresholds for
+    F1/precision/recall tables, McNemar, Hamming, and per-article F1 deltas.
+    Runs without a thresholds file fall back to ``threshold_eval`` for every
+    class. Score-based metrics (PR-AUC, Brier) ignore thresholds by design.
+
     :param current_run_dir: Directory of the current run.
     :param base_run_dir: Directory of the base run.
-    :param threshold_eval: Threshold applied during evaluation.
+    :param threshold_eval: Default threshold for classes missing from a run's
+        per-class map and for runs that have no thresholds file at all.
     :param averaging_type: One of ``'datapoint'``, ``'micro'``, ``'macro'``.
     :param top_n: Preview size for improved/degraded categories logging.
     :param only_diff: Drop base metric columns from comparison sheets.
     :param top_changes_only: Persist only top improved/degraded category tables.
     :param run_bootstrap_pr_auc_test: Add bootstrap PR-AUC significance columns to top change tables.
     :param output_path: Optional Excel workbook path.
+    :param use_saved_thresholds: When ``True`` (default), auto-load per-class
+        thresholds from each run directory. Set to ``False`` to force a
+        uniform comparison under ``threshold_eval``.
     :return: Structured :class:`ComparisonResult`.
     """
     current_pred, current_corpus = load_run(run_dir=current_run_dir)
     base_pred, base_corpus = load_run(run_dir=base_run_dir)
+
+    current_thresholds = load_custom_thresholds(run_dir=current_run_dir) if use_saved_thresholds else {}
+    base_thresholds = load_custom_thresholds(run_dir=base_run_dir) if use_saved_thresholds else {}
 
     evaluation_config = EvaluationCnf(
         threshold_eval=threshold_eval,
@@ -268,11 +341,13 @@ def compare_runs(
         pred_scores=current_pred,
         eval_corpus=current_corpus,
         evaluation_config=evaluation_config,
+        cat_to_thr=current_thresholds or None,
     )
     base_run = build_run(
         pred_scores=base_pred,
         eval_corpus=base_corpus,
         evaluation_config=evaluation_config,
+        cat_to_thr=base_thresholds or None,
     )
 
     classes_cmp_full = build_cmp_df(
@@ -287,12 +362,19 @@ def compare_runs(
     cat_ids = gold_map.cat_ids(prob_dfs=[current_run.aligned_df, base_run.aligned_df])
     current_aligned_df = subset_by_ids(df=current_run.aligned_df, article_ids=shared_ids)
     base_aligned_df = subset_by_ids(df=base_run.aligned_df, article_ids=shared_ids)
+    current_thr_vec = thresholds_vector(
+        cat_ids=cat_ids, cat_to_thr=current_thresholds, default_threshold=threshold_eval,
+    )
+    base_thr_vec = thresholds_vector(
+        cat_ids=cat_ids, cat_to_thr=base_thresholds, default_threshold=threshold_eval,
+    )
     mcnemar_df = build_mcnemar_significance_df(
         current_df=current_aligned_df,
         base_df=base_aligned_df,
         gold_map=gold_map,
         cat_ids=cat_ids,
-        threshold_eval=threshold_eval,
+        current_thr_vec=current_thr_vec,
+        base_thr_vec=base_thr_vec,
     )
     top_improved_df, top_degraded_df = add_mcnemar_to_top_change_dfs(
         improved_df=top_improved_df,
@@ -381,7 +463,8 @@ def compare_runs(
         base_df=base_aligned_df,
         gold_map=gold_map,
         cat_ids=cat_ids,
-        threshold_eval=threshold_eval,
+        current_thr_vec=current_thr_vec,
+        base_thr_vec=base_thr_vec,
     )
     pr_auc_df, pr_auc_summary_df = build_pr_auc_dfs(
         current_df=current_aligned_df,
@@ -394,7 +477,8 @@ def compare_runs(
         base_df=base_aligned_df,
         gold_map=gold_map,
         cat_ids=cat_ids,
-        threshold_eval=threshold_eval,
+        current_thr_vec=current_thr_vec,
+        base_thr_vec=base_thr_vec,
     )
     entity_improvers_df, entity_decaders_df, entity_random_df = build_entity_impact_tables(
         current_df=current_aligned_df,
@@ -444,13 +528,18 @@ def build_run(
     pred_scores: Sequence[Any],
     eval_corpus: Any,
     evaluation_config: EvaluationCnf,
+    cat_to_thr: Mapping[str, float] | None = None,
 ) -> RunEval:
-    """Evaluate one run and build its aligned per-article dataframe."""
+    """Evaluate one run and build its aligned per-article dataframe.
+
+    :param cat_to_thr: Optional per-class thresholds applied during the
+        F1/precision/recall table computation.
+    """
     corpora_df, classes_df = evaluate_predictions(
         pred_wgh_cats=pred_scores,
         eval_corpus=eval_corpus,
         evaluation_config=evaluation_config,
-        cat_to_thr=None,
+        cat_to_thr=cat_to_thr,
     )
     aligned_df = build_aligned_df(eval_corpus=eval_corpus, pred_scores=pred_scores)
     return RunEval(aligned_df=aligned_df, corpora_df=corpora_df, classes_df=classes_df)
@@ -888,7 +977,8 @@ def build_mcnemar_significance_df(
     base_df: pd.DataFrame,
     gold_map: GoldLabelMap,
     cat_ids: Sequence[str],
-    threshold_eval: float,
+    current_thr_vec: np.ndarray,
+    base_thr_vec: np.ndarray,
     alpha: float = MCNEMAR_ALPHA,
     min_disagreements: int = MCNEMAR_MIN_DISAGREEMENTS,
 ) -> pd.DataFrame:
@@ -897,11 +987,15 @@ def build_mcnemar_significance_df(
     ``n10`` counts articles where the current model is correct and the base
     model is wrong. ``n01`` counts the opposite. Rows with too few
     disagreements do not pass significance and receive ``NaN`` p-values.
+
+    :param current_thr_vec: Per-class threshold vector for the current run
+        (aligned with ``cat_ids``).
+    :param base_thr_vec: Per-class threshold vector for the base run.
     """
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(bool)
-    current_pred = build_score_matrix(df=current_df, cat_ids=cat_ids) >= threshold_eval
-    base_pred = build_score_matrix(df=base_df, cat_ids=cat_ids) >= threshold_eval
+    current_pred = build_score_matrix(df=current_df, cat_ids=cat_ids) >= current_thr_vec
+    base_pred = build_score_matrix(df=base_df, cat_ids=cat_ids) >= base_thr_vec
     current_correct = current_pred == gold_matrix
     base_correct = base_pred == gold_matrix
     not_gold_matrix = np.logical_not(gold_matrix)
@@ -1497,15 +1591,20 @@ def build_article_f1_diff_df(
     base_df: pd.DataFrame,
     gold_map: GoldLabelMap,
     cat_ids: Sequence[str],
-    threshold_eval: float,
+    current_thr_vec: np.ndarray,
+    base_thr_vec: np.ndarray,
 ) -> pd.DataFrame:
-    """Compute per-article F1 for current/base and their delta."""
+    """Compute per-article F1 for current/base and their delta.
+
+    :param current_thr_vec: Per-class threshold vector for the current run.
+    :param base_thr_vec: Per-class threshold vector for the base run.
+    """
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
     current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
     base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
-    current_f1 = compute_article_f1(scores=current_scores, gold_matrix=gold_matrix, threshold_eval=threshold_eval)
-    base_f1 = compute_article_f1(scores=base_scores, gold_matrix=gold_matrix, threshold_eval=threshold_eval)
+    current_f1 = compute_article_f1(scores=current_scores, gold_matrix=gold_matrix, thr_vec=current_thr_vec)
+    base_f1 = compute_article_f1(scores=base_scores, gold_matrix=gold_matrix, thr_vec=base_thr_vec)
     article_f1_df = pd.DataFrame(
         {
             'article_id': article_ids,
@@ -1520,9 +1619,12 @@ def build_article_f1_diff_df(
     return article_f1_df
 
 
-def compute_article_f1(*, scores: np.ndarray, gold_matrix: np.ndarray, threshold_eval: float) -> np.ndarray:
-    """Compute per-article F1 scores from score and gold matrices."""
-    pred_matrix = scores >= threshold_eval
+def compute_article_f1(*, scores: np.ndarray, gold_matrix: np.ndarray, thr_vec: np.ndarray) -> np.ndarray:
+    """Compute per-article F1 scores from score and gold matrices.
+
+    :param thr_vec: Per-class threshold vector broadcast over rows.
+    """
+    pred_matrix = scores >= thr_vec
     gold_bool = gold_matrix.astype(bool)
     tp = np.logical_and(pred_matrix, gold_bool).sum(axis=1, dtype=np.int32)
     fp = np.logical_and(pred_matrix, np.logical_not(gold_bool)).sum(axis=1, dtype=np.int32)
@@ -1675,13 +1777,18 @@ def build_hamming_df(
     base_df: pd.DataFrame,
     gold_map: GoldLabelMap,
     cat_ids: Sequence[str],
-    threshold_eval: float,
+    current_thr_vec: np.ndarray,
+    base_thr_vec: np.ndarray,
 ) -> pd.DataFrame:
-    """Build current/base Hamming loss comparison."""
+    """Build current/base Hamming loss comparison.
+
+    :param current_thr_vec: Per-class threshold vector for the current run.
+    :param base_thr_vec: Per-class threshold vector for the base run.
+    """
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
-    current_loss = compute_hamming(df=current_df, cat_ids=cat_ids, threshold_eval=threshold_eval, gold_matrix=gold_matrix)
-    base_loss = compute_hamming(df=base_df, cat_ids=cat_ids, threshold_eval=threshold_eval, gold_matrix=gold_matrix)
+    current_loss = compute_hamming(df=current_df, cat_ids=cat_ids, thr_vec=current_thr_vec, gold_matrix=gold_matrix)
+    base_loss = compute_hamming(df=base_df, cat_ids=cat_ids, thr_vec=base_thr_vec, gold_matrix=gold_matrix)
     return pd.DataFrame(
         [{'metric': 'hamming_loss', 'current': current_loss, 'base': base_loss, 'diff': current_loss - base_loss}]
     )
@@ -1691,12 +1798,15 @@ def compute_hamming(
     *,
     df: pd.DataFrame,
     cat_ids: Sequence[str],
-    threshold_eval: float,
+    thr_vec: np.ndarray,
     gold_matrix: np.ndarray,
 ) -> float:
-    """Compute Hamming loss for one aligned probability table."""
+    """Compute Hamming loss for one aligned probability table.
+
+    :param thr_vec: Per-class threshold vector aligned with ``cat_ids``.
+    """
     score_matrix = build_score_matrix(df=df, cat_ids=cat_ids)
-    pred_matrix = (score_matrix >= threshold_eval).astype(np.int8)
+    pred_matrix = (score_matrix >= thr_vec).astype(np.int8)
     return float(np.mean(pred_matrix != gold_matrix))
 
 
@@ -1987,6 +2097,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help='Add bootstrap PR-AUC significance columns to top improved/degraded category tables.',
     )
     parser.add_argument(
+        '--ignore-saved-thresholds',
+        action='store_true',
+        help=(
+            'Disable per-class threshold autoload from each run dir. By default the script '
+            f'tries {THRESHOLD_FILENAMES} and applies the loaded thresholds; pass this flag '
+            'to compare both runs under a uniform --threshold-eval.'
+        ),
+    )
+    parser.add_argument(
         '--output-root',
         default='results/comparisons',
         help='Directory where the Excel report should be written.',
@@ -2009,6 +2128,7 @@ def main() -> None:
         top_changes_only=args.top_changes_only,
         run_bootstrap_pr_auc_test=args.bootstrap_pr_auc_test,
         output_path=output_path,
+        use_saved_thresholds=not args.ignore_saved_thresholds,
     )
 
 
