@@ -20,6 +20,7 @@ import pickle
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -54,6 +55,7 @@ BOOTSTRAP_PR_AUC_ITERATIONS = 1000
 BOOTSTRAP_PR_AUC_SEED = 43
 BOOTSTRAP_PR_AUC_ALPHA = 0.05
 BOOTSTRAP_PR_AUC_MIN_POSITIVES = 15
+BRIER_TEST_ALPHA = 0.05
 
 _CMP_METRICS: tuple[tuple[str, str], ...] = (
     ('precision', 'Precision'),
@@ -235,6 +237,7 @@ def compare_runs(
     top_n: int = 20,
     only_diff: bool = False,
     top_changes_only: bool = False,
+    run_bootstrap_pr_auc_test: bool = False,
     output_path: str | Path | None = None,
 ) -> ComparisonResult:
     """Compare current and base runs loaded from their saved directories.
@@ -249,6 +252,7 @@ def compare_runs(
     :param top_n: Preview size for improved/degraded categories logging.
     :param only_diff: Drop base metric columns from comparison sheets.
     :param top_changes_only: Persist only top improved/degraded category tables.
+    :param run_bootstrap_pr_auc_test: Add bootstrap PR-AUC significance columns to top change tables.
     :param output_path: Optional Excel workbook path.
     :return: Structured :class:`ComparisonResult`.
     """
@@ -295,20 +299,33 @@ def compare_runs(
         degraded_df=top_degraded_df,
         mcnemar_df=mcnemar_df,
     )
-    bootstrap_df = build_bootstrap_pr_auc_df(
+    if run_bootstrap_pr_auc_test:
+        bootstrap_df = build_bootstrap_pr_auc_df(
+            current_df=current_aligned_df,
+            base_df=base_aligned_df,
+            gold_map=gold_map,
+            cat_ids=cat_ids,
+            n_iterations=BOOTSTRAP_PR_AUC_ITERATIONS,
+            seed=BOOTSTRAP_PR_AUC_SEED,
+            alpha=BOOTSTRAP_PR_AUC_ALPHA,
+            min_positives=BOOTSTRAP_PR_AUC_MIN_POSITIVES,
+        )
+        top_improved_df, top_degraded_df = add_bootstrap_pr_auc_to_top_change_dfs(
+            improved_df=top_improved_df,
+            degraded_df=top_degraded_df,
+            bootstrap_df=bootstrap_df,
+        )
+    brier_df = build_brier_significance_df(
         current_df=current_aligned_df,
         base_df=base_aligned_df,
         gold_map=gold_map,
         cat_ids=cat_ids,
-        n_iterations=BOOTSTRAP_PR_AUC_ITERATIONS,
-        seed=BOOTSTRAP_PR_AUC_SEED,
-        alpha=BOOTSTRAP_PR_AUC_ALPHA,
-        min_positives=BOOTSTRAP_PR_AUC_MIN_POSITIVES,
+        alpha=BRIER_TEST_ALPHA,
     )
-    top_improved_df, top_degraded_df = add_bootstrap_pr_auc_to_top_change_dfs(
+    top_improved_df, top_degraded_df = add_brier_to_top_change_dfs(
         improved_df=top_improved_df,
         degraded_df=top_degraded_df,
-        bootstrap_df=bootstrap_df,
+        brier_df=brier_df,
     )
     if top_changes_only:
         empty_df = pd.DataFrame()
@@ -337,6 +354,7 @@ def compare_runs(
         if excel_path is not None:
             write_csv(result=result, output_path=excel_path.parent, result_sheets=_TOP_CHANGE_CATEGORY_SHEETS)
             write_excel(result=result, output_path=excel_path, result_sheets=_TOP_CHANGE_CATEGORY_SHEETS)
+            plot_brier_diagnostics(brier_df=brier_df, output_path=excel_path.parent)
             log_top_changes(result=result, top_n=top_n)
         return result
 
@@ -412,6 +430,7 @@ def compare_runs(
         result_sheets = _TOP_CHANGE_CATEGORY_SHEETS if top_changes_only else _RESULT_SHEETS
         write_csv(result=result, output_path=excel_path.parent, result_sheets=result_sheets)
         write_excel(result=result, output_path=excel_path, result_sheets=result_sheets)
+        plot_brier_diagnostics(brier_df=brier_df, output_path=excel_path.parent)
         log_top_changes(result=result, top_n=top_n)
     return result
 
@@ -1182,6 +1201,204 @@ def _add_bootstrap_pr_auc_to_top_change_df(
     return result.loc[:, base_cols + metric_cols]
 
 
+def build_brier_significance_df(
+    *,
+    current_df: pd.DataFrame,
+    base_df: pd.DataFrame,
+    gold_map: GoldLabelMap,
+    cat_ids: Sequence[str],
+    alpha: float = BRIER_TEST_ALPHA,
+) -> pd.DataFrame:
+    """Build per-class Brier-score Wilcoxon significance rows with FDR correction."""
+    article_ids = list(current_df['article_id'])
+    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(float)
+    current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
+    base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
+
+    rows = []
+    for idx, cat_id in enumerate(cat_ids):
+        current_errors = np.square(current_scores[:, idx] - gold_matrix[:, idx])
+        base_errors = np.square(base_scores[:, idx] - gold_matrix[:, idx])
+        mean_diff = float(np.mean(current_errors) - np.mean(base_errors))
+        rows.append(
+            {
+                'IPTC Category': safe_cat_label(cat_id=cat_id),
+                'cat_id': cat_id,
+                'brier_p_value': wilcoxon_signed_rank_p_value(current_errors - base_errors),
+                'brier_mean_error_diff': mean_diff,
+                'brier_current_mean_error': float(np.mean(current_errors)),
+                'brier_base_mean_error': float(np.mean(base_errors)),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    df['brier_p_value_fdr'] = benjamini_hochberg(p_values=df['brier_p_value'].to_numpy(dtype=float))
+    df['brier_current_significant'] = ((df['brier_p_value_fdr'] < alpha) & (df['brier_mean_error_diff'] < 0)).astype(int)
+    df['brier_base_significant'] = ((df['brier_p_value_fdr'] < alpha) & (df['brier_mean_error_diff'] > 0)).astype(int)
+    return df
+
+
+def wilcoxon_signed_rank_p_value(differences: Sequence[float]) -> float:
+    """Return two-sided Wilcoxon signed-rank p-value using a normal approximation."""
+    diff = np.asarray(differences, dtype=float)
+    diff = diff[diff != 0]
+    if diff.size == 0:
+        return 1.0
+
+    abs_diff = np.abs(diff)
+    ranks, tie_counts = rank_abs_values(values=abs_diff)
+    rank_sum_positive = float(ranks[diff > 0].sum())
+    n = float(diff.size)
+    mean = n * (n + 1) / 4
+    tie_term = sum(count ** 3 - count for count in tie_counts)
+    variance = (n * (n + 1) * (2 * n + 1) - tie_term / 2) / 24
+    if variance <= 0:
+        return 1.0
+    z_score = (rank_sum_positive - mean) / math.sqrt(variance)
+    return float(math.erfc(abs(z_score) / math.sqrt(2)))
+
+
+def rank_abs_values(*, values: np.ndarray) -> tuple[np.ndarray, list[int]]:
+    """Rank absolute values with average ranks for ties."""
+    order = np.argsort(values, kind='mergesort')
+    sorted_values = values[order]
+    ranks_sorted = np.empty(len(values), dtype=float)
+    tie_counts: list[int] = []
+    start = 0
+    while start < len(sorted_values):
+        end = start + 1
+        while end < len(sorted_values) and sorted_values[end] == sorted_values[start]:
+            end += 1
+        avg_rank = (start + 1 + end) / 2
+        ranks_sorted[start:end] = avg_rank
+        tie_counts.append(end - start)
+        start = end
+
+    ranks = np.empty(len(values), dtype=float)
+    ranks[order] = ranks_sorted
+    return ranks, tie_counts
+
+
+def add_brier_to_top_change_dfs(
+    *,
+    improved_df: pd.DataFrame,
+    degraded_df: pd.DataFrame,
+    brier_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Attach direction-aware Brier/Wilcoxon columns to top change tables."""
+    return (
+        _add_brier_to_top_change_df(df=improved_df, brier_df=brier_df, pass_col='brier_current_significant'),
+        _add_brier_to_top_change_df(df=degraded_df, brier_df=brier_df, pass_col='brier_base_significant'),
+    )
+
+
+def _add_brier_to_top_change_df(*, df: pd.DataFrame, brier_df: pd.DataFrame, pass_col: str) -> pd.DataFrame:
+    """Merge Brier rows and expose a direction-aware pass flag."""
+    cols = [
+        'IPTC Category',
+        'brier_p_value',
+        'brier_p_value_fdr',
+        'brier_mean_error_diff',
+        'brier_current_mean_error',
+        'brier_base_mean_error',
+        pass_col,
+    ]
+    result = df.merge(brier_df.reindex(columns=cols), on='IPTC Category', how='left')
+    result['brier_pass'] = result[pass_col].fillna(0).astype(int)
+    result = result.drop(columns=[pass_col])
+    metric_cols = [
+        'brier_pass',
+        'brier_p_value',
+        'brier_p_value_fdr',
+        'brier_mean_error_diff',
+        'brier_current_mean_error',
+        'brier_base_mean_error',
+    ]
+    base_cols = [col for col in result.columns if col not in metric_cols]
+    return result.loc[:, base_cols + metric_cols]
+
+
+def plot_brier_diagnostics(*, brier_df: pd.DataFrame, output_path: Path) -> tuple[Path, Path] | tuple[None, None]:
+    """Save histogram/KDE and Q-Q plots for per-class Brier mean error differences."""
+    values = pd.to_numeric(brier_df.get('brier_mean_error_diff', pd.Series(dtype=float)), errors='coerce').dropna()
+    if values.empty:
+        LOG.warning('Skipping Brier diagnostic plots because no Brier differences are available')
+        return None, None
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    hist_path = output_path / 'brier_mean_error_diff_hist_kde.png'
+    qq_path = output_path / 'brier_mean_error_diff_qq.png'
+    data = values.to_numpy(dtype=float)
+    plot_hist_kde(values=data, output_path=hist_path)
+    plot_qq(values=data, output_path=qq_path)
+    LOG.info('Saved Brier diagnostic plots to %s and %s', hist_path, qq_path)
+    return hist_path, qq_path
+
+
+def plot_hist_kde(*, values: np.ndarray, output_path: Path) -> None:
+    """Save a histogram with Gaussian KDE overlay."""
+    import matplotlib
+
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(values, bins='auto', density=True, alpha=0.45, label='Histogram')
+    x_grid, density = gaussian_kde(values=values)
+    if x_grid.size:
+        ax.plot(x_grid, density, label='Gaussian KDE')
+    ax.axvline(0.0, color='black', linestyle='--', linewidth=1, label='No difference')
+    ax.set_title('Brier Mean Error Difference Distribution')
+    ax.set_xlabel('current_mean_brier_error - base_mean_brier_error')
+    ax.set_ylabel('Density')
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
+def gaussian_kde(*, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Compute a simple Gaussian KDE without scipy."""
+    if values.size < 2:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    std = float(np.std(values, ddof=1))
+    if std == 0.0:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    bandwidth = 1.06 * std * values.size ** (-1 / 5)
+    if bandwidth <= 0.0:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    padding = 3 * bandwidth
+    x_grid = np.linspace(float(values.min() - padding), float(values.max() + padding), 256)
+    scaled = (x_grid[:, None] - values[None, :]) / bandwidth
+    density = np.exp(-0.5 * scaled ** 2).sum(axis=1) / (values.size * bandwidth * math.sqrt(2 * math.pi))
+    return x_grid, density
+
+
+def plot_qq(*, values: np.ndarray, output_path: Path) -> None:
+    """Save a normal Q-Q plot for Brier mean error differences."""
+    import matplotlib
+
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    sorted_values = np.sort(values)
+    probs = (np.arange(1, len(sorted_values) + 1) - 0.5) / len(sorted_values)
+    normal = NormalDist(mu=float(np.mean(sorted_values)), sigma=float(np.std(sorted_values, ddof=1)) or 1.0)
+    theoretical = np.asarray([normal.inv_cdf(float(prob)) for prob in probs], dtype=float)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.scatter(theoretical, sorted_values, s=12, alpha=0.7)
+    min_val = float(min(theoretical.min(), sorted_values.min()))
+    max_val = float(max(theoretical.max(), sorted_values.max()))
+    ax.plot([min_val, max_val], [min_val, max_val], color='black', linestyle='--', linewidth=1)
+    ax.set_title('Brier Mean Error Difference Q-Q Plot')
+    ax.set_xlabel('Theoretical normal quantiles')
+    ax.set_ylabel('Observed quantiles')
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+
+
 CHANGE_THRESHOLDS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7)
 TOP_CHANGE_N: int = 100
 
@@ -1765,6 +1982,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help='Write only top_improved and top_degraded category tables.',
     )
     parser.add_argument(
+        '--bootstrap-pr-auc-test',
+        action='store_true',
+        help='Add bootstrap PR-AUC significance columns to top improved/degraded category tables.',
+    )
+    parser.add_argument(
         '--output-root',
         default='results/comparisons',
         help='Directory where the Excel report should be written.',
@@ -1785,6 +2007,7 @@ def main() -> None:
         top_n=args.top_n,
         only_diff=args.only_diff,
         top_changes_only=args.top_changes_only,
+        run_bootstrap_pr_auc_test=args.bootstrap_pr_auc_test,
         output_path=output_path,
     )
 
