@@ -12,7 +12,7 @@ from iptc_entity_pipeline.training import CvFoldCurves, TrainingResult
 
 
 class ChartSpec(NamedTuple):
-    """Specification for a single train-vs-test scatter chart."""
+    """Specification for a single final-model scatter chart."""
 
     title: str
     yaxis: str
@@ -137,8 +137,8 @@ def report_cv_fold(
         )
 
 
-def report_test_curve(*, logger: Any, result: TrainingResult) -> None:
-    """Report final-model train vs test curves across epochs."""
+def report_test_curve(*, logger: Any, result: TrainingResult, dev_series: str = 'test') -> None:
+    """Report final-model train vs validation-like curves across epochs."""
     charts = (
         ChartSpec('Final Model Loss', 'loss', result.train_loss_per_epoch, result.dev_loss_per_epoch),
         ChartSpec('Final Model F1', 'f1', result.train_f1_per_epoch, result.dev_f1_per_epoch),
@@ -159,7 +159,7 @@ def report_test_curve(*, logger: Any, result: TrainingResult) -> None:
         )
         logger.report_scatter2d(
             title=chart.title,
-            series='test',
+            series=dev_series,
             iteration=0,
             scatter=_scatter_xy(chart.dev_curve),
             xaxis='epoch',

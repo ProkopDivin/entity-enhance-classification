@@ -181,6 +181,12 @@ def _validate_split(
     return precision, recall, mean_loss
 
 
+def _calc_f1(*, precision: float, recall: float) -> float:
+    """Compute F1 from precision and recall, returning 0 for empty denominators."""
+    denom = precision + recall
+    return 0.0 if denom == 0.0 else float((2.0 * precision * recall) / denom)
+
+
 def _clone_state_cpu(model: NeuralCategModel) -> dict[str, Any]:
     """Snapshot model weights to CPU for early-stopping checkpoint."""
     return {k: v.detach().cpu().clone() for k, v in model._nn.state_dict().items()}
@@ -231,6 +237,12 @@ def _report_stats_scalars(
     """Report precision/recall/loss series for one iteration."""
     logger.report_scalar(title=title, series='Precision', value=precision, iteration=iteration)
     logger.report_scalar(title=title, series='Recall', value=recall, iteration=iteration)
+    logger.report_scalar(
+        title=title,
+        series='F1',
+        value=_calc_f1(precision=precision, recall=recall),
+        iteration=iteration,
+    )
     logger.report_scalar(title=title, series='Loss', value=loss, iteration=iteration)
 
 
@@ -322,8 +334,12 @@ def trainClassificationModel(
     dev_stats = EpochStats()
     es_patience = int(trainingConfig.get('earlyStoppingPatience', 0))
     es_min_delta = float(trainingConfig.get('earlyStoppingMinDelta', 0.0))
+    es_metric = str(trainingConfig.get('earlyStoppingMetric', 'loss')).strip().lower() or 'loss'
+    if es_metric not in {'loss', 'f1'}:
+        raise ValueError(f'Unknown early stopping metric: {es_metric}')
 
     best_state_cpu: dict[str, Any] | None = None
+    best_score: float | None = None
     best_dev_loss: float | None = None
     epochs_without_improvement = 0
 
@@ -355,13 +371,25 @@ def trainClassificationModel(
         )
 
         if es_patience > 0:
-            if best_dev_loss is None or dev_loss < best_dev_loss - es_min_delta:
+            dev_f1 = _calc_f1(precision=dev_prec, recall=dev_rec)
+            current_score = dev_loss if es_metric == 'loss' else dev_f1
+            if best_score is None:
+                is_improved = True
+            elif es_metric == 'loss':
+                is_improved = current_score < best_score - es_min_delta
+            else:
+                is_improved = current_score > best_score + es_min_delta
+            if is_improved:
+                best_score = current_score
                 best_dev_loss = dev_loss
                 best_state_cpu = _clone_state_cpu(model)
                 epochs_without_improvement = 0
                 _log_info(
                     logger=clearml_logger,
-                    message=f'Early stopping: new best {validation_split_name} loss={dev_loss:.6f} at epoch {epoch + 1}',
+                    message=(
+                        f'Early stopping: new best {validation_split_name} {es_metric}={current_score:.6f} '
+                        f'at epoch {epoch + 1}'
+                    ),
                     print_logs=print_logs,
                 )
             else:
@@ -393,8 +421,8 @@ def trainClassificationModel(
 
         if es_patience > 0 and epochs_without_improvement >= es_patience:
             clearml_logger.report_text(
-                f'Early stopping: no improvement in {validation_split_name} loss for {es_patience} epoch(s); '
-                f'stopping after epoch {epoch + 1} (best loss={best_dev_loss:.6f})',
+                f'Early stopping: no improvement in {validation_split_name} {es_metric} for {es_patience} epoch(s); '
+                f'stopping after epoch {epoch + 1} (best {es_metric}={best_score:.6f})',
                 level=logging.INFO, print_console=print_logs,
             )
             break
@@ -402,7 +430,7 @@ def trainClassificationModel(
     if es_patience > 0 and best_state_cpu is not None:
         _restore_state_cpu(model, best_state_cpu)
         clearml_logger.report_text(
-            f'Early stopping: restored weights from best {validation_split_name} epoch',
+            f'Early stopping: restored weights from best {validation_split_name} {es_metric} epoch',
             level=logging.INFO, print_console=print_logs,
         )
 

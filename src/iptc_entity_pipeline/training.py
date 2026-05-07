@@ -71,6 +71,7 @@ def train_payload(*, training_config: TrainingCnf, validation_split_name: str = 
         'validationSplitName': validation_split_name,
         'earlyStoppingPatience': training_config.early_stopping_patience,
         'earlyStoppingMinDelta': training_config.early_stopping_min_delta,
+        'earlyStoppingMetric': training_config.early_stopping_metric,
         'optimizerConfig': {
             'name': training_config.optimizer_name,
             'adamConfig': {'lr': training_config.learning_rate},
