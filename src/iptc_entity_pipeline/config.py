@@ -722,7 +722,7 @@ class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
 
-    
+
 @dataclass(frozen=True)
 class BestArticleOnlyCnf(BaseCnfWithHPO):
     hparam: HyperparamSpace = field(
@@ -832,6 +832,13 @@ class BestWikipedia2VecEntitiesCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
+class BestArticleOnlyTunedCnf(BestArticleOnlyCnf):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    
+    
+@dataclass(frozen=True)
 class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration using Wikidata description embeddings."""
 
@@ -886,7 +893,6 @@ class TunningLearningRateF1Cnf(BaseCnfWithHPO3):
     """  """
     train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1'))
     
-    
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
     return {
@@ -908,6 +914,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities_f1': BestWpEntitiesF1Cnf(),
         'best_wpentities_tuned': BestWpEntitiesTunedCnf(),
         'best_article_only': BestArticleOnlyCnf(),
+        'best_article_only_tuned': BestArticleOnlyTunedCnf(),
         'best_wpentities_all_langs': BestWpentitiesAllLangsCnf(),
         'best_wpentities_nl': BestWpentitiesNlCnf(),
         'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
