@@ -226,6 +226,7 @@ def run_cv(
     eval_cnf: Mapping[str, Any],
     cv_cnf: Mapping[str, Any],
     optuna_cnf: Mapping[str, Any],
+    tuning_cnf: Mapping[str, Any],
     objective_corpora: str,
     print_logs: bool = True,
     debug: bool = False,
@@ -234,7 +235,15 @@ def run_cv(
     """Run mandatory CV over train and select best hyperparameter combination."""
     from dataclasses import asdict
 
-    from iptc_entity_pipeline.config import CvCnf, EvaluationCnf, HyperparamSpace, OptunaCnf, TrainingCnf, conf_from_dict
+    from iptc_entity_pipeline.config import (
+        CvCnf,
+        EvaluationCnf,
+        HyperparamSpace,
+        OptunaCnf,
+        ThresholdTuningCnf,
+        TrainingCnf,
+        conf_from_dict,
+    )
     from iptc_entity_pipeline.cross_validation import build_cv_df, build_cv_result, prepare_cv, select_best
 
     conf_logging()
@@ -247,12 +256,14 @@ def run_cv(
     eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
     cv_cfg = conf_from_dict(CvCnf, cv_cnf)
     optuna_cfg = conf_from_dict(OptunaCnf, optuna_cnf)
+    tuning_cfg = conf_from_dict(ThresholdTuningCnf, tuning_cnf)
 
     task.connect(asdict(space), name='hyperparamSpace')
     task.connect(asdict(base_training), name='trainingConfig')
     task.connect(asdict(eval_cfg), name='evaluationConfig')
     task.connect(asdict(cv_cfg), name='cvConfig')
     task.connect(asdict(optuna_cfg), name='optunaConfig')
+    task.connect(asdict(tuning_cfg), name='thresholdTuningConfig')
 
     x_full, y_full = prepare_cv(train_data=train_data)
     logger.info(f'CV data prepared: x_shape={x_full.shape}, y_shape={y_full.shape}, feature_dim={feature_dim}')
@@ -267,6 +278,7 @@ def run_cv(
         eval_cfg=eval_cfg,
         cv_cfg=cv_cfg,
         optuna_cfg=optuna_cfg,
+        tuning_cfg=tuning_cfg,
         objective_corpora=objective_corpora,
         debug=debug,
         print_logs=print_logs,
@@ -291,7 +303,36 @@ def run_cv(
     report_cv_fold(logger=clearml_logger, fold_curves=selection.best_fold_curves)
     logger.info(f'CV complete: best_trial F1={selection.best_trial["F1_mean"]:.4f}')
 
-    return build_cv_result(cv_dev_df=cv_dev_df, selection=selection)
+    cv_result = build_cv_result(
+        cv_dev_df=cv_dev_df,
+        selection=selection,
+        patience=base_training.early_stopping_patience,
+        tuning_cfg=tuning_cfg,
+        cat_list=list(train_data.corpus.catList),
+        default_threshold=eval_cfg.threshold_eval,
+    )
+
+    if cv_result.threshold_report_df is not None:
+        clearml_logger.report_table(
+            title='Threshold Tuning',
+            series='Per-class thresholds (CV folds)',
+            iteration=0,
+            table_plot=cv_result.threshold_report_df,
+        )
+        n_classes = int(cv_result.threshold_report_df['n_folds'].gt(0).sum())
+        logger.info(
+            f'Threshold tuning: aggregation={tuning_cfg.aggregation}, '
+            f'classes_with_tuned_threshold={n_classes}/{len(cv_result.threshold_report_df)}'
+        )
+        if upload_artifacts:
+            task.upload_artifact(
+                'threshold_tuning_report', artifact_object=cv_result.threshold_report_df,
+            )
+            task.upload_artifact(
+                'threshold_tuning_thresholds', artifact_object=dict(cv_result.tuned_thresholds or {}),
+            )
+
+    return cv_result
 
 @PipelineDecorator.component(
     return_values=['trainedModel'],
@@ -324,8 +365,11 @@ def train_best(
         f'Training final model: hidden_dim={model_cfg.hidden_dim}, '
         f'dropouts=({model_cfg.dropouts1}, {model_cfg.dropouts2}), '
         f'lr={train_cfg.learning_rate}, batch_size={train_cfg.batch_size}, '
+        f'epochs={train_cfg.epochs}, early_stopping_patience={train_cfg.early_stopping_patience}, '
         f'feature_dim={feature_dim}, train_docs={len(train_data.corpus)}, test_docs={len(test_data.corpus)}'
     )
+    if train_cfg.early_stopping_patience != 0:
+        raise ValueError('Final retraining may evaluate test curves only when early stopping is disabled')
 
     result = train_model(
         train_data=train_data,
@@ -359,6 +403,8 @@ def eval_final(
     config_name: str,
     config_mapping: Mapping[str, Any],
     feature_dim: int,
+    tuned_thresholds: Mapping[str, float] | None = None,
+    threshold_report_df: Any = None,
     upload_artifacts: bool = False,
 ):
     """Evaluate final model on test and persist CV dev summary with mean/std."""
@@ -443,13 +489,18 @@ def eval_final(
     task.connect(eval_cnf, name='evaluationConfig')
     task.connect(emb_cnf, name='embeddingConfig')
 
-    logger.info(f'Evaluating final model on test: test_docs={len(test_data.corpus)}, objective={objective_corpora}')
+    custom_thresholds = dict(tuned_thresholds) if tuned_thresholds else None
+    logger.info(
+        f'Evaluating final model on test: test_docs={len(test_data.corpus)}, '
+        f'objective={objective_corpora}, custom_thresholds='
+        f'{len(custom_thresholds) if custom_thresholds else 0} class(es)'
+    )
 
     df_corpora_test, df_classes_test, pred_scores = evaluateModel(
         model=trained_model,
         evalData=test_data,
         evaluation_config=eval_cfg,
-        customThresholds=None,
+        customThresholds=custom_thresholds,
         returnPredictions=True,
     )
 
@@ -476,8 +527,18 @@ def eval_final(
         config_mapping=config_mapping,
         config_name=config_name,
         feature_dim=feature_dim,
+        tuned_thresholds=custom_thresholds,
+        threshold_report_df=threshold_report_df,
         upload_artifacts=upload_artifacts,
     )
+
+    if threshold_report_df is not None:
+        clearml_logger.report_table(
+            title='Threshold Tuning',
+            series='Per-class thresholds (final eval)',
+            iteration=0,
+            table_plot=threshold_report_df,
+        )
 
     comparison_result = run_comparison()
 
@@ -530,6 +591,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     eval_cnf = cnf['eval']
     cv_cnf = cnf.get('cv', {'folds': 5, 'random_seed': 43})
     optuna_cnf = cnf.get('optuna', {})
+    tuning_cnf = cnf.get('tuning', {'enabled': False})
     hparam_cnf = cnf['hparam']
     obj_corpora = cnf['objective_corpora']
     down_smpl = cnf.get('downsample_corpora', {})
@@ -601,6 +663,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         eval_cnf=eval_cnf,
         cv_cnf=cv_cnf,
         optuna_cnf=optuna_cnf,
+        tuning_cnf=tuning_cnf,
         objective_corpora=obj_corpora,
         print_logs=print_logs,
         debug=debug,
@@ -611,7 +674,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
 
     log_stage(
         task=task,
-        message='Stage 5/6: Training final model on full train (validation=test)',
+        message='Stage 5/6: Training final model on full train with fixed CV-derived epochs',
         print_logs=print_logs,
     )
     trained_model = train_best(
@@ -638,6 +701,8 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         config_name=config_name,
         config_mapping=cnf,
         feature_dim=feature_dim,
+        tuned_thresholds=cv_result.tuned_thresholds,
+        threshold_report_df=cv_result.threshold_report_df,
         upload_artifacts=upload_artifacts,
     )
 

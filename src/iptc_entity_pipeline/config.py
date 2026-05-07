@@ -70,6 +70,7 @@ class TrainingCnf:
     # without improvement, and restores the best weights.
     early_stopping_patience: int = 5
     early_stopping_min_delta: float = 0.000000001
+    early_stopping_metric: Literal['loss', 'f1'] = 'loss'
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,25 @@ class OptunaCnf:
 
 
 @dataclass(frozen=True)
+class ThresholdTuningCnf:
+    """Per-class decision-threshold tuning on dev folds.
+
+    When ``enabled``, after each CV fold of the best Optuna trial the dev-set
+    raw scores are scanned over the ``thresholds`` grid and the threshold that
+    maximizes F-beta is selected per class. Per-fold per-class thresholds are
+    aggregated across folds (mean by default) and the resulting map is reused
+    by the final-model evaluation as ``customThresholds``.
+    """
+
+    enabled: bool = False
+    thresholds: tuple[float, ...] = field(
+        default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(2, 19))
+    )
+    f_beta: float = 1.0
+    aggregation: Literal['mean', 'mode'] = 'mean'
+
+
+@dataclass(frozen=True)
 class BaseCnf:
     """Top-level pipeline config grouped by concern."""
 
@@ -131,6 +151,7 @@ class BaseCnf:
     cv: CvCnf = field(default_factory=CvCnf)
     optuna: OptunaCnf = field(default_factory=OptunaCnf)
     hparam: HyperparamSpace = field(default_factory=HyperparamSpace)
+    tuning: ThresholdTuningCnf = field(default_factory=ThresholdTuningCnf)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
@@ -173,11 +194,32 @@ class BaseCnfWithHPO2(BaseCnf):
         )
     ) 
     
-    
+
+@dataclass(frozen=True)
+class BaseCnfWithHPO3(BaseCnf):
+    """Base configuration with hyperparameter space."""
+    debug: bool = field(default_factory=lambda: False)
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.0,),
+            dropouts2=(0.3,),
+            learning_rates=(0.000005, 0.00001, 0.00005, 0.0001,0.00037, 0.001),
+        )
+    ) 
+    optuna: OptunaCnf = field(
+        default_factory=lambda: replace(OptunaCnf(), sampler='grid')
+    )
 
 @dataclass(frozen=True)
 class WpEntitiesCnf(BaseCnfWithHPO2):
     """Default entity-enhanced configuration."""
+    
+@dataclass(frozen=True)
+class WpEntitiesCnf(BaseCnfWithHPO2):
+    """Default entity-enhanced configuration."""
+    train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), learning_rate=0.00037))
 
 @dataclass(frozen=True)
 class WpEntitiesCnf2(BaseCnfWithHPO2):
@@ -649,6 +691,35 @@ class BestWpEntitiesCnf(BaseCnfWithHPO):
             learning_rates=(0.00037,),
         )
     )
+
+
+@dataclass(frozen=True)
+class BestWpEntitiesF1Cnf(BestWpEntitiesCnf):
+    train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1'))
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024, ),
+            dropouts1=(0.0,),
+            dropouts2=(0.0, ),
+            learning_rates=(0.00037,),
+        )
+    )
+
+
+@dataclass(frozen=True)
+class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+
     
 @dataclass(frozen=True)
 class BestArticleOnlyCnf(BaseCnfWithHPO):
@@ -801,8 +872,19 @@ def _validate_config_dataclass_decorators() -> None:
 
         if not cls.__dataclass_params__.frozen:
             raise TypeError(f'{cls.__name__} must declare @dataclass(frozen=True)')
+ 
+     
+@dataclass(frozen=True)
+class TunningLearningRateCnf(BaseCnfWithHPO3):
+    """  """
 
 
+@dataclass(frozen=True)
+class TunningLearningRateF1Cnf(BaseCnfWithHPO3):
+    """  """
+    train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1'))
+    
+    
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
     return {
@@ -821,6 +903,8 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_all_langs': WPEntitiesAllLangsCnf(),
         'wpentities_rel_th_5': WPEntitiesRelTH5(),
         'best_wpentities': BestWpEntitiesCnf(),
+        'best_wpentities_f1': BestWpEntitiesF1Cnf(),
+        'best_wpentities_tuned': BestWpEntitiesTunedCnf(),
         'best_article_only': BestArticleOnlyCnf(),
         'best_wpentities_all_langs': BestWpentitiesAllLangsCnf(),
         'best_wpentities_nl': BestWpentitiesNlCnf(),
@@ -837,6 +921,9 @@ def _config_map() -> dict[str, BaseCnf]:
         'article_only_3': ArticleOnlyCnf3(),
         'article_only_4': ArticleOnlyCnf4(),
         'article_only_5': ArticleOnlyCnf5(),
+        
+        'learning_rate': TunningLearningRateCnf(),
+        'learning_rate_f1': TunningLearningRateF1Cnf(),
     }
 
 
