@@ -126,7 +126,7 @@ def save_outputs(
         json.dump(config_mapping, file, indent=4)
 
     if tuned_thresholds:
-        thresholds_json_path = output_dir / 'thresholds.json'
+        thresholds_json_path = output_dir / 'custom_thresholds.json'
         with open(thresholds_json_path, 'w', encoding='utf-8') as file:
             json.dump({cid: float(thr) for cid, thr in tuned_thresholds.items()}, file, indent=2)
         logger.report_text(f'Saved tuned thresholds to {thresholds_json_path.resolve()}')
