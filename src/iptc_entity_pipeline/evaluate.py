@@ -25,37 +25,69 @@ class PreparedStats(NamedTuple):
 
 
 @dataclass
-class MetricAccumulator:
-    """Column-oriented accumulator for core evaluation metrics."""
+class CoreMetricAccumulator:
+    """Column-oriented accumulator for Precision / Recall / F1 / Data Count."""
 
     data_count: list[Any] = field(default_factory=list)
     precision: list[Any] = field(default_factory=list)
     recall: list[Any] = field(default_factory=list)
     f1: list[Any] = field(default_factory=list)
 
-    def append_metrics(self, *, data_count: int, stats: Any, digits: int = 3) -> None:
-        """Append one row of core metrics from an evaluation stats object."""
+    def append_core_metrics(self, *, data_count: int, stats: Any, digits: int = 3) -> None:
+        """Append one row of P/R/F1 derived from a stats object (AvgData or ClassData)."""
         self.data_count.append(data_count)
         self.precision.append(round(stats.precision, digits))
         self.recall.append(round(stats.recall, digits))
         self.f1.append(round(stats.fmeasure(beta=1), digits))
 
+
+@dataclass
+class MetricAccumulator(CoreMetricAccumulator):
+    """Per-class table: adds one false-positive count per row."""
+
+    false_positive_count: list[Any] = field(default_factory=list)
+
+    def append_metrics(
+        self,
+        *,
+        data_count: int,
+        stats: Any,
+        digits: int = 3,
+        false_positive_count: int | float | None = None,
+    ) -> None:
+        """Append one row of core metrics from an evaluation stats object."""
+        self.append_core_metrics(data_count=data_count, stats=stats, digits=digits)
+        if false_positive_count is not None:
+            fp_val: int | float = false_positive_count
+        elif hasattr(stats, 'predCnt') and hasattr(stats, 'correctCnt'):
+            fp_val = int(stats.predCnt - stats.correctCnt)
+        else:
+            fp_val = float('nan')
+        self.false_positive_count.append(fp_val)
+
     def to_dataframe_dict(self) -> dict[str, list[Any]]:
         """Return dict keyed by DataFrame column names."""
-        return {
+        d = {
             'Data Count': self.data_count,
             'Precision': self.precision,
             'Recall': self.recall,
             'F1': self.f1,
         }
+        d['False Positive Count'] = self.false_positive_count
+        return d
 
 
 @dataclass
-class CorporaMetricAccumulator(MetricAccumulator):
-    """Extended accumulator that also tracks label-level statistics."""
+class CorporaMetricAccumulator(CoreMetricAccumulator):
+    """Corpora table: false positive rate (micro over gold-negative slots) and label stats."""
 
     docs_no_labels: list[Any] = field(default_factory=list)
     decent_labels: list[Any] = field(default_factory=list)
+    false_positive_rate: list[Any] = field(default_factory=list)
+
+    def append_metrics(self, *, data_count: int, stats: Any, digits: int = 3) -> None:
+        """Append one row of core metrics (no false-positive count column)."""
+        self.append_core_metrics(data_count=data_count, stats=stats, digits=digits)
 
     def append_label_metrics(
         self,
@@ -63,21 +95,37 @@ class CorporaMetricAccumulator(MetricAccumulator):
         zero_label_docs: int,
         pred_cats: Sequence[Sequence[str]],
         decent_labels: Sequence[str],
+        false_positive_rate: float,
     ) -> None:
         """Append one row of label-level metrics."""
         self.docs_no_labels.append(round(zero_label_docs / len(pred_cats), 3))
         self.decent_labels.append(len(decent_labels))
+        self.false_positive_rate.append(false_positive_rate)
 
     def append_column_means(self) -> None:
         """Append per-column means as a summary row (All-macro)."""
-        for col in (self.data_count, self.precision, self.recall, self.f1, self.docs_no_labels, self.decent_labels):
+        for col in (
+            self.data_count,
+            self.precision,
+            self.recall,
+            self.f1,
+            self.false_positive_rate,
+            self.docs_no_labels,
+            self.decent_labels,
+        ):
             col.append(pd.Series(col, dtype=float).mean())
 
     def to_dataframe_dict(self) -> dict[str, list[Any]]:
         """Return dict keyed by DataFrame column names."""
-        d = super().to_dataframe_dict()
-        d['Docs No Labels'] = self.docs_no_labels
-        d['Decent Labels'] = self.decent_labels
+        d = {
+            'Data Count': self.data_count,
+            'Precision': self.precision,
+            'Recall': self.recall,
+            'F1': self.f1,
+            'False Positive Rate': self.false_positive_rate,
+            'Docs No Labels': self.docs_no_labels,
+            'Decent Labels': self.decent_labels,
+        }
         return d
 
 
@@ -117,6 +165,43 @@ def _is_decent_label(stats: Any) -> bool:
     return stats.precision >= 0.6 and stats.fmeasure(beta=0.4) >= 0.5 and stats.trueCnt >= 10
 
 
+def _micro_false_positives_and_negatives(
+    *,
+    docs: Sequence[Any],
+    pred_cats: Sequence[Sequence[str]],
+    cat_list: Sequence[str],
+) -> tuple[int, int]:
+    """Count multi-label false positives and gold-negative (document, label) pairs.
+
+    A gold-negative slot is a (doc, category) pair where the category is absent
+    from gold labels for that document. False positives are predicted positives
+    on those slots.
+
+    :param docs: Evaluation documents (same length as ``pred_cats``).
+    :param pred_cats: Normalized predicted category sets per document.
+    :param cat_list: IPTC category ids defining the label set (same as eval corpus ``catList``).
+    """
+    doc_list = list(docs)
+    if len(doc_list) != len(pred_cats):
+        raise ValueError(f'docs and pred_cats length mismatch: {len(doc_list)} vs {len(pred_cats)}')
+    fp = 0
+    neg = 0
+    for cat in cat_list:
+        for doc, preds in zip(doc_list, pred_cats):
+            if cat not in doc.cats:
+                neg += 1
+                if cat in preds:
+                    fp += 1
+    return fp, neg
+
+
+def _false_positive_rate_micro(*, fp: int, negatives: int, digits: int = 4) -> float:
+    """False positive rate as FP / (gold-negative label slots)."""
+    if negatives == 0:
+        return float('nan')
+    return round(fp / negatives, digits)
+
+
 def evaluate_corpora(
     *,
     pred_cats: Sequence[Sequence[str]],
@@ -131,7 +216,8 @@ def evaluate_corpora(
     :param eval_corpus: Corpus with gold labels and ``corpusName`` metadata.
     :param per_corpus: Whether to include per-corpus rows.
     :param averaging_type: One of ``'datapoint'``, ``'micro'``, ``'macro'``.
-    :return: DataFrame indexed by corpus name with Precision/Recall/F1 columns.
+    :return: DataFrame indexed by corpus name with Precision/Recall/F1 columns plus
+        false positive rate (micro over gold-negative label slots), Docs No Labels, Decent Labels.
     """
     from geneea.evaluation import utils as evalutil
     from geneea.evaluation.utils import AvgData
@@ -164,9 +250,15 @@ def evaluate_corpora(
             sub_data = eval_corpus.filterByBools(mask)
             sub_pred = [cats for in_scope, cats in zip(mask, pred_cats) if in_scope]
             prepared = prepare_stats(sub_data=sub_data, sub_pred_cats=sub_pred)
+            fp_sub, neg_sub = _micro_false_positives_and_negatives(
+                docs=sub_data, pred_cats=sub_pred, cat_list=eval_corpus.catList,
+            )
             accumulator.append_metrics(data_count=prepared.count, stats=prepared.stats)
             accumulator.append_label_metrics(
-                zero_label_docs=prepared.zero_docs, pred_cats=sub_pred, decent_labels=prepared.decent,
+                zero_label_docs=prepared.zero_docs,
+                pred_cats=sub_pred,
+                decent_labels=prepared.decent,
+                false_positive_rate=_false_positive_rate_micro(fp=fp_sub, negatives=neg_sub),
             )
 
     accumulator.append_column_means()
@@ -177,18 +269,26 @@ def evaluate_corpora(
     decent_labels = [name for name, st in indiv_stats.items() if _is_decent_label(st)]
     zero_label_docs = sum(1 for cats in pred_cats if not cats)
 
+    fp_all, neg_all = _micro_false_positives_and_negatives(
+        docs=eval_corpus, pred_cats=pred_cats, cat_list=eval_corpus.catList,
+    )
+    fpr_all = _false_positive_rate_micro(fp=fp_all, negatives=neg_all)
+
     accumulator.append_metrics(data_count=avg_stats.cnt, stats=micro_stats)
     accumulator.append_label_metrics(
-        zero_label_docs=zero_label_docs, pred_cats=pred_cats, decent_labels=decent_labels,
+        zero_label_docs=zero_label_docs,
+        pred_cats=pred_cats,
+        decent_labels=decent_labels,
+        false_positive_rate=fpr_all,
     )
     corpora_names.append('All-micro')
 
-    macro_stats = AvgData.empty()
-    for cat in indiv_stats:
-        macro_stats.update(prec=indiv_stats[cat].precision, recall=indiv_stats[cat].recall)
     accumulator.append_metrics(data_count=avg_stats.cnt, stats=avg_stats)
     accumulator.append_label_metrics(
-        zero_label_docs=zero_label_docs, pred_cats=pred_cats, decent_labels=decent_labels,
+        zero_label_docs=zero_label_docs,
+        pred_cats=pred_cats,
+        decent_labels=decent_labels,
+        false_positive_rate=fpr_all,
     )
     corpora_names.append('All-datapoint')
 
@@ -210,7 +310,7 @@ def evaluate_classes(
     :param pred_cats: Normalized predicted category lists per document.
     :param eval_corpus: Corpus with gold labels and ``catList``.
     :param per_class: Whether to include per-class rows.
-    :return: DataFrame indexed by category name with Precision/Recall/F1 columns.
+    :return: DataFrame indexed by category name with Precision/Recall/F1 and false positive counts.
     """
     from geneea.evaluation import utils as evalutil
     from geneea.evaluation.utils import AvgData
@@ -220,14 +320,26 @@ def evaluate_classes(
     if per_class:
         categories = eval_corpus.catList
         category_names = ['"' + get_cat_name(cat) + '"' for cat in categories]
+        fp_per_class: list[int] = []
         for category in categories:
             pred_vals = [1 if category in cats else 0 for cats in pred_cats]
             gold_vals = [1 if category in doc.cats else 0 for doc in eval_corpus]
             class_to_data, _, _ = evalutil.classStats(trueVals=gold_vals, predVals=pred_vals)
-            accumulator.append_metrics(data_count=sum(gold_vals), stats=class_to_data[1])
+            pos = class_to_data[1]
+            fp_per_class.append(int(pos.predCnt - pos.correctCnt))
+            accumulator.append_metrics(data_count=sum(gold_vals), stats=pos)
+    else:
+        fp_per_class = []
 
     gold_vals = [doc.cats for doc in eval_corpus]
     avg_stats, micro_stats, class_stats = evalutil.multiStats(goldVals=gold_vals, predVals=pred_cats)
+
+    micro_fp = int(micro_stats.predCnt - micro_stats.correctCnt)
+    macro_mean_fp = (
+        sum(fp_per_class) / len(fp_per_class)
+        if fp_per_class
+        else float('nan')
+    )
 
     accumulator.append_metrics(data_count=avg_stats.cnt, stats=micro_stats)
     category_names.append('All - micro avg')
@@ -235,10 +347,18 @@ def evaluate_classes(
     macro_avg = AvgData.empty()
     for cat in class_stats:
         macro_avg.update(prec=class_stats[cat].precision, recall=class_stats[cat].recall)
-    accumulator.append_metrics(data_count=avg_stats.cnt, stats=macro_avg)
+    accumulator.append_metrics(
+        data_count=avg_stats.cnt,
+        stats=macro_avg,
+        false_positive_count=macro_mean_fp,
+    )
     category_names.append('All - macro avg')
 
-    accumulator.append_metrics(data_count=avg_stats.cnt, stats=avg_stats)
+    accumulator.append_metrics(
+        data_count=avg_stats.cnt,
+        stats=avg_stats,
+        false_positive_count=micro_fp,
+    )
     category_names.append('All - datapoint avg')
 
     df = pd.DataFrame(data=accumulator.to_dataframe_dict())
