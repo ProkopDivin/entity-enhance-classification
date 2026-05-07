@@ -46,6 +46,8 @@ def save_outputs(
     config_mapping: Mapping[str, Any],
     config_name: str,
     feature_dim: int,
+    tuned_thresholds: Mapping[str, float] | None = None,
+    threshold_report_df: pd.DataFrame | None = None,
     upload_artifacts: bool = False,
 ) -> SavedModelPaths:
     """
@@ -60,6 +62,11 @@ def save_outputs(
     :param config_mapping: Full serialized config dict (written to JSON as-is).
     :param config_name: Config variant name.
     :param feature_dim: Input feature dimensionality.
+    :param tuned_thresholds: Optional per-class thresholds aggregated from CV
+        folds; persisted to ``iptc.config.yaml``'s ``thresholdByTopic`` and
+        also dumped as ``thresholds.json`` for reproducibility.
+    :param threshold_report_df: Optional per-class tuning report; persisted
+        as ``threshold_report.csv`` next to the model bundle.
     :return: Paths to all saved artifacts.
     """
     import yaml
@@ -93,13 +100,20 @@ def save_outputs(
         pickle.dump(test_data.corpus, f)
 
     selected_cat_ids = list(getattr(model, 'catList', []))
+    threshold_by_topic: dict[str, float] = {}
+    if tuned_thresholds:
+        threshold_by_topic = {
+            get_cat_name(cat_id=cid): float(thr)
+            for cid, thr in tuned_thresholds.items()
+            if cid in selected_cat_ids
+        }
     config_data = {
         'testEmbeddingPath': str(test_embeddings_path),
         'embedSvcModelId': emb_cnf.article_model_name,
         'embedDim': int(feature_dim),
         'nnModelPath': str(model_path),
         'threshold': eval_cnf.threshold_eval,
-        'thresholdByTopic': {},
+        'thresholdByTopic': threshold_by_topic,
         'selectedTopics': [get_cat_name(cat_id=cat_id) for cat_id in selected_cat_ids],
     }
 
@@ -110,6 +124,16 @@ def save_outputs(
     parameters_json_path = output_dir / 'pipeline_parameters.json'
     with open(parameters_json_path, 'w', encoding='utf-8') as file:
         json.dump(config_mapping, file, indent=4)
+
+    if tuned_thresholds:
+        thresholds_json_path = output_dir / 'thresholds.json'
+        with open(thresholds_json_path, 'w', encoding='utf-8') as file:
+            json.dump({cid: float(thr) for cid, thr in tuned_thresholds.items()}, file, indent=2)
+        logger.report_text(f'Saved tuned thresholds to {thresholds_json_path.resolve()}')
+    if threshold_report_df is not None:
+        threshold_report_path = output_dir / 'threshold_report.csv'
+        threshold_report_df.to_csv(threshold_report_path, index=False)
+        logger.report_text(f'Saved threshold tuning report to {threshold_report_path.resolve()}')
 
     logger.report_text(f'Saved final model bundle to {output_dir.resolve()}')
     logger.report_text(f'Saved raw predictions to {predictions_path.resolve()}')
