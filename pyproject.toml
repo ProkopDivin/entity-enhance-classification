@@ -15,6 +15,7 @@ dependencies = [
     'optuna~=4.0',
     'pandas~=2.2',
     'iterative-stratification~=0.1',
+    'matplotlib~=3.10',
     'sentence-transformers~=3.0',
     'torch~=2.5',
     'geneea.catlib~=2.14.2',
