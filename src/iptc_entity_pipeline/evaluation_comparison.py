@@ -64,10 +64,16 @@ BOOTSTRAP_PR_AUC_ALPHA = 0.05
 BOOTSTRAP_PR_AUC_MIN_POSITIVES = 15
 BRIER_TEST_ALPHA = 0.05
 
-_CMP_METRICS: tuple[tuple[str, str], ...] = (
+_CMP_METRICS_CORE: tuple[tuple[str, str], ...] = (
     ('precision', 'Precision'),
     ('recall', 'Recall'),
     ('f1', 'F1'),
+)
+_CMP_METRICS_CLASSES: tuple[tuple[str, str], ...] = _CMP_METRICS_CORE + (
+    ('false_positive_count', 'False Positive Count'),
+)
+_CMP_METRICS_CORPORA: tuple[tuple[str, str], ...] = _CMP_METRICS_CORE + (
+    ('false_positive_rate', 'False Positive Rate'),
 )
 
 _RESULT_SHEETS: tuple[tuple[str, str, bool], ...] = (
@@ -355,6 +361,7 @@ def compare_runs(
         base_df=base_run.classes_df,
         key_col='IPTC Category',
         info_cols=['Data Count'],
+        cmp_metrics=_CMP_METRICS_CLASSES,
     )
     top_improved_df, top_degraded_df = build_top_change_dfs(classes_df=classes_cmp_full)
     gold_map = GoldLabelMap.from_corpus(corpus=current_corpus)
@@ -445,9 +452,18 @@ def compare_runs(
         base_df=base_run.corpora_df,
         key_col='Corpus Name',
         info_cols=['Data Count', 'Docs No Labels', 'Decent Labels'],
+        cmp_metrics=_CMP_METRICS_CORPORA,
     )
-    corpora_cmp_df = diff_only_df(df=corpora_cmp_full, key_col='Corpus Name') if only_diff else corpora_cmp_full
-    classes_cmp_df = diff_only_df(df=classes_cmp_full, key_col='IPTC Category') if only_diff else classes_cmp_full
+    corpora_cmp_df = (
+        diff_only_df(df=corpora_cmp_full, key_col='Corpus Name', cmp_metrics=_CMP_METRICS_CORPORA)
+        if only_diff
+        else corpora_cmp_full
+    )
+    classes_cmp_df = (
+        diff_only_df(df=classes_cmp_full, key_col='IPTC Category', cmp_metrics=_CMP_METRICS_CLASSES)
+        if only_diff
+        else classes_cmp_full
+    )
     summary_df = build_summary_df(
         current_run=current_run,
         base_run=base_run,
@@ -816,9 +832,10 @@ def build_cmp_df(
     base_df: pd.DataFrame,
     key_col: str,
     info_cols: Sequence[str],
+    cmp_metrics: tuple[tuple[str, str], ...] = _CMP_METRICS_CLASSES,
 ) -> pd.DataFrame:
     """Join current/base metric tables and compute current-base deltas."""
-    metric_cols = [col for _, col in _CMP_METRICS]
+    metric_cols = [col for _, col in cmp_metrics]
     df = current_df.reset_index().merge(
         base_df.reset_index(),
         on=key_col,
@@ -826,6 +843,11 @@ def build_cmp_df(
         suffixes=('_current', '_base'),
         sort=False,
     )
+    for _, mcol in cmp_metrics:
+        for suffix in ('_current', '_base'):
+            name = f'{mcol}{suffix}'
+            if name not in df.columns:
+                df[name] = np.nan
     for metric in metric_cols:
         df[f'{metric}_diff'] = df[f'{metric}_current'] - df[f'{metric}_base']
 
@@ -837,9 +859,14 @@ def build_cmp_df(
     return df.reindex(columns=cols)
 
 
-def diff_only_df(*, df: pd.DataFrame, key_col: str) -> pd.DataFrame:
+def diff_only_df(
+    *,
+    df: pd.DataFrame,
+    key_col: str,
+    cmp_metrics: tuple[tuple[str, str], ...] = _CMP_METRICS_CLASSES,
+) -> pd.DataFrame:
     """Drop base metric columns while preserving current values and diffs."""
-    drop_cols = {f'{col}_base' for _, col in _CMP_METRICS}
+    drop_cols = {f'{col}_base' for _, col in cmp_metrics}
     cols = [key_col]
     cols.extend(col for col in df.columns if col != key_col and col not in drop_cols)
     return df.loc[:, cols]
@@ -849,27 +876,38 @@ def diff_only_df(*, df: pd.DataFrame, key_col: str) -> pd.DataFrame:
 # Summary and metric row helpers
 # ---------------------------------------------------------------------------
 
-def _metric_row(*, summary_key: str, current: pd.Series, base: pd.Series) -> dict[str, Any]:
+def _metric_row(
+    *,
+    summary_key: str,
+    current: pd.Series,
+    base: pd.Series,
+    cmp_metrics: tuple[tuple[str, str], ...],
+) -> dict[str, Any]:
     """Build one summary row from current/base metric series."""
     row: dict[str, Any] = {'summary_key': summary_key}
-    for key, col in _CMP_METRICS:
+    for key, col in cmp_metrics:
         row[f'{key}_current'] = current[col]
         row[f'{key}_base'] = base[col]
         row[f'{key}_diff'] = current[col] - base[col]
     return row
 
 
-def _avg_metrics_row(*, summary_key: str, sub_df: pd.DataFrame) -> dict[str, Any]:
+def _avg_metrics_row(
+    *,
+    summary_key: str,
+    sub_df: pd.DataFrame,
+    cmp_metrics: tuple[tuple[str, str], ...],
+) -> dict[str, Any]:
     """Macro-average precision/recall/f1 over the rows of ``sub_df``."""
     row: dict[str, Any] = {'summary_key': summary_key}
     if sub_df.empty:
         nan = float('nan')
-        for key, _ in _CMP_METRICS:
+        for key, _ in cmp_metrics:
             row[f'{key}_current'] = nan
             row[f'{key}_base'] = nan
             row[f'{key}_diff'] = nan
         return row
-    for key, col in _CMP_METRICS:
+    for key, col in cmp_metrics:
         row[f'{key}_current'] = float(sub_df[f'{col}_current'].mean())
         row[f'{key}_base'] = float(sub_df[f'{col}_base'].mean())
         row[f'{key}_diff'] = float(sub_df[f'{col}_diff'].mean())
@@ -894,7 +932,10 @@ def build_summary_df(
     for summary_key, (group_name, row_name) in SUMMARY_ROWS.items():
         current_row = tables[f'{group_name}_current'].loc[row_name]
         base_row = tables[f'{group_name}_base'].loc[row_name]
-        rows.append(_metric_row(summary_key=summary_key, current=current_row, base=base_row))
+        mets = _CMP_METRICS_CLASSES if group_name == 'classes' else _CMP_METRICS_CORPORA
+        rows.append(
+            _metric_row(summary_key=summary_key, current=current_row, base=base_row, cmp_metrics=mets),
+        )
 
     classes_filtered = classes_cmp[~classes_cmp['IPTC Category'].isin(AGG_CLASS_ROWS)].copy()
     classes_filtered['support'] = classes_filtered['Data Count_current'].combine_first(
@@ -904,7 +945,11 @@ def build_summary_df(
         mask = (classes_filtered['support'] >= low) & (classes_filtered['support'] < high)
         sub = classes_filtered[mask]
         rows.append(
-            _avg_metrics_row(summary_key=f'macro_over_classes_support_{label}', sub_df=sub)
+            _avg_metrics_row(
+                summary_key=f'macro_over_classes_support_{label}',
+                sub_df=sub,
+                cmp_metrics=_CMP_METRICS_CLASSES,
+            )
         )
 
     corpora_filtered = corpora_cmp[~corpora_cmp['Corpus Name'].isin(AGG_CORPUS_ROWS)].copy()
@@ -912,7 +957,11 @@ def build_summary_df(
         mask = corpora_filtered['Corpus Name'].str.startswith(f'{prefix}_')
         sub = corpora_filtered[mask]
         rows.append(
-            _avg_metrics_row(summary_key=f'macro_over_corpora_prefix_{prefix}', sub_df=sub)
+            _avg_metrics_row(
+                summary_key=f'macro_over_corpora_prefix_{prefix}',
+                sub_df=sub,
+                cmp_metrics=_CMP_METRICS_CORPORA,
+            )
         )
 
     eurosport_mask = corpora_filtered['Corpus Name'].str.contains(EUROSPORT_TOKEN, case=False, na=False)
@@ -920,6 +969,7 @@ def build_summary_df(
         _avg_metrics_row(
             summary_key=f'macro_over_corpora_{EUROSPORT_TOKEN}',
             sub_df=corpora_filtered[eurosport_mask],
+            cmp_metrics=_CMP_METRICS_CORPORA,
         )
     )
 
@@ -930,6 +980,7 @@ def build_summary_df(
             summary_key='macro_over_corpora',
             current=macro_corpora_current,
             base=macro_corpora_base,
+            cmp_metrics=_CMP_METRICS_CORPORA,
         )
     )
     return pd.DataFrame(rows)
@@ -957,6 +1008,9 @@ def build_top_change_dfs(*, classes_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.
         'F1_current',
         'F1_base',
         'F1_diff',
+        'False Positive Count_current',
+        'False Positive Count_base',
+        'False Positive Count_diff',
     ]
     improved_df = df[df['F1_diff'] > 0].sort_values(
         by=['F1_diff', 'ranking_score', 'article_frequency'],
