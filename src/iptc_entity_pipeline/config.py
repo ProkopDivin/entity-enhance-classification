@@ -357,8 +357,10 @@ class DebugCnf(BaseCnf):
         )
     )
 
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), folds=2))
     cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=2))
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
     debug: bool = True
 
 
