@@ -133,10 +133,53 @@ class ThresholdTuningCnf:
 
     enabled: bool = False
     thresholds: tuple[float, ...] = field(
-        default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(2, 19))
+        # používám jen pro toto
+        default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(5, 16))
     )
     f_beta: float = 1.0
     aggregation: Literal['mean', 'mode'] = 'mean'
+
+
+@dataclass(frozen=True)
+class AssemblyMemberCnf:
+    """One member of an assembly ensemble.
+
+    :param config_name: Name registered in ``_config_map()``. Only the
+        member's ``emb``, ``model`` and ``train`` blocks are used; its
+        ``cv``/``optuna``/``hparam``/``tuning`` are ignored because
+        assembly skips HPO and threshold tuning.
+    :param thresholds_path: Per-class threshold JSON ``{cat_id: float}``.
+        Missing classes fall back to ``EvaluationCnf.threshold_eval``.
+    :param label: Short identifier used in tables and artifact filenames.
+    """
+
+    config_name: str = ''
+    thresholds_path: str = ''
+    label: str = ''
+
+
+@dataclass(frozen=True)
+class AssemblyCnf:
+    """Dual-model ensemble configuration.
+
+    Activated when ``enabled=True``. Replaces ``run_cv`` with
+    ``run_assembly``; runs each member's data prep + final training
+    separately; produces a per-class model selection and stitched
+    per-class thresholds.
+
+    :param members: Tuple of two member specs. Index 0 is the primary
+        member; ties on average F1 resolve to the primary.
+    :param category_list_path: Shared category list JSON. The first
+        member to reach ``build_dataset`` writes the file if absent;
+        the second verifies its ``corpus.catList`` matches.
+    :param mapping_artifact_name: ClearML artifact name for the
+        ``class_to_model`` mapping JSON.
+    """
+
+    enabled: bool = False
+    members: tuple[AssemblyMemberCnf, ...] = ()
+    category_list_path: str = f'{DATA_ROOT}/assembly/category_list.json'
+    mapping_artifact_name: str = 'assembly_class_to_model'
 
 
 @dataclass(frozen=True)
@@ -152,6 +195,7 @@ class BaseCnf:
     optuna: OptunaCnf = field(default_factory=OptunaCnf)
     hparam: HyperparamSpace = field(default_factory=HyperparamSpace)
     tuning: ThresholdTuningCnf = field(default_factory=ThresholdTuningCnf)
+    assembly: AssemblyCnf = field(default_factory=AssemblyCnf)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
@@ -679,7 +723,27 @@ def resolve_paths(config: BaseCnf, root_dir: str | Path) -> BaseCnf:
         downsampling_order_cache_json=str(root_path / paths.downsampling_order_cache_json),
         removed_cat_ids=paths.removed_cat_ids,
     )
-    return replace(config, paths=resolved_paths)
+    resolved_assembly = _resolve_assembly(assembly=config.assembly, root_path=root_path)
+    return replace(config, paths=resolved_paths, assembly=resolved_assembly)
+
+
+def _resolve_assembly(*, assembly: AssemblyCnf, root_path: Path) -> AssemblyCnf:
+    """Return an ``AssemblyCnf`` with member threshold paths and the shared
+    category-list path rebased on ``root_path``.
+
+    Absolute paths pass through unchanged because ``Path / abs`` returns the
+    absolute path. The function is a no-op for the default disabled assembly.
+    """
+    resolved_members = tuple(
+        replace(member, thresholds_path=str(root_path / member.thresholds_path))
+        if member.thresholds_path else member
+        for member in assembly.members
+    )
+    return replace(
+        assembly,
+        members=resolved_members,
+        category_list_path=str(root_path / assembly.category_list_path),
+    )
 
 
 @dataclass(frozen=True)
@@ -850,6 +914,34 @@ class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
     )
 
 
+@dataclass(frozen=True)
+class AssemblyExampleCnf(BaseCnf):
+    """Dual-model ensemble: ``best_article_only`` + ``best_wpentities``.
+
+    Demonstrates the assembly pipeline mode. Both members reference existing
+    registered configs; threshold files are loaded from ``data/assembly/``
+    and combined per-class according to the model selected by CV F1.
+    """
+
+    assembly: AssemblyCnf = field(
+        default_factory=lambda: AssemblyCnf(
+            enabled=True,
+            members=(
+                AssemblyMemberCnf(
+                    config_name='best_article_only',
+                    thresholds_path=f'{DATA_ROOT}/assembly/thresholds_article_only.json',
+                    label='article_only',
+                ),
+                AssemblyMemberCnf(
+                    config_name='best_wpentities',
+                    thresholds_path=f'{DATA_ROOT}/assembly/thresholds_wpentities.json',
+                    label='wpentities',
+                ),
+            ),
+        )
+    )
+
+
 def _iter_subclasses(base_cls: type[Any]) -> tuple[type[Any], ...]:
     """Return all transitive subclasses of ``base_cls``."""
     found: dict[type[Any], None] = {}
@@ -933,6 +1025,7 @@ def _config_map() -> dict[str, BaseCnf]:
         
         'learning_rate': TunningLearningRateCnf(),
         'learning_rate_f1': TunningLearningRateF1Cnf(),
+        'assembly_example': AssemblyExampleCnf(),
     }
 
 

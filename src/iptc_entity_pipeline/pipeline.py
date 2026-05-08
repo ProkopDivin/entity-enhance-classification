@@ -137,8 +137,19 @@ def build_dataset(
     paths_cnf: Mapping[str, Any],
     emb_cnf: Mapping[str, Any],
     article_embedding_stats: Mapping[str, Any],
+    assembly_cnf: Mapping[str, Any] | None = None,
 ):
-    """Link embeddings and build train/test embedding datasets."""
+    """Link embeddings and build train/test embedding datasets.
+
+    When ``assembly_cnf`` is provided and its ``enabled`` flag is true, the
+    train corpus's ``catList`` is validated against (or written to) the
+    shared category-list JSON at ``assembly_cnf['category_list_path']``.
+    The orchestrator augments ``assembly_cnf`` with a ``current_member_label``
+    key per call so error messages identify the member.
+    """
+    from pathlib import Path
+
+    from iptc_entity_pipeline.assembly_io import validate_or_write_cat_list
     from iptc_entity_pipeline.build_dataset import no_entities, report_ent_stats, get_pooling
     from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, conf_from_dict
     from iptc_entity_pipeline.dataset_builder import build_emb_data
@@ -151,6 +162,18 @@ def build_dataset(
     emb = conf_from_dict(EmbeddingCnf, emb_cnf)
     if not emb.use_article_embeddings and not emb.use_entity_embeddings:
         raise ValueError('Invalid embedding config: both use_article_embeddings and use_entity_embeddings are False')
+
+    def _maybe_validate_cat_list(*, train_data) -> None:
+        if not assembly_cnf or not assembly_cnf.get('enabled'):
+            return
+        cat_list_path = assembly_cnf.get('category_list_path')
+        if not cat_list_path:
+            return
+        validate_or_write_cat_list(
+            path=Path(cat_list_path),
+            cat_list=list(train_data.corpus.catList),
+            member_label=str(assembly_cnf.get('current_member_label', 'unknown')),
+        )
 
     logger.info('Initializing providers for entity preparation + linking step')
     logger.info(
@@ -174,6 +197,7 @@ def build_dataset(
             article_provider=article_provider,
             logger=logger,
         )
+        _maybe_validate_cat_list(train_data=dataset_bundle.train_data)
         return dataset_bundle.train_data, dataset_bundle.test_data, dataset_bundle.feature_dim
 
     selected_langs = tuple(emb.entity_langs) if emb.entity_langs else (emb.entity_lang,)
@@ -209,9 +233,10 @@ def build_dataset(
     train_data = build_emb_data(corpus=corpora.train, x_matrix=x_train)
     test_data = build_emb_data(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
-    
+
+    _maybe_validate_cat_list(train_data=train_data)
     return train_data, test_data, feature_dim
-    
+
 
 @PipelineDecorator.component(
     return_values=['cvResult'],
@@ -333,6 +358,100 @@ def run_cv(
             )
 
     return cv_result
+
+@PipelineDecorator.component(
+    return_values=['assemblyResult'],
+    execution_queue='iptc_entity_tasks',
+    task_type=TaskTypes.training,
+)
+def run_assembly_step(
+    member_train_data,
+    member_feature_dims,
+    member_model_cnfs,
+    member_train_cnfs,
+    member_thresholds,
+    member_labels,
+    eval_cnf: Mapping[str, Any],
+    cv_cnf: Mapping[str, Any],
+    objective_corpora: str,
+    print_logs: bool = True,
+    debug: bool = False,
+    upload_artifacts: bool = False,
+    mapping_artifact_name: str = 'assembly_class_to_model',
+):
+    """Run the assembly CV: trains both members per fold, picks per-class winners.
+
+    Returns an :class:`assembly.AssemblyCvResult` with the same downstream
+    surface as ``run_cv``'s ``CvResult``.
+    """
+    from dataclasses import asdict
+
+    from iptc_entity_pipeline.assembly import run_assembly
+    from iptc_entity_pipeline.config import (
+        CvCnf,
+        EvaluationCnf,
+        ModelCnf,
+        TrainingCnf,
+        conf_from_dict,
+    )
+
+    conf_logging()
+    logger = logging.getLogger(__name__)
+    task = Task.current_task()
+    clearml_logger = task.get_logger()
+
+    eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
+    cv_cfg = conf_from_dict(CvCnf, cv_cnf)
+    model_cfgs = [conf_from_dict(ModelCnf, m) for m in member_model_cnfs]
+    train_cfgs = [conf_from_dict(TrainingCnf, t) for t in member_train_cnfs]
+
+    task.connect(asdict(eval_cfg), name='evaluationConfig')
+    task.connect(asdict(cv_cfg), name='cvConfig')
+    for idx, label in enumerate(member_labels):
+        task.connect(member_model_cnfs[idx], name=f'modelConfig_{label}')
+        task.connect(member_train_cnfs[idx], name=f'trainingConfig_{label}')
+
+    logger.info(
+        f'Assembly step: members={list(member_labels)} '
+        f'folds={cv_cfg.folds} debug={debug}'
+    )
+
+    assembly_result = run_assembly(
+        member_train_data=member_train_data,
+        member_feature_dims=member_feature_dims,
+        member_model_cfgs=model_cfgs,
+        member_train_cfgs=train_cfgs,
+        member_thresholds=member_thresholds,
+        member_labels=member_labels,
+        eval_cfg=eval_cfg,
+        cv_cfg=cv_cfg,
+        objective_corpora=objective_corpora,
+        debug=debug,
+        print_logs=print_logs,
+        clearml_logger=clearml_logger,
+    )
+
+    mapping_payload = {
+        'schema_version': '1',
+        'member_labels': list(assembly_result.class_to_model.member_labels),
+        'primary_index': 0,
+        'assignments': dict(assembly_result.class_to_model.assignments),
+        'stitched_thresholds': dict(assembly_result.tuned_thresholds),
+    }
+    task.upload_artifact(mapping_artifact_name, artifact_object=mapping_payload)
+    if upload_artifacts:
+        task.upload_artifact(
+            'assembly_per_class_f1', artifact_object=assembly_result.per_class_f1_df,
+        )
+        task.upload_artifact(
+            'assembly_per_fold_f1', artifact_object=assembly_result.per_fold_f1_df,
+        )
+        task.upload_artifact(
+            'assembly_threshold_report', artifact_object=assembly_result.threshold_report_df,
+        )
+
+    return assembly_result
+
 
 @PipelineDecorator.component(
     return_values=['trainedModel'],
@@ -571,6 +690,205 @@ def eval_final(
     )
 
 
+def _run_assembly_training_pipeline(
+    *,
+    cnf: Mapping[str, Any],
+    assembly_cnf: Mapping[str, Any],
+    paths_cnf: Mapping[str, Any],
+    eval_cnf: Mapping[str, Any],
+    cv_cnf: Mapping[str, Any],
+    objective_corpora: str,
+    downsample_corpora: Mapping[str, float],
+    config_name: str,
+    print_logs: bool,
+    debug: bool,
+    upload_artifacts: bool,
+) -> None:
+    """Run the dual-model assembly variant of the training pipeline.
+
+    Steps:
+      1) For each member: load_data, prepare_article_embeddings, build_dataset
+         (cat-list validation runs inside ``build_dataset`` for the assembly).
+      2) Load each member's per-class thresholds.
+      3) Run the assembly CV step (replaces ``run_cv``).
+      4) Train each member on full train via ``train_best`` (early stopping
+         disabled at the call site).
+      5) Wrap the trained members in :class:`AssemblyModel` and run
+         ``eval_final`` on it (no changes needed there).
+    """
+    from dataclasses import asdict, replace as dc_replace
+    from pathlib import Path
+
+    from iptc_entity_pipeline.assembly_io import load_thresholds
+    from iptc_entity_pipeline.assembly_model import AssemblyModel
+    from iptc_entity_pipeline.config import AssemblyMemberCnf, conf_from_dict, get_config
+
+    task = Task.current_task()
+    members_raw = list(assembly_cnf.get('members') or ())
+    if len(members_raw) < 2:
+        raise ValueError('assembly.members must contain at least two members')
+
+    members: list[AssemblyMemberCnf] = [conf_from_dict(AssemblyMemberCnf, m) for m in members_raw]
+    member_full_cnfs = [get_config(m.config_name) for m in members]
+    member_labels = [m.label or m.config_name for m in members]
+
+    log_stage(
+        task=task,
+        message=f'Assembly mode: {len(members)} members={member_labels}',
+        print_logs=print_logs,
+    )
+
+    member_train_data: list[Any] = []
+    member_test_data: list[Any] = []
+    member_feature_dims: list[int] = []
+    for idx, member in enumerate(members):
+        m_cnf = member_full_cnfs[idx]
+        m_emb = asdict(m_cnf.emb)
+        log_stage(
+            task=task,
+            message=f'Assembly member {idx + 1}/{len(members)} ({member.label}): data prep',
+            print_logs=print_logs,
+        )
+        m_corpora = load_data(
+            paths_cnf=paths_cnf,
+            emb_cnf=m_emb,
+            downsample_corpora=downsample_corpora,
+        )
+        m_article_stats = prepare_article_embeddings(
+            corpora=m_corpora,
+            paths_cnf=paths_cnf,
+            emb_cnf=m_emb,
+        )
+        if upload_artifacts:
+            task.upload_artifact(
+                f'article_embedding_stats_{member.label}',
+                artifact_object=dict(m_article_stats),
+            )
+        m_assembly_cnf = {**dict(assembly_cnf), 'current_member_label': member.label}
+        m_train_data, m_test_data, m_feature_dim = build_dataset(
+            corpora=m_corpora,
+            paths_cnf=paths_cnf,
+            emb_cnf=m_emb,
+            article_embedding_stats=m_article_stats,
+            assembly_cnf=m_assembly_cnf,
+        )
+        member_train_data.append(m_train_data)
+        member_test_data.append(m_test_data)
+        member_feature_dims.append(m_feature_dim)
+
+    cat_list = list(member_train_data[0].corpus.catList)
+    member_thresholds = [
+        load_thresholds(
+            path=Path(member.thresholds_path),
+            cat_list=cat_list,
+            default_threshold=float(eval_cnf.get('threshold_eval', 0.5)),
+        )
+        for member in members
+    ]
+
+    log_stage(
+        task=task,
+        message=f'Assembly CV: {cv_cnf.get("folds", 5)}-fold per-class selection',
+        print_logs=print_logs,
+    )
+    assembly_result = run_assembly_step(
+        member_train_data=member_train_data,
+        member_feature_dims=member_feature_dims,
+        member_model_cnfs=[asdict(c.model) for c in member_full_cnfs],
+        member_train_cnfs=[asdict(c.train) for c in member_full_cnfs],
+        member_thresholds=member_thresholds,
+        member_labels=member_labels,
+        eval_cnf=eval_cnf,
+        cv_cnf=cv_cnf,
+        objective_corpora=objective_corpora,
+        print_logs=print_logs,
+        debug=debug,
+        upload_artifacts=upload_artifacts,
+        mapping_artifact_name=str(assembly_cnf.get('mapping_artifact_name', 'assembly_class_to_model')),
+    )
+
+    log_stage(
+        task=task,
+        message='Assembly final training: training each member on full train',
+        print_logs=print_logs,
+    )
+    trained_members: list[Any] = []
+    shared_test_data = member_test_data[0]
+    for idx, m_cnf in enumerate(member_full_cnfs):
+        member_train_cfg = dc_replace(m_cnf.train, early_stopping_patience=0)
+        trained = train_best(
+            train_data=member_train_data[idx],
+            test_data=shared_test_data,
+            feature_dim=member_feature_dims[idx],
+            best_model_cnf=asdict(m_cnf.model),
+            train_cnf=asdict(member_train_cfg),
+            print_logs=print_logs,
+        )
+        trained_members.append(trained)
+
+    assembled_model = AssemblyModel(
+        members=trained_members,
+        cat_list=cat_list,
+        class_to_model=assembly_result.class_to_model,
+    )
+
+    log_stage(
+        task=task,
+        message='Assembly: evaluating ensembled model on test',
+        print_logs=print_logs,
+    )
+    eval_result = eval_final(
+        trained_model=assembled_model,
+        cv_dev_df=assembly_result.cv_dev_df,
+        test_data=shared_test_data,
+        eval_cnf=eval_cnf,
+        emb_cnf=asdict(member_full_cnfs[0].emb),
+        objective_corpora=objective_corpora,
+        config_name=config_name,
+        config_mapping=cnf,
+        feature_dim=member_feature_dims[0],
+        tuned_thresholds=assembly_result.tuned_thresholds,
+        threshold_report_df=assembly_result.threshold_report_df,
+        upload_artifacts=upload_artifacts,
+    )
+
+    logger = task.get_logger()
+    objective_row_name = f'All-{eval_cnf["averaging_type"]}'
+    if objective_row_name in eval_result.dev_corpora_df.index:
+        row_cv = eval_result.dev_corpora_df.loc[objective_row_name].to_dict()
+    else:
+        row_cv = eval_result.dev_corpora_df.iloc[0].to_dict()
+    report_eval(logger=logger, title='Cross Validation Results', row=row_cv, iteration=0)
+    if 'Precision_std' in row_cv:
+        report_cv_std(logger=logger, row=row_cv, title='Cross Validation Results', iteration=0)
+    report_eval(
+        logger=logger,
+        title='Test Evaluation Results',
+        row=eval_result.objective_metrics,
+        iteration=0,
+    )
+    if 'All-micro' in eval_result.test_corpora_df.index:
+        report_eval(
+            logger=logger,
+            title='Test Evaluation Results (micro)',
+            row=eval_result.test_corpora_df.loc['All-micro'].to_dict(),
+            iteration=0,
+        )
+
+    if upload_artifacts:
+        task.upload_artifact('pipeline_config', artifact_object=dict(cnf))
+        task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
+        task.upload_artifact('dev_corpora_dataframe', artifact_object=eval_result.dev_corpora_df)
+        task.upload_artifact('test_corpora_dataframe', artifact_object=eval_result.test_corpora_df)
+        task.upload_artifact('test_classes_dataframe', artifact_object=eval_result.test_classes_df)
+
+    log_stage(
+        task=task,
+        message='Assembly pipeline finished',
+        print_logs=print_logs,
+    )
+
+
 @PipelineDecorator.pipeline(
     name='iptc-entity-enhanced-v1',
     project='iptc/EntityEnhanced',
@@ -592,6 +910,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     cv_cnf = cnf.get('cv', {'folds': 5, 'random_seed': 43})
     optuna_cnf = cnf.get('optuna', {})
     tuning_cnf = cnf.get('tuning', {'enabled': False})
+    assembly_cnf = cnf.get('assembly') or {'enabled': False}
     hparam_cnf = cnf['hparam']
     obj_corpora = cnf['objective_corpora']
     down_smpl = cnf.get('downsample_corpora', {})
@@ -600,6 +919,22 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     print_logs = bool(cnf.get('print_logs', True))
     debug = bool(cnf.get('debug', False))
     upload_artifacts = bool(cnf.get('upload_artifacts', False))
+
+    if assembly_cnf.get('enabled'):
+        _run_assembly_training_pipeline(
+            cnf=cnf,
+            assembly_cnf=assembly_cnf,
+            paths_cnf=paths_cnf,
+            eval_cnf=eval_cnf,
+            cv_cnf=cv_cnf,
+            objective_corpora=obj_corpora,
+            downsample_corpora=down_smpl,
+            config_name=config_name,
+            print_logs=print_logs,
+            debug=debug,
+            upload_artifacts=upload_artifacts,
+        )
+        return
 
     if not use_art_emb and not use_ent_emb:
         raise ValueError('Invalid embedding config: both use_article_embeddings and use_entity_embeddings are False')
