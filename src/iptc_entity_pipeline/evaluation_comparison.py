@@ -63,6 +63,8 @@ BOOTSTRAP_PR_AUC_SEED = 43
 BOOTSTRAP_PR_AUC_ALPHA = 0.05
 BOOTSTRAP_PR_AUC_MIN_POSITIVES = 15
 BRIER_TEST_ALPHA = 0.05
+BRIER_MIN_POSITIVE_SAMPLES = BOOTSTRAP_PR_AUC_MIN_POSITIVES
+BRIER_STRATIFIED_MIN_SAMPLES = 15
 
 _CMP_METRICS_CORE: tuple[tuple[str, str], ...] = (
     ('precision', 'Precision'),
@@ -141,7 +143,7 @@ class GoldArticle:
 
 
 @dataclass(frozen=True)
-class GoldLabelMap:
+class  GoldLabelMap:
     """Gold labels loaded once and reused across all comparisons."""
 
     df: pd.DataFrame
@@ -315,8 +317,9 @@ def compare_runs(
     ``use_saved_thresholds`` is ``True``. Each run uses its own thresholds for
     F1/precision/recall tables, McNemar, Hamming, and per-article F1 deltas.
     Runs without a thresholds file fall back to ``threshold_eval`` for every
-    class. Score-based metrics (PR-AUC, Brier) ignore thresholds by design.
-
+    class. Score-based metrics (PR-AUC) ignore thresholds in the statistic
+    itself. Brier likewise uses calibrated probabilities versus gold labels, but
+    Brier table rows attach effective thresholds for diagnostics.
     :param current_run_dir: Directory of the current run.
     :param base_run_dir: Directory of the base run.
     :param threshold_eval: Default threshold for classes missing from a run's
@@ -410,6 +413,10 @@ def compare_runs(
         gold_map=gold_map,
         cat_ids=cat_ids,
         alpha=BRIER_TEST_ALPHA,
+        min_positive_samples=BRIER_MIN_POSITIVE_SAMPLES,
+        threshold_eval=threshold_eval,
+        cat_to_thr_current=current_thresholds if use_saved_thresholds else {},
+        cat_to_thr_base=base_thresholds if use_saved_thresholds else {},
     )
     top_improved_df, top_degraded_df = add_brier_to_top_change_dfs(
         improved_df=top_improved_df,
@@ -1042,6 +1049,10 @@ def build_mcnemar_significance_df(
     model is wrong. ``n01`` counts the opposite. Rows with too few
     disagreements do not pass significance and receive ``NaN`` p-values.
 
+    Raw ``mcnemar_p_value`` entries are adjusted **across classes** with
+    Benjamini-Hochberg FDR (``mcnemar_p_value_fdr``). Pass flags use the FDR
+    column with ``alpha``, same pattern as Brier and bootstrap PR-AUC.
+
     :param current_thr_vec: Per-class threshold vector for the current run
         (aligned with ``cat_ids``).
     :param base_thr_vec: Per-class threshold vector for the base run.
@@ -1081,11 +1092,25 @@ def build_mcnemar_significance_df(
                 'base_false_negatives': int(
                     np.logical_and(np.logical_not(base_pred[:, idx]), gold_matrix[:, idx]).sum()
                 ),
-                'mcnemar_current_significant': int(not skipped and p_value < alpha and n10 > n01),
-                'mcnemar_base_significant': int(not skipped and p_value < alpha and n01 > n10),
             }
         )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    p_numpy = df['mcnemar_p_value'].to_numpy(dtype=float)
+    fdr = np.full(len(df), np.nan, dtype=float)
+    ok = np.isfinite(p_numpy)
+    if np.any(ok):
+        fdr[ok] = benjamini_hochberg(p_values=p_numpy[ok])
+    df['mcnemar_p_value_fdr'] = fdr
+    fdr_ok = np.isfinite(df['mcnemar_p_value_fdr'].to_numpy(dtype=float))
+    n10s = df['mcnemar_n10_current_only_correct'].to_numpy(dtype=int)
+    n01s = df['mcnemar_n01_base_only_correct'].to_numpy(dtype=int)
+    df['mcnemar_current_significant'] = (
+        fdr_ok & (df['mcnemar_p_value_fdr'] < alpha) & (n10s > n01s)
+    ).astype(int)
+    df['mcnemar_base_significant'] = (
+        fdr_ok & (df['mcnemar_p_value_fdr'] < alpha) & (n01s > n10s)
+    ).astype(int)
+    return df
 
 
 def mcnemar_p_value(*, n10: int, n01: int) -> float:
@@ -1128,6 +1153,7 @@ def _add_mcnemar_to_top_change_df(
     cols = [
         'IPTC Category',
         'mcnemar_p_value',
+        'mcnemar_p_value_fdr',
         'mcnemar_n10_current_only_correct',
         'mcnemar_n01_base_only_correct',
         'mcnemar_disagreements',
@@ -1143,6 +1169,7 @@ def _add_mcnemar_to_top_change_df(
     metric_cols = [
         'mcnemar_pass',
         'mcnemar_p_value',
+        'mcnemar_p_value_fdr',
         'mcnemar_n10_current_only_correct',
         'mcnemar_n01_base_only_correct',
         'mcnemar_disagreements',
@@ -1325,6 +1352,7 @@ def _add_bootstrap_pr_auc_to_top_change_df(
         fdr_col,
         'bootstrap_pr_auc_mean_diff',
         'bootstrap_pr_auc_positive_count',
+        'bootstrap_pr_auc_draws_attempted',
         'bootstrap_pr_auc_iterations',
         pass_col,
     ]
@@ -1356,33 +1384,151 @@ def build_brier_significance_df(
     gold_map: GoldLabelMap,
     cat_ids: Sequence[str],
     alpha: float = BRIER_TEST_ALPHA,
+    min_positive_samples: int = BRIER_MIN_POSITIVE_SAMPLES,
+    threshold_eval: float | None = None,
+    cat_to_thr_current: Mapping[str, float] | None = None,
+    cat_to_thr_base: Mapping[str, float] | None = None,
 ) -> pd.DataFrame:
-    """Build per-class Brier-score Wilcoxon significance rows with FDR correction."""
+    """Build per-class Brier-score Wilcoxon significance rows with FDR correction.
+
+    Wilcoxon and FDR are applied only where gold positive count for the label
+    is at least ``min_positive_samples`` (aligned with bootstrap PR-AUC cutoff).
+    Other rows retain mean squared errors but set p-values to NaN and
+    significance flags to ``0``.
+    """
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(float)
     current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
     base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
 
-    rows = []
+    thr_c = dict(cat_to_thr_current) if cat_to_thr_current else {}
+    thr_b = dict(cat_to_thr_base) if cat_to_thr_base else {}
+    default_thr = float(threshold_eval) if threshold_eval is not None else 0.5
+
+    rows: list[dict[str, Any]] = []
     for idx, cat_id in enumerate(cat_ids):
-        current_errors = np.square(current_scores[:, idx] - gold_matrix[:, idx])
-        base_errors = np.square(base_scores[:, idx] - gold_matrix[:, idx])
+        positives = gold_matrix[:, idx]
+        gold_positive_count = int(positives.sum())
+        wilcox_eligible_int = int(gold_positive_count >= min_positive_samples)
+        current_errors = np.square(current_scores[:, idx] - positives)
+        base_errors = np.square(base_scores[:, idx] - positives)
         mean_diff = float(np.mean(current_errors) - np.mean(base_errors))
+
+        diff = current_errors - base_errors
+        p_val = wilcoxon_signed_rank_p_value(diff) if wilcox_eligible_int else float('nan')
+
+        # Stratified Brier test: separate positive (gold==1) and negative (gold==0) samples.
+        positives_mask = positives.astype(bool)
+        negatives_mask = np.logical_not(positives_mask)
+        pos_n = int(positives_mask.sum())
+        neg_n = int(negatives_mask.sum())
+
+        if pos_n > 0:
+            mean_diff_pos = float(
+                np.mean(current_errors[positives_mask]) - np.mean(base_errors[positives_mask])
+            )
+        else:
+            mean_diff_pos = float('nan')
+        if pos_n >= BRIER_STRATIFIED_MIN_SAMPLES:
+            p_val_pos = wilcoxon_signed_rank_p_value(
+                current_errors[positives_mask] - base_errors[positives_mask]
+            )
+        else:
+            p_val_pos = float('nan')
+
+        if neg_n > 0:
+            mean_diff_neg = float(
+                np.mean(current_errors[negatives_mask]) - np.mean(base_errors[negatives_mask])
+            )
+        else:
+            mean_diff_neg = float('nan')
+        if neg_n >= BRIER_STRATIFIED_MIN_SAMPLES:
+            p_val_neg = wilcoxon_signed_rank_p_value(
+                current_errors[negatives_mask] - base_errors[negatives_mask]
+            )
+        else:
+            p_val_neg = float('nan')
+
+        in_c = str(cat_id) in thr_c
+        in_b = str(cat_id) in thr_b
+        if in_c and in_b:
+            saved_thr_runs = 'both'
+        elif in_c:
+            saved_thr_runs = 'current'
+        elif in_b:
+            saved_thr_runs = 'base'
+        else:
+            saved_thr_runs = 'none'
+
+        eff_c = float(thr_c.get(str(cat_id), default_thr))
+        eff_b = float(thr_b.get(str(cat_id), default_thr))
+
         rows.append(
             {
                 'IPTC Category': safe_cat_label(cat_id=cat_id),
                 'cat_id': cat_id,
-                'brier_p_value': wilcoxon_signed_rank_p_value(current_errors - base_errors),
+                'brier_gold_positive_count': gold_positive_count,
+                'brier_gold_negative_count': neg_n,
+                'brier_wilcoxon_eligible': wilcox_eligible_int,
+                'saved_custom_threshold_run': saved_thr_runs,
+                'custom_threshold_saved_current': int(in_c),
+                'custom_threshold_saved_base': int(in_b),
+                'effective_threshold_current': eff_c,
+                'effective_threshold_base': eff_b,
+                'brier_p_value': p_val,
                 'brier_mean_error_diff': mean_diff,
                 'brier_current_mean_error': float(np.mean(current_errors)),
                 'brier_base_mean_error': float(np.mean(base_errors)),
+                'brier_p_value_pos': p_val_pos,
+                'brier_mean_error_diff_pos': mean_diff_pos,
+                'brier_p_value_neg': p_val_neg,
+                'brier_mean_error_diff_neg': mean_diff_neg,
             }
         )
 
     df = pd.DataFrame(rows)
-    df['brier_p_value_fdr'] = benjamini_hochberg(p_values=df['brier_p_value'].to_numpy(dtype=float))
-    df['brier_current_significant'] = ((df['brier_p_value_fdr'] < alpha) & (df['brier_mean_error_diff'] < 0)).astype(int)
-    df['brier_base_significant'] = ((df['brier_p_value_fdr'] < alpha) & (df['brier_mean_error_diff'] > 0)).astype(int)
+    p_numpy = df['brier_p_value'].to_numpy(dtype=float)
+    fdr = np.full(len(df), np.nan, dtype=float)
+    ok = np.isfinite(p_numpy)
+    if np.any(ok):
+        fdr[ok] = benjamini_hochberg(p_values=p_numpy[ok])
+    df['brier_p_value_fdr'] = fdr
+
+    elig = df['brier_wilcoxon_eligible'].astype(bool)
+    fdr_ok = np.isfinite(df['brier_p_value_fdr'].to_numpy(dtype=float))
+    df['brier_current_significant'] = (
+        elig & fdr_ok & (df['brier_p_value_fdr'] < alpha) & (df['brier_mean_error_diff'] < 0)
+    ).astype(int)
+    df['brier_base_significant'] = (
+        elig & fdr_ok & (df['brier_p_value_fdr'] < alpha) & (df['brier_mean_error_diff'] > 0)
+    ).astype(int)
+
+    # Stratified Brier test: BH FDR applied independently per stratum.
+    p_pos = df['brier_p_value_pos'].to_numpy(dtype=float)
+    fdr_pos = np.full(len(df), np.nan, dtype=float)
+    ok_pos = np.isfinite(p_pos)
+    if np.any(ok_pos):
+        fdr_pos[ok_pos] = benjamini_hochberg(p_values=p_pos[ok_pos])
+    df['brier_p_value_fdr_pos'] = fdr_pos
+
+    p_neg = df['brier_p_value_neg'].to_numpy(dtype=float)
+    fdr_neg = np.full(len(df), np.nan, dtype=float)
+    ok_neg = np.isfinite(p_neg)
+    if np.any(ok_neg):
+        fdr_neg[ok_neg] = benjamini_hochberg(p_values=p_neg[ok_neg])
+    df['brier_p_value_fdr_neg'] = fdr_neg
+
+    mean_diff_pos_arr = df['brier_mean_error_diff_pos'].to_numpy(dtype=float)
+    mean_diff_neg_arr = df['brier_mean_error_diff_neg'].to_numpy(dtype=float)
+    df['brier_positive'] = (
+        np.isfinite(fdr_pos) & (fdr_pos < alpha) & (mean_diff_pos_arr < 0)
+    ).astype(int)
+    df['brier_negative'] = (
+        np.isfinite(fdr_neg) & (fdr_neg < alpha) & (mean_diff_neg_arr < 0)
+    ).astype(int)
+    n_passed = df['brier_positive'].astype(int) + df['brier_negative'].astype(int)
+    df['brier_stratified_passed_1_test'] = (n_passed >= 1).astype(int)
+    df['brier_stratified_passed_2_tests'] = (n_passed == 2).astype(int)
     return df
 
 
@@ -1442,26 +1588,47 @@ def add_brier_to_top_change_dfs(
 
 def _add_brier_to_top_change_df(*, df: pd.DataFrame, brier_df: pd.DataFrame, pass_col: str) -> pd.DataFrame:
     """Merge Brier rows and expose a direction-aware pass flag."""
-    cols = [
-        'IPTC Category',
-        'brier_p_value',
-        'brier_p_value_fdr',
-        'brier_mean_error_diff',
-        'brier_current_mean_error',
-        'brier_base_mean_error',
-        pass_col,
+    diag_cols = [
+        'brier_gold_positive_count',
+        'brier_wilcoxon_eligible',
+        'saved_custom_threshold_run',
+        'custom_threshold_saved_current',
+        'custom_threshold_saved_base',
+        'effective_threshold_current',
+        'effective_threshold_base',
     ]
+    stratified_cols = [
+        'brier_p_value_pos',
+        'brier_p_value_fdr_pos',
+        'brier_p_value_neg',
+        'brier_p_value_fdr_neg',
+        'brier_stratified_passed_1_test',
+        'brier_stratified_passed_2_tests',
+    ]
+    cols = ['IPTC Category', *diag_cols, 'brier_p_value', 'brier_p_value_fdr']
+    cols.extend(
+        [
+            'brier_mean_error_diff',
+            'brier_current_mean_error',
+            'brier_base_mean_error',
+            pass_col,
+            *stratified_cols,
+        ],
+    )
     result = df.merge(brier_df.reindex(columns=cols), on='IPTC Category', how='left')
     result['brier_pass'] = result[pass_col].fillna(0).astype(int)
     result = result.drop(columns=[pass_col])
-    metric_cols = [
-        'brier_pass',
-        'brier_p_value',
-        'brier_p_value_fdr',
-        'brier_mean_error_diff',
-        'brier_current_mean_error',
-        'brier_base_mean_error',
-    ]
+    for col in ('brier_stratified_passed_1_test', 'brier_stratified_passed_2_tests'):
+        result[col] = result[col].fillna(0).astype(int)
+    metric_cols = ['brier_pass', *diag_cols, 'brier_p_value', 'brier_p_value_fdr']
+    metric_cols.extend(
+        [
+            'brier_mean_error_diff',
+            'brier_current_mean_error',
+            'brier_base_mean_error',
+            *stratified_cols,
+        ],
+    )
     base_cols = [col for col in result.columns if col not in metric_cols]
     return result.loc[:, base_cols + metric_cols]
 

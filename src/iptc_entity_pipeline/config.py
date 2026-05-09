@@ -141,48 +141,6 @@ class ThresholdTuningCnf:
 
 
 @dataclass(frozen=True)
-class AssemblyMemberCnf:
-    """One member of an assembly ensemble.
-
-    :param config_name: Name registered in ``_config_map()``. Only the
-        member's ``emb``, ``model`` and ``train`` blocks are used; its
-        ``cv``/``optuna``/``hparam``/``tuning`` are ignored because
-        assembly skips HPO and threshold tuning.
-    :param thresholds_path: Per-class threshold JSON ``{cat_id: float}``.
-        Missing classes fall back to ``EvaluationCnf.threshold_eval``.
-    :param label: Short identifier used in tables and artifact filenames.
-    """
-
-    config_name: str = ''
-    thresholds_path: str = ''
-    label: str = ''
-
-
-@dataclass(frozen=True)
-class AssemblyCnf:
-    """Dual-model ensemble configuration.
-
-    Activated when ``enabled=True``. Replaces ``run_cv`` with
-    ``run_assembly``; runs each member's data prep + final training
-    separately; produces a per-class model selection and stitched
-    per-class thresholds.
-
-    :param members: Tuple of two member specs. Index 0 is the primary
-        member; ties on average F1 resolve to the primary.
-    :param category_list_path: Shared category list JSON. The first
-        member to reach ``build_dataset`` writes the file if absent;
-        the second verifies its ``corpus.catList`` matches.
-    :param mapping_artifact_name: ClearML artifact name for the
-        ``class_to_model`` mapping JSON.
-    """
-
-    enabled: bool = False
-    members: tuple[AssemblyMemberCnf, ...] = ()
-    category_list_path: str = f'{DATA_ROOT}/assembly/category_list.json'
-    mapping_artifact_name: str = 'assembly_class_to_model'
-
-
-@dataclass(frozen=True)
 class BaseCnf:
     """Top-level pipeline config grouped by concern."""
 
@@ -195,7 +153,6 @@ class BaseCnf:
     optuna: OptunaCnf = field(default_factory=OptunaCnf)
     hparam: HyperparamSpace = field(default_factory=HyperparamSpace)
     tuning: ThresholdTuningCnf = field(default_factory=ThresholdTuningCnf)
-    assembly: AssemblyCnf = field(default_factory=AssemblyCnf)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     print_logs: bool = True
@@ -206,6 +163,47 @@ class BaseCnf:
     def to_clearml_mapping(self) -> dict[str, Any]:
         """Convert dataclasses to serializable mapping."""
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class AssemblyMemberCnf:
+    """One member of an assembly ensemble.
+
+    :param config: Full pipeline config instance for this member. Its
+        ``paths``, ``emb``, ``model`` and ``train`` blocks drive that
+        member's data prep and training. ``cv``/``optuna``/``hparam``/
+        ``tuning`` blocks are ignored because assembly skips HPO and
+        threshold tuning.
+    :param thresholds_path: Per-class threshold JSON ``{cat_id: float}``.
+        Missing classes fall back to ``EvaluationCnf.threshold_eval``.
+    :param label: Short identifier used in tables and artifact filenames.
+    """
+
+    config: BaseCnf = field(default_factory=BaseCnf)
+    thresholds_path: str = ''
+    label: str = ''
+
+
+@dataclass(frozen=True)
+class AssemblyCnf:
+    """Dual-model ensemble configuration.
+
+    Lives only on configs that opt in to assembly (e.g. by adding an
+    ``assembly`` field to a ``BaseCnf`` subclass). Replaces ``run_cv``
+    with ``run_assembly``; runs each member's data prep + final training
+    separately; produces a per-class model selection and stitched
+    per-class thresholds.
+
+    :param members: Tuple of two member specs. Index 0 is the primary
+        member; ties on average F1 resolve to the primary.
+    :param mapping_artifact_name: ClearML artifact name for the
+        ``class_to_model`` mapping JSON.
+    """
+
+    enabled: bool = True
+    members: tuple[AssemblyMemberCnf, ...] = ()
+    mapping_artifact_name: str = 'assembly_class_to_model'
+
 
 @dataclass(frozen=True)
 class BaseCnfWithHPO(BaseCnf):
@@ -711,7 +709,11 @@ class WPEntitiesRelevanceWeightedSumCnf(BaseCnfWithHPO):
 
 
 def resolve_paths(config: BaseCnf, root_dir: str | Path) -> BaseCnf:
-    """Return a config with absolute paths resolved from ``root_dir``."""
+    """Return a config with absolute paths resolved from ``root_dir``.
+
+    Recursively rebases an attached ``assembly`` block (when present) so each
+    member's nested config also gets its paths resolved.
+    """
     root_path = Path(root_dir)
     paths = config.paths
     resolved_paths = PathsCnf(
@@ -723,27 +725,33 @@ def resolve_paths(config: BaseCnf, root_dir: str | Path) -> BaseCnf:
         downsampling_order_cache_json=str(root_path / paths.downsampling_order_cache_json),
         removed_cat_ids=paths.removed_cat_ids,
     )
-    resolved_assembly = _resolve_assembly(assembly=config.assembly, root_path=root_path)
+    assembly = getattr(config, 'assembly', None)
+    if assembly is None:
+        return replace(config, paths=resolved_paths)
+    resolved_assembly = _resolve_assembly(assembly=assembly, root_path=root_path)
     return replace(config, paths=resolved_paths, assembly=resolved_assembly)
 
 
 def _resolve_assembly(*, assembly: AssemblyCnf, root_path: Path) -> AssemblyCnf:
-    """Return an ``AssemblyCnf`` with member threshold paths and the shared
-    category-list path rebased on ``root_path``.
+    """Return an ``AssemblyCnf`` with all member paths rebased on ``root_path``.
 
-    Absolute paths pass through unchanged because ``Path / abs`` returns the
-    absolute path. The function is a no-op for the default disabled assembly.
+    For each member: rebases ``thresholds_path`` and recursively resolves
+    the embedded ``config``'s ``paths`` block. Absolute paths pass through
+    unchanged because ``Path / abs`` returns the absolute path.
     """
-    resolved_members = tuple(
-        replace(member, thresholds_path=str(root_path / member.thresholds_path))
-        if member.thresholds_path else member
-        for member in assembly.members
-    )
-    return replace(
-        assembly,
-        members=resolved_members,
-        category_list_path=str(root_path / assembly.category_list_path),
-    )
+    resolved_members: list[AssemblyMemberCnf] = []
+    for member in assembly.members:
+        resolved_thr = (
+            str(root_path / member.thresholds_path)
+            if member.thresholds_path else member.thresholds_path
+        )
+        resolved_config = resolve_paths(config=member.config, root_dir=root_path)
+        resolved_members.append(replace(
+            member,
+            thresholds_path=resolved_thr,
+            config=resolved_config,
+        ))
+    return replace(assembly, members=tuple(resolved_members))
 
 
 @dataclass(frozen=True)
@@ -915,12 +923,11 @@ class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class AssemblyExampleCnf(BaseCnf):
-    """Dual-model ensemble: ``best_article_only`` + ``best_wpentities``.
+class Assembly1Cnf(BaseCnf):
+    """Dual-model assembly demo using two ``DebugCnf`` instances.
 
-    Demonstrates the assembly pipeline mode. Both members reference existing
-    registered configs; threshold files are loaded from ``data/assembly/``
-    and combined per-class according to the model selected by CV F1.
+    Each member directly carries a full pipeline config instance. Threshold
+    files come from prior single-model debug runs in ``results/saved_models``.
     """
 
     assembly: AssemblyCnf = field(
@@ -928,14 +935,14 @@ class AssemblyExampleCnf(BaseCnf):
             enabled=True,
             members=(
                 AssemblyMemberCnf(
-                    config_name='best_article_only',
-                    thresholds_path=f'{DATA_ROOT}/assembly/thresholds_article_only.json',
-                    label='article_only',
+                    config=BestArticleOnlyTunedCnf(),
+                    thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_article_only_tuned_20260507_102132/thresholds.json',
+                    label='article_only_tuned',
                 ),
                 AssemblyMemberCnf(
-                    config_name='best_wpentities',
-                    thresholds_path=f'{DATA_ROOT}/assembly/thresholds_wpentities.json',
-                    label='wpentities',
+                    config=BestWpEntitiesTunedCnf(),
+                    thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_wpentities_tuned_20260507_102033/thresholds.json',
+                    label='wpentities_tuned',
                 ),
             ),
         )
@@ -1025,7 +1032,7 @@ def _config_map() -> dict[str, BaseCnf]:
         
         'learning_rate': TunningLearningRateCnf(),
         'learning_rate_f1': TunningLearningRateF1Cnf(),
-        'assembly_example': AssemblyExampleCnf(),
+        'assembly1': Assembly1Cnf(),
     }
 
 
