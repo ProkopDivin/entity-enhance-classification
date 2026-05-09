@@ -23,9 +23,9 @@ Public entry points:
 from __future__ import annotations
 
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
-from statistics import mean, pstdev
+from statistics import mean, mode, pstdev
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
@@ -137,12 +137,7 @@ def tune_thresholds(
 
 def _safe_mode(values: Sequence[float]) -> float:
     """Return the most common value, breaking ties by first-occurrence order."""
-    counts = Counter(values)
-    best_count = max(counts.values())
-    for val in values:
-        if counts[val] == best_count:
-            return float(val)
-    return float(values[0])
+    return float(mode(values))
 
 
 def _try_cat_name(cat_id: str) -> str:
