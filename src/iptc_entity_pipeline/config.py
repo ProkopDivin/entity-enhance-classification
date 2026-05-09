@@ -170,11 +170,15 @@ class AssemblyMemberCnf:
     """One member of an assembly ensemble.
 
     :param config: Full pipeline config instance for this member. Its
-        ``paths``, ``emb``, ``model`` and ``train`` blocks drive that
-        member's data prep and training. ``cv``/``optuna``/``hparam``/
-        ``tuning`` blocks are ignored because assembly skips HPO and
-        threshold tuning.
+        ``paths``, ``emb``, ``model``, ``train``, ``hparam``, ``cv``, and
+        ``optuna`` blocks drive that member's data prep and per-member
+        ``run_cv``. The member's ``tuning`` block is honored only outside
+        assembly mode; in assembly mode tuning is force-disabled because
+        ``thresholds_path`` is the source of truth.
     :param thresholds_path: Per-class threshold JSON ``{cat_id: float}``.
+        Used both as the assembly's per-fold ``eval_thresholds`` (so each
+        member's CV per-class F1 is measured at production thresholds)
+        and as the source for the final stitched per-class thresholds.
         Missing classes fall back to ``EvaluationCnf.threshold_eval``.
     :param label: Short identifier used in tables and artifact filenames.
     """
@@ -189,10 +193,10 @@ class AssemblyCnf:
     """Dual-model ensemble configuration.
 
     Lives only on configs that opt in to assembly (e.g. by adding an
-    ``assembly`` field to a ``BaseCnf`` subclass). Replaces ``run_cv``
-    with ``run_assembly``; runs each member's data prep + final training
-    separately; produces a per-class model selection and stitched
-    per-class thresholds.
+    ``assembly`` field to a ``BaseCnf`` subclass). In assembly mode each
+    member is trained through the regular ``run_cv`` step (with that
+    member's loaded thresholds applied during per-fold evaluation), then
+    a per-class winner is picked from each member's CV per-class F1.
 
     :param members: Tuple of two member specs. Index 0 is the primary
         member; ties on average F1 resolve to the primary.
@@ -924,12 +928,20 @@ class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
 
 @dataclass(frozen=True)
 class Assembly1Cnf(BaseCnf):
-    """Dual-model assembly demo using two ``DebugCnf`` instances.
+    """Dual-model assembly demo using two tuned single-model configs.
 
-    Each member directly carries a full pipeline config instance. Threshold
-    files come from prior single-model debug runs in ``results/saved_models``.
+    Each member directly carries a full pipeline config instance. The
+    ``thresholds_path`` files come from prior single-model runs in
+    ``results/saved_models`` and drive both per-fold evaluation and the
+    final stitched per-class thresholds.
+
+    ``debug`` is forced to ``False`` here so each member's per-member
+    ``run_cv`` runs the full k-fold loop. ``BaseCnf.debug`` defaults to
+    ``True`` for fast local single-model iteration; that default would
+    silently collapse the assembly to a single fold.
     """
 
+    debug: bool = field(default_factory=lambda: False)
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
             enabled=True,
@@ -948,6 +960,32 @@ class Assembly1Cnf(BaseCnf):
         )
     )
 
+
+@dataclass(frozen=True)
+class AssemblyDebug(BaseCnf):
+    """Dual-model assembly demo using two ``DebugCnf`` instances.
+
+    Each member directly carries a full pipeline config instance. Threshold
+    files come from prior single-model debug runs in ``results/saved_models``.
+    """
+
+    assembly: AssemblyCnf = field(
+        default_factory=lambda: AssemblyCnf(
+            enabled=True,
+            members=(
+                AssemblyMemberCnf(
+                    config=DebugCnf(),
+                    thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/debug_20260508_182714/custom_thresholds.json',
+                    label='debug1',
+                ),
+                AssemblyMemberCnf(
+                    config=DebugCnf(),
+                    thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/debug_20260508_182714/custom_thresholds.json',
+                    label='debug2',
+                ),
+            ),
+        )
+    )
 
 def _iter_subclasses(base_cls: type[Any]) -> tuple[type[Any], ...]:
     """Return all transitive subclasses of ``base_cls``."""
@@ -1033,6 +1071,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'learning_rate': TunningLearningRateCnf(),
         'learning_rate_f1': TunningLearningRateF1Cnf(),
         'assembly1': Assembly1Cnf(),
+        'assembly_debug': AssemblyDebug(),
     }
 
 
