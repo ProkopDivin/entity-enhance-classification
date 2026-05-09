@@ -684,6 +684,8 @@ def _parse_entity(*, item: Any) -> ArticleEntity | None:
         feats_raw = raw_payload.get('feats')
         if isinstance(feats_raw, Mapping):
             relevance_raw = feats_raw.get('relevance')
+    if mentions_raw is None and raw_payload is not None:
+        mentions_raw = raw_payload.get('mentions')
 
     gkb_id = _as_str(value=gkb_raw)
     wdids = _as_wdid_tuple(value=wdids_raw)
@@ -1152,10 +1154,6 @@ def _add_mcnemar_to_top_change_df(
         'mcnemar_n10_current_only_correct',
         'mcnemar_n01_base_only_correct',
         'mcnemar_disagreements',
-        'current_false_positives',
-        'current_false_negatives',
-        'base_false_positives',
-        'base_false_negatives',
         pass_col,
     ]
     result = df.merge(mcnemar_df.reindex(columns=cols), on='IPTC Category', how='left')
@@ -1168,10 +1166,6 @@ def _add_mcnemar_to_top_change_df(
         'mcnemar_n10_current_only_correct',
         'mcnemar_n01_base_only_correct',
         'mcnemar_disagreements',
-        'current_false_positives',
-        'current_false_negatives',
-        'base_false_positives',
-        'base_false_negatives',
     ]
     base_cols = [col for col in result.columns if col not in metric_cols]
     return result.loc[:, base_cols + metric_cols]
@@ -1905,8 +1899,8 @@ def choose_stdform_by_gkbid(*, df: pd.DataFrame) -> pd.DataFrame:
 
 def build_article_f1_diff_avg_stats(*, df: pd.DataFrame, limit: int) -> pd.DataFrame:
     """Build three-row average stats table from article F1 deltas."""
-    top_improving = df.nlargest(limit, 'f1_diff')
-    top_decreasing = df.nsmallest(limit, 'f1_diff')
+    top_improving = df[df['f1_diff'] > 0].nlargest(limit, 'f1_diff')
+    top_decreasing = df[df['f1_diff'] < 0].nsmallest(limit, 'f1_diff')
     rows = [
         article_avg_row(segment='top_1000_improving_articles', df=top_improving),
         article_avg_row(segment='top_1000_decreasing_articles', df=top_decreasing),
