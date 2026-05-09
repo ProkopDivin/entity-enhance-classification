@@ -896,19 +896,20 @@ def _run_assembly_training_pipeline(
         print_logs=print_logs,
     )
     trained_members: list[Any] = []
-    for idx in range(len(members_raw)):
-        train_cfg_dict = dict(member_train_cnf_dicts[idx])
-        train_cfg_dict['early_stopping_patience'] = 0
-        trained = train_best(
-            train_data=member_train_data[idx],
-            test_data=member_test_data[idx],
-            feature_dim=member_feature_dims[idx],
-            best_model_cnf=member_model_cnf_dicts[idx],
-            train_cnf=train_cfg_dict,
-            print_logs=print_logs,
-        )
-        trained_members.append(trained)
-
+    if assembly_result: # to avod to much computing at once 
+        for idx in range(len(members_raw)):
+            train_cfg_dict = dict(member_train_cnf_dicts[idx])
+            train_cfg_dict['early_stopping_patience'] = 0
+            trained = train_best(
+                train_data=member_train_data[idx],
+                test_data=member_test_data[idx],
+                feature_dim=member_feature_dims[idx],
+                best_model_cnf=member_model_cnf_dicts[idx],
+                train_cnf=train_cfg_dict,
+                print_logs=print_logs,
+            )
+            trained_members.append(trained)
+    
     assembled_model = AssemblyModel(
         members=trained_members,
         cat_list=cat_list,
@@ -1027,7 +1028,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
 
     if not use_art_emb and not use_ent_emb:
         raise ValueError('Invalid embedding config: both use_article_embeddings and use_entity_embeddings are False')
-
+    
     log_stage(
         task=task,
         message='Stage 1/6: Loading corpora and article-to-entity mapping',
