@@ -16,14 +16,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import pickle
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from statistics import NormalDist
 from typing import Any, Callable, Mapping, Sequence
-
+from scipy import stats as scipy_stats
+from sklearn.metrics import average_precision_score, hamming_loss
+from statsmodels.stats.contingency_tables import mcnemar
+from statsmodels.stats.multitest import multipletests
 import numpy as np
 import pandas as pd
 
@@ -1084,14 +1085,6 @@ def build_mcnemar_significance_df(
                 'mcnemar_n10_current_only_correct': n10,
                 'mcnemar_n01_base_only_correct': n01,
                 'mcnemar_disagreements': disagreements,
-                'current_false_positives': int(np.logical_and(current_pred[:, idx], not_gold_matrix[:, idx]).sum()),
-                'current_false_negatives': int(
-                    np.logical_and(np.logical_not(current_pred[:, idx]), gold_matrix[:, idx]).sum()
-                ),
-                'base_false_positives': int(np.logical_and(base_pred[:, idx], not_gold_matrix[:, idx]).sum()),
-                'base_false_negatives': int(
-                    np.logical_and(np.logical_not(base_pred[:, idx]), gold_matrix[:, idx]).sum()
-                ),
             }
         )
     df = pd.DataFrame(rows)
@@ -1115,11 +1108,13 @@ def build_mcnemar_significance_df(
 
 def mcnemar_p_value(*, n10: int, n01: int) -> float:
     """Return asymptotic McNemar p-value with continuity correction."""
-    disagreements = n10 + n01
-    if disagreements == 0:
-        return 1.0
-    statistic = (abs(n10 - n01) - 1) ** 2 / disagreements
-    return math.erfc(math.sqrt(statistic / 2))
+    # this test does not care about the samples where models disagree
+    table = [[0, n01],
+             [n10, 0]]
+    if n10 + n01 < 25:
+        return float(mcnemar(table, exact=True, correction=True).pvalue)
+    else:
+        return float(mcnemar(table, exact=False, correction=True).pvalue)
 
 
 def add_mcnemar_to_top_change_dfs(
@@ -1300,20 +1295,8 @@ def add_bootstrap_fdr_columns(*, df: pd.DataFrame, alpha: float) -> pd.DataFrame
 
 def benjamini_hochberg(*, p_values: Sequence[float]) -> np.ndarray:
     """Apply Benjamini-Hochberg FDR correction preserving input order."""
-    p_array = np.asarray(p_values, dtype=float)
-    if p_array.size == 0:
-        return np.asarray([], dtype=float)
-
-    order = np.argsort(p_array)
-    ranked = p_array[order]
-    ranks = np.arange(1, len(ranked) + 1, dtype=float)
-    adjusted_ranked = ranked * len(ranked) / ranks
-    adjusted_ranked = np.minimum.accumulate(adjusted_ranked[::-1])[::-1]
-    adjusted_ranked = np.minimum(adjusted_ranked, 1.0)
-    adjusted = np.empty_like(adjusted_ranked)
-    adjusted[order] = adjusted_ranked
-    return adjusted
-
+    adjusted = multipletests(p_values, method='fdr_bh')[1]
+    return np.asarray(adjusted, dtype=float)
 
 def add_bootstrap_pr_auc_to_top_change_dfs(
     *,
@@ -1538,39 +1521,14 @@ def wilcoxon_signed_rank_p_value(differences: Sequence[float]) -> float:
     diff = diff[diff != 0]
     if diff.size == 0:
         return 1.0
-
-    abs_diff = np.abs(diff)
-    ranks, tie_counts = rank_abs_values(values=abs_diff)
-    rank_sum_positive = float(ranks[diff > 0].sum())
-    n = float(diff.size)
-    mean = n * (n + 1) / 4
-    tie_term = sum(count ** 3 - count for count in tie_counts)
-    variance = (n * (n + 1) * (2 * n + 1) - tie_term / 2) / 24
-    if variance <= 0:
-        return 1.0
-    z_score = (rank_sum_positive - mean) / math.sqrt(variance)
-    return float(math.erfc(abs(z_score) / math.sqrt(2)))
-
-
-def rank_abs_values(*, values: np.ndarray) -> tuple[np.ndarray, list[int]]:
-    """Rank absolute values with average ranks for ties."""
-    order = np.argsort(values, kind='mergesort')
-    sorted_values = values[order]
-    ranks_sorted = np.empty(len(values), dtype=float)
-    tie_counts: list[int] = []
-    start = 0
-    while start < len(sorted_values):
-        end = start + 1
-        while end < len(sorted_values) and sorted_values[end] == sorted_values[start]:
-            end += 1
-        avg_rank = (start + 1 + end) / 2
-        ranks_sorted[start:end] = avg_rank
-        tie_counts.append(end - start)
-        start = end
-
-    ranks = np.empty(len(values), dtype=float)
-    ranks[order] = ranks_sorted
-    return ranks, tie_counts
+    return float(
+        scipy_stats.wilcoxon(
+            diff,
+            zero_method='wilcox',
+            alternative='two-sided',
+            method='approx',
+        ).pvalue
+    )
 
 
 def add_brier_to_top_change_dfs(
@@ -1673,20 +1631,13 @@ def plot_hist_kde(*, values: np.ndarray, output_path: Path) -> None:
 
 
 def gaussian_kde(*, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Compute a simple Gaussian KDE without scipy."""
-    if values.size < 2:
+    """Compute a Gaussian KDE evaluated on a uniform grid."""
+    if values.size < 2 or float(np.std(values, ddof=1)) == 0.0:
         return np.asarray([], dtype=float), np.asarray([], dtype=float)
-    std = float(np.std(values, ddof=1))
-    if std == 0.0:
-        return np.asarray([], dtype=float), np.asarray([], dtype=float)
-    bandwidth = 1.06 * std * values.size ** (-1 / 5)
-    if bandwidth <= 0.0:
-        return np.asarray([], dtype=float), np.asarray([], dtype=float)
-    padding = 3 * bandwidth
+    kde = scipy_stats.gaussian_kde(values)
+    padding = 3 * float(np.sqrt(kde.covariance[0, 0]))
     x_grid = np.linspace(float(values.min() - padding), float(values.max() + padding), 256)
-    scaled = (x_grid[:, None] - values[None, :]) / bandwidth
-    density = np.exp(-0.5 * scaled ** 2).sum(axis=1) / (values.size * bandwidth * math.sqrt(2 * math.pi))
-    return x_grid, density
+    return x_grid, kde(x_grid)
 
 
 def plot_qq(*, values: np.ndarray, output_path: Path) -> None:
@@ -1696,15 +1647,16 @@ def plot_qq(*, values: np.ndarray, output_path: Path) -> None:
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    sorted_values = np.sort(values)
-    probs = (np.arange(1, len(sorted_values) + 1) - 0.5) / len(sorted_values)
-    normal = NormalDist(mu=float(np.mean(sorted_values)), sigma=float(np.std(sorted_values, ddof=1)) or 1.0)
-    theoretical = np.asarray([normal.inv_cdf(float(prob)) for prob in probs], dtype=float)
+    sigma = float(np.std(values, ddof=1)) or 1.0
+    mu = float(np.mean(values))
+    theoretical, sample_quantiles = scipy_stats.probplot(
+        values, sparams=(mu, sigma), dist='norm', fit=False,
+    )
 
     fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(theoretical, sorted_values, s=12, alpha=0.7)
-    min_val = float(min(theoretical.min(), sorted_values.min()))
-    max_val = float(max(theoretical.max(), sorted_values.max()))
+    ax.scatter(theoretical, sample_quantiles, s=12, alpha=0.7)
+    min_val = float(min(theoretical.min(), sample_quantiles.min()))
+    max_val = float(max(theoretical.max(), sample_quantiles.max()))
     ax.plot([min_val, max_val], [min_val, max_val], color='black', linestyle='--', linewidth=1)
     ax.set_title('Brier Mean Error Difference Q-Q Plot')
     ax.set_xlabel('Theoretical normal quantiles')
@@ -2028,7 +1980,7 @@ def compute_hamming(
     """
     score_matrix = build_score_matrix(df=df, cat_ids=cat_ids)
     pred_matrix = (score_matrix >= thr_vec).astype(np.int8)
-    return float(np.mean(pred_matrix != gold_matrix))
+    return float(hamming_loss(gold_matrix, pred_matrix))
 
 
 # ---------------------------------------------------------------------------
@@ -2189,9 +2141,9 @@ def _contains_predicate(token: str) -> Callable[[str], bool]:
 
 def micro_pr_auc(*, gold_matrix: np.ndarray, scores: np.ndarray) -> float:
     """Compute micro PR-AUC by flattening across all classes."""
-    if gold_matrix.size == 0:
+    if gold_matrix.size == 0 or int(gold_matrix.sum()) == 0:
         return float('nan')
-    return average_precision(y_true=gold_matrix.flatten().astype(np.int8), y_score=scores.flatten())
+    return float(average_precision_score(gold_matrix, scores, average='micro'))
 
 
 def per_corpus_pr_auc(
@@ -2225,19 +2177,9 @@ def build_score_matrix(*, df: pd.DataFrame, cat_ids: Sequence[str]) -> np.ndarra
 
 def average_precision(*, y_true: np.ndarray, y_score: np.ndarray) -> float:
     """Compute discrete PR-AUC as average precision."""
-    positives = int(y_true.sum())
-    if positives == 0:
+    if int(y_true.sum()) == 0:
         return np.nan
-
-    order = np.argsort(-y_score, kind='mergesort')
-    sorted_true = y_true[order]
-    tp = np.cumsum(sorted_true)
-    fp = np.cumsum(1 - sorted_true)
-    precision = tp / np.maximum(tp + fp, 1)
-    recall = tp / positives
-    precision = np.concatenate(([1.0], precision))
-    recall = np.concatenate(([0.0], recall))
-    return float(np.sum((recall[1:] - recall[:-1]) * precision[1:]))
+    return float(average_precision_score(y_true, y_score))
 
 
 # ---------------------------------------------------------------------------
