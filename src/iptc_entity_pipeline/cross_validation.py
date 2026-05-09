@@ -23,6 +23,7 @@ from iptc_entity_pipeline.dataset_builder import (
     slice_dataset,
     to_numpy_array,
 )
+from iptc_entity_pipeline.evaluate import aggregate_fold_dfs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.threshold_tuning import (
     ThresholdTuningResult,
@@ -51,10 +52,19 @@ class CvResult:
     serialization boundary to downstream pipeline components.
 
     :param tuned_thresholds: Per-class threshold map aggregated across CV folds
-        of the best Optuna trial when threshold tuning is enabled, otherwise
-        ``None``. Passed to the final-model evaluation as ``customThresholds``.
+        of the best Optuna trial when threshold tuning is enabled. When CV
+        was driven by ``eval_thresholds`` (assembly mode), the same
+        externally-loaded map is echoed here so downstream consumers have a
+        single threshold field to read from. Otherwise ``None``.
     :param threshold_report_df: Per-class tuning report (mean / std / mode /
         min / max + selected value), or ``None`` if tuning is disabled.
+    :param cv_per_class_df: Per-class P/R/F1 (mean + std) aggregated across
+        the best trial's folds. Same shape as ``eval_final``'s
+        ``df_classes_test`` plus ``_std`` columns; indexed by IPTC
+        category name.
+    :param cv_per_corpora_df: Per-corpus P/R/F1 (mean + std) aggregated
+        across the best trial's folds. Same shape as ``eval_final``'s
+        ``df_corpora_test`` plus ``_std`` columns; indexed by corpus name.
     """
 
     cv_dev_df: pd.DataFrame
@@ -63,6 +73,8 @@ class CvResult:
     objective_metrics: dict[str, Any]
     tuned_thresholds: dict[str, float] | None = None
     threshold_report_df: pd.DataFrame | None = None
+    cv_per_class_df: pd.DataFrame | None = None
+    cv_per_corpora_df: pd.DataFrame | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +85,8 @@ class CombinationResult:
     fold_rows: list[dict[str, Any]]
     fold_curves: tuple[CvFoldCurves, ...]
     fold_thresholds: tuple[dict[str, float], ...]
+    fold_corpora_dfs: tuple[pd.DataFrame, ...]
+    fold_classes_dfs: tuple[pd.DataFrame, ...]
     model_config: ModelCnf
     training_config: TrainingCnf
     pruned: bool = False
@@ -87,6 +101,8 @@ class BestSelection:
     best_training_config: TrainingCnf
     best_fold_curves: tuple[CvFoldCurves, ...]
     best_fold_thresholds: tuple[dict[str, float], ...]
+    best_fold_corpora_dfs: tuple[pd.DataFrame, ...]
+    best_fold_classes_dfs: tuple[pd.DataFrame, ...]
     trial_rows: list[dict[str, Any]]
     fold_rows: list[dict[str, Any]]
 
@@ -155,6 +171,30 @@ def extract_micro_row(
     )
 
 
+@dataclass(frozen=True)
+class FoldEvalOutput:
+    """Per-fold evaluation outputs collected by :func:`evaluate_fold`.
+
+    :param micro_row: Single-row metrics chosen by :func:`extract_micro_row`.
+    :param dev_loss: Final dev loss for the fold.
+    :param epochs_run: Number of epochs the fold actually ran (early stop).
+    :param fold_curve: Per-epoch train/dev loss + F1 curves.
+    :param fold_thresholds: Per-class threshold map when tuning is enabled,
+        empty dict otherwise.
+    :param df_corpora: Per-corpus evaluation table (at ``eval_thresholds``
+        if provided, else at the global ``eval_cfg.threshold_eval``).
+    :param df_classes: Per-class evaluation table at the same thresholds.
+    """
+
+    micro_row: Mapping[str, Any]
+    dev_loss: float
+    epochs_run: int
+    fold_curve: CvFoldCurves
+    fold_thresholds: dict[str, float]
+    df_corpora: pd.DataFrame
+    df_classes: pd.DataFrame
+
+
 def evaluate_fold(
     *,
     fit_data: EmbeddingDataset,
@@ -167,14 +207,19 @@ def evaluate_fold(
     objective_corpora: str,
     fold_idx: int,
     print_logs: bool,
-) -> tuple[Mapping[str, Any], float, int, CvFoldCurves, dict[str, float]]:
-    """Train and evaluate one CV fold, returning per-fold metrics, curves, and
-    optionally per-class tuned thresholds.
+    eval_thresholds: Mapping[str, float] | None = None,
+) -> FoldEvalOutput:
+    """Train and evaluate one CV fold.
 
-    When ``tuning_cfg.enabled``, raw dev predictions are also returned by
-    ``evaluateModel`` and the threshold sweep is run on them. The resulting
-    ``class -> threshold`` map is part of the per-fold output and is later
-    aggregated across folds.
+    Always returns the per-fold per-corpora and per-class evaluation tables
+    so callers can aggregate them across folds into mean+std summaries.
+
+    :param eval_thresholds: Optional per-class thresholds to apply during
+        per-fold evaluation (forwarded to ``evaluateModel`` as
+        ``customThresholds``). Used by the assembly pipeline to score each
+        fold at the member's externally-loaded thresholds. When ``None``,
+        the global ``eval_cfg.threshold_eval`` is used. Independent of
+        ``tuning_cfg``.
     """
     train_result = train_model(
         train_data=fit_data,
@@ -185,28 +230,22 @@ def evaluate_fold(
         print_logs=print_logs,
         connect_config=False,
     )
+    custom_thresholds = dict(eval_thresholds) if eval_thresholds else None
+    df_corpora_fold, df_classes_fold, pred_scores = evaluateModel(
+        model=train_result.model,
+        evalData=val_data,
+        evaluation_config=eval_cfg,
+        customThresholds=custom_thresholds,
+        connect_config=False,
+        returnPredictions=True,
+    )
     if tuning_cfg is not None and tuning_cfg.enabled:
-        df_corpora_fold, _, pred_scores = evaluateModel(
-            model=train_result.model,
-            evalData=val_data,
-            evaluation_config=eval_cfg,
-            customThresholds=None,
-            connect_config=False,
-            returnPredictions=True,
-        )
         fold_thresholds = tune_thresholds(
             pred_wgh_cats=pred_scores,
             eval_corpus=val_data.corpus,
             tuning_cfg=tuning_cfg,
         )
     else:
-        df_corpora_fold, _ = evaluateModel(
-            model=train_result.model,
-            evalData=val_data,
-            evaluation_config=eval_cfg,
-            customThresholds=None,
-            connect_config=False,
-        )
         fold_thresholds = {}
     micro_row = extract_micro_row(
         df_corpora_fold=df_corpora_fold,
@@ -220,12 +259,14 @@ def evaluate_fold(
         train_f1_per_epoch=train_result.train_f1_per_epoch,
         dev_f1_per_epoch=train_result.dev_f1_per_epoch,
     )
-    return (
-        micro_row,
-        float(train_result.final_dev_loss),
-        int(train_result.epochs_run),
-        fold_curve,
-        fold_thresholds,
+    return FoldEvalOutput(
+        micro_row=micro_row,
+        dev_loss=float(train_result.final_dev_loss),
+        epochs_run=int(train_result.epochs_run),
+        fold_curve=fold_curve,
+        fold_thresholds=fold_thresholds,
+        df_corpora=df_corpora_fold,
+        df_classes=df_classes_fold,
     )
 
 
@@ -354,12 +395,15 @@ def run_combination(
     print_logs: bool,
     clearml_logger: Any,
     trial: Any = None,
+    eval_thresholds: Mapping[str, float] | None = None,
 ) -> tuple[CombinationResult, int]:
     """Run k-fold CV for one hyperparameter combination.
 
     :param trial: Optuna trial for per-fold intermediate reporting and pruning.
     :param tuning_cfg: When enabled, per-fold per-class thresholds are tuned
         on the dev split and collected into the combination result.
+    :param eval_thresholds: Optional per-class thresholds applied during
+        per-fold evaluation (assembly mode). Forwarded to :func:`evaluate_fold`.
     """
     from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 
@@ -375,12 +419,14 @@ def run_combination(
     fold_curves: list[CvFoldCurves] = []
     fold_rows: list[dict[str, Any]] = []
     fold_thresholds: list[dict[str, float]] = []
+    fold_corpora_dfs: list[pd.DataFrame] = []
+    fold_classes_dfs: list[pd.DataFrame] = []
     pruned = False
 
     for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
         fit_data = slice_dataset(dataset=train_data, indices=fit_indices.tolist())
         val_data = slice_dataset(dataset=train_data, indices=val_indices.tolist())
-        micro_row, dev_loss, epochs_run, fold_curve, fold_thr = evaluate_fold(
+        fold_out = evaluate_fold(
             fit_data=fit_data,
             val_data=val_data,
             feature_dim=feature_dim,
@@ -391,6 +437,7 @@ def run_combination(
             objective_corpora=objective_corpora,
             fold_idx=fold_idx,
             print_logs=print_logs,
+            eval_thresholds=eval_thresholds,
         )
         completed_trainings += 1
         log_training_progress(
@@ -402,18 +449,20 @@ def run_combination(
             folds_per_combo=folds_per_combo,
             clearml_logger=clearml_logger,
         )
-        fold_curves.append(fold_curve)
-        fold_thresholds.append(fold_thr)
+        fold_curves.append(fold_out.fold_curve)
+        fold_thresholds.append(fold_out.fold_thresholds)
+        fold_corpora_dfs.append(fold_out.df_corpora)
+        fold_classes_dfs.append(fold_out.df_classes)
         fold_rows.append(
             {
                 'trial_id': combo_idx,
                 'fold_id': fold_idx,
                 'params': params_json,
-                'epochs': float(epochs_run),
-                'Loss': dev_loss,
-                'Precision': float(micro_row['Precision']),
-                'Recall': float(micro_row['Recall']),
-                'F1': float(micro_row['F1']),
+                'epochs': float(fold_out.epochs_run),
+                'Loss': fold_out.dev_loss,
+                'Precision': float(fold_out.micro_row['Precision']),
+                'Recall': float(fold_out.micro_row['Recall']),
+                'F1': float(fold_out.micro_row['F1']),
             }
         )
         if trial is not None:
@@ -437,6 +486,8 @@ def run_combination(
             fold_rows=fold_rows,
             fold_curves=tuple(fold_curves),
             fold_thresholds=tuple(fold_thresholds),
+            fold_corpora_dfs=tuple(fold_corpora_dfs),
+            fold_classes_dfs=tuple(fold_classes_dfs),
             model_config=model_config,
             training_config=training_config,
             pruned=pruned,
@@ -461,6 +512,7 @@ def select_best(
     debug: bool,
     print_logs: bool,
     clearml_logger: Any,
+    eval_thresholds: Mapping[str, float] | None = None,
 ) -> BestSelection:
     """Run Optuna-managed search and select the best trial by mean F1."""
     from importlib import import_module
@@ -529,6 +581,7 @@ def select_best(
             print_logs=print_logs,
             clearml_logger=clearml_logger,
             trial=trial,
+            eval_thresholds=eval_thresholds,
         )
         completed_trainings = completed_after_trial
         trial_rows.append(combo_result.trial_row)
@@ -550,6 +603,8 @@ def select_best(
         best_training_config=best_result.training_config,
         best_fold_curves=best_result.fold_curves,
         best_fold_thresholds=best_result.fold_thresholds,
+        best_fold_corpora_dfs=best_result.fold_corpora_dfs,
+        best_fold_classes_dfs=best_result.fold_classes_dfs,
         trial_rows=trial_rows,
         fold_rows=fold_rows,
     )
@@ -606,6 +661,7 @@ def build_cv_result(
     tuning_cfg: ThresholdTuningCnf | None = None,
     cat_list: Sequence[str] | None = None,
     default_threshold: float = 0.5,
+    eval_thresholds: Mapping[str, float] | None = None,
 ) -> CvResult:
     """Assemble the typed CV result from the best-trial selection.
 
@@ -614,6 +670,10 @@ def build_cv_result(
         with ``default_threshold`` in the aggregated map.
     :param default_threshold: Fallback per-class threshold for classes never
         seen across the best-trial's CV folds.
+    :param eval_thresholds: When provided (assembly mode), stored directly as
+        ``tuned_thresholds`` in the result so downstream consumers see a
+        single threshold field. Tuning aggregation is skipped in that case
+        because the loaded thresholds are the source of truth.
     """
     fixed_epochs = max(1, int(round(float(selection.best_trial['epochs']))) - patience)
     fixed_training = replace(
@@ -625,7 +685,9 @@ def build_cv_result(
 
     tuned_thresholds: dict[str, float] | None = None
     threshold_report_df: pd.DataFrame | None = None
-    if tuning_cfg is not None and tuning_cfg.enabled and selection.best_fold_thresholds:
+    if eval_thresholds is not None:
+        tuned_thresholds = {str(k): float(v) for k, v in eval_thresholds.items()}
+    elif tuning_cfg is not None and tuning_cfg.enabled and selection.best_fold_thresholds:
         if cat_list is None:
             raise ValueError('cat_list is required when threshold tuning is enabled')
         tuning_result: ThresholdTuningResult = aggregate_fold_thresholds(
@@ -637,6 +699,13 @@ def build_cv_result(
         tuned_thresholds = tuning_result.cat_to_threshold
         threshold_report_df = tuning_result.report_df
 
+    cv_per_corpora_df = aggregate_fold_dfs(
+        fold_dfs=selection.best_fold_corpora_dfs,
+    ) if selection.best_fold_corpora_dfs else None
+    cv_per_class_df = aggregate_fold_dfs(
+        fold_dfs=selection.best_fold_classes_dfs,
+    ) if selection.best_fold_classes_dfs else None
+
     return CvResult(
         cv_dev_df=cv_dev_df,
         best_model_config=asdict(selection.best_model_config),
@@ -644,4 +713,6 @@ def build_cv_result(
         objective_metrics=objective_metrics,
         tuned_thresholds=tuned_thresholds,
         threshold_report_df=threshold_report_df,
+        cv_per_class_df=cv_per_class_df,
+        cv_per_corpora_df=cv_per_corpora_df,
     )

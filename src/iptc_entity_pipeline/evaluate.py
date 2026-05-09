@@ -403,3 +403,50 @@ def evaluate_predictions(
         per_class=evaluation_config.per_class,
     )
     return corpora_df, classes_df
+
+
+_NUMERIC_KIND = 'biufc'
+
+
+def aggregate_fold_dfs(
+    *,
+    fold_dfs: Sequence[pd.DataFrame],
+    keep_columns: Sequence[str] = (),
+) -> pd.DataFrame:
+    """
+    Aggregate per-fold evaluation DataFrames into a single ``mean + std`` table.
+
+    Every numeric column gets a mean column (under the original name, so the
+    output is shape-compatible with ``eval_final``'s test tables) and a
+    ``<col>_std`` companion column (population std across folds). Non-numeric
+    columns listed in ``keep_columns`` are passed through from the first
+    fold. The output is row-aligned with the union of fold indices.
+
+    :param fold_dfs: Per-fold DataFrames; expected to share index labels and
+        column names. Empty input returns an empty DataFrame.
+    :param keep_columns: Non-numeric columns to copy from the first fold.
+    """
+    if not fold_dfs:
+        return pd.DataFrame()
+    first = fold_dfs[0]
+    union_index = first.index
+    for df in fold_dfs[1:]:
+        union_index = union_index.union(df.index, sort=False)
+    aligned = [df.reindex(union_index) for df in fold_dfs]
+
+    numeric_cols = [
+        col for col in first.columns
+        if first[col].dtype.kind in _NUMERIC_KIND
+    ]
+    out_data: dict[str, list[Any]] = {}
+    for col in keep_columns:
+        if col in first.columns:
+            out_data[col] = aligned[0][col].tolist()
+    for col in numeric_cols:
+        stacked = pd.concat([df[col] for df in aligned], axis=1)
+        out_data[col] = stacked.mean(axis=1, skipna=True).tolist()
+        out_data[f'{col}_std'] = stacked.std(axis=1, ddof=0, skipna=True).tolist()
+
+    out = pd.DataFrame(out_data, index=union_index)
+    out.index.name = first.index.name
+    return out

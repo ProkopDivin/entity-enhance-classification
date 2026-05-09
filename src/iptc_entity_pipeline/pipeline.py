@@ -1,7 +1,7 @@
 """ClearML pipeline orchestration for entity-enhanced IPTC training."""
 
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple
 
@@ -307,8 +307,16 @@ def run_cv(
     print_logs: bool = True,
     debug: bool = False,
     upload_artifacts: bool = False,
+    eval_thresholds: Mapping[str, float] | None = None,
 ):
-    """Run mandatory CV over train and select best hyperparameter combination."""
+    """Run mandatory CV over train and select best hyperparameter combination.
+
+    :param eval_thresholds: Optional per-class thresholds applied during
+        per-fold evaluation. Used by the assembly pipeline so each member's
+        per-class CV F1 is measured at that member's externally-loaded
+        thresholds. When provided, it is also echoed into
+        ``cv_result.tuned_thresholds`` and threshold tuning is bypassed.
+    """
     from dataclasses import asdict
 
     from iptc_entity_pipeline.config import (
@@ -341,6 +349,13 @@ def run_cv(
     task.connect(asdict(optuna_cfg), name='optunaConfig')
     task.connect(asdict(tuning_cfg), name='thresholdTuningConfig')
 
+    if eval_thresholds is not None and tuning_cfg.enabled:
+        logger.info(
+            'Assembly mode: external eval_thresholds provided, '
+            'forcing tuning_cfg.enabled=False'
+        )
+        tuning_cfg = replace(tuning_cfg, enabled=False)
+
     x_full, y_full = prepare_cv(train_data=train_data)
     logger.info(f'CV data prepared: x_shape={x_full.shape}, y_shape={y_full.shape}, feature_dim={feature_dim}')
 
@@ -359,6 +374,7 @@ def run_cv(
         debug=debug,
         print_logs=print_logs,
         clearml_logger=clearml_logger,
+        eval_thresholds=eval_thresholds,
     )
 
     trials_df, folds_df, cv_dev_df = build_cv_df(
@@ -386,6 +402,7 @@ def run_cv(
         tuning_cfg=tuning_cfg,
         cat_list=list(train_data.corpus.catList),
         default_threshold=eval_cfg.threshold_eval,
+        eval_thresholds=eval_thresholds,
     )
 
     if cv_result.threshold_report_df is not None:
@@ -408,6 +425,29 @@ def run_cv(
                 'threshold_tuning_thresholds', artifact_object=dict(cv_result.tuned_thresholds or {}),
             )
 
+    if cv_result.cv_per_corpora_df is not None:
+        clearml_logger.report_table(
+            title='Cross Validation',
+            series='Per-corpora (mean+std)',
+            iteration=0,
+            table_plot=cv_result.cv_per_corpora_df,
+        )
+        if upload_artifacts:
+            task.upload_artifact(
+                'cv_per_corpora_dataframe', artifact_object=cv_result.cv_per_corpora_df,
+            )
+    if cv_result.cv_per_class_df is not None:
+        clearml_logger.report_table(
+            title='Cross Validation',
+            series='Per-class (mean+std)',
+            iteration=0,
+            table_plot=cv_result.cv_per_class_df,
+        )
+        if upload_artifacts:
+            task.upload_artifact(
+                'cv_per_class_dataframe', artifact_object=cv_result.cv_per_class_df,
+            )
+
     return cv_result
 
 @PipelineDecorator.component(
@@ -416,35 +456,33 @@ def run_cv(
     task_type=TaskTypes.training,
 )
 def run_assembly_step(
-    member_train_data,
-    member_feature_dims,
-    member_model_cnfs,
-    member_train_cnfs,
-    member_thresholds,
+    member_cv_results,
     member_labels,
+    cat_list,
+    member_loaded_thresholds,
     eval_cnf: Mapping[str, Any],
-    cv_cnf: Mapping[str, Any],
     objective_corpora: str,
     print_logs: bool = True,
-    debug: bool = False,
     upload_artifacts: bool = False,
     mapping_artifact_name: str = 'assembly_class_to_model',
 ):
-    """Run the assembly CV: trains both members per fold, picks per-class winners.
+    """Build the assembly from each member's pre-computed :class:`CvResult`.
 
-    Returns an :class:`assembly.AssemblyCvResult` with the same downstream
-    surface as ``run_cv``'s ``CvResult``.
+    No training of its own: each member must have already gone through
+    :func:`run_cv` (with ``eval_thresholds`` set to that member's loaded
+    thresholds) so ``cv_per_class_df`` is populated and per-class F1 was
+    measured at the production thresholds.
+
+    :param member_cv_results: One :class:`CvResult` per member.
+    :param member_labels: Display labels (member 0 is primary; ties on F1
+        resolve to it).
+    :param cat_list: Shared train ``catList`` (validated upstream).
+    :param member_loaded_thresholds: Per-member externally-loaded
+        threshold maps. Each selected class's stitched threshold comes
+        from the winning member's entry here.
     """
-    from dataclasses import asdict
-
-    from iptc_entity_pipeline.assembly import run_assembly
-    from iptc_entity_pipeline.config import (
-        CvCnf,
-        EvaluationCnf,
-        ModelCnf,
-        TrainingCnf,
-        conf_from_dict,
-    )
+    from iptc_entity_pipeline.assembly import build_assembly_from_cv, report_assembly_tables
+    from iptc_entity_pipeline.config import EvaluationCnf, conf_from_dict
 
     conf_logging()
     logger = logging.getLogger(__name__)
@@ -452,34 +490,31 @@ def run_assembly_step(
     clearml_logger = task.get_logger()
 
     eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
-    cv_cfg = conf_from_dict(CvCnf, cv_cnf)
-    model_cfgs = [conf_from_dict(ModelCnf, m) for m in member_model_cnfs]
-    train_cfgs = [conf_from_dict(TrainingCnf, t) for t in member_train_cnfs]
-
-    task.connect(asdict(eval_cfg), name='evaluationConfig')
-    task.connect(asdict(cv_cfg), name='cvConfig')
-    for idx, label in enumerate(member_labels):
-        task.connect(member_model_cnfs[idx], name=f'modelConfig_{label}')
-        task.connect(member_train_cnfs[idx], name=f'trainingConfig_{label}')
+    task.connect(eval_cnf, name='evaluationConfig')
 
     logger.info(
         f'Assembly step: members={list(member_labels)} '
-        f'folds={cv_cfg.folds} debug={debug}'
+        f'(consuming per-member CV results)'
     )
 
-    assembly_result = run_assembly(
-        member_train_data=member_train_data,
-        member_feature_dims=member_feature_dims,
-        member_model_cfgs=model_cfgs,
-        member_train_cfgs=train_cfgs,
-        member_thresholds=member_thresholds,
-        member_labels=member_labels,
+    assembly_result = build_assembly_from_cv(
+        member_cv_results=list(member_cv_results),
+        member_labels=list(member_labels),
+        cat_list=list(cat_list),
         eval_cfg=eval_cfg,
-        cv_cfg=cv_cfg,
         objective_corpora=objective_corpora,
-        debug=debug,
-        print_logs=print_logs,
+        primary_idx=0,
+        member_loaded_thresholds=(
+            list(member_loaded_thresholds)
+            if member_loaded_thresholds is not None else None
+        ),
+    )
+
+    report_assembly_tables(
         clearml_logger=clearml_logger,
+        assembly_result=assembly_result,
+        member_labels=list(member_labels),
+        print_logs=print_logs,
     )
 
     mapping_payload = {
@@ -495,10 +530,13 @@ def run_assembly_step(
             'assembly_per_class_f1', artifact_object=assembly_result.per_class_f1_df,
         )
         task.upload_artifact(
-            'assembly_per_fold_f1', artifact_object=assembly_result.per_fold_f1_df,
+            'assembly_per_corpora', artifact_object=assembly_result.per_corpora_df,
         )
         task.upload_artifact(
             'assembly_threshold_report', artifact_object=assembly_result.threshold_report_df,
+        )
+        task.upload_artifact(
+            'assembly_member_summary', artifact_object=assembly_result.cv_dev_df,
         )
 
     return assembly_result
@@ -766,9 +804,15 @@ def _run_assembly_training_pipeline(
     4) ``build_dataset`` for each member — in parallel; each call carries
        ``wait_for=cat_list_token`` so neither build starts until the
        cat-list check has passed.
-    5) ``run_assembly_step`` — needs both members' train data.
-    6) ``train_best`` for each member — in parallel.
-    7) ``eval_final`` on the ``AssemblyModel`` wrapping both trained members.
+    5) ``run_cv`` per member — full HPO + k-fold CV per member, with each
+       member's per-fold evaluation pinned to that member's externally
+       loaded per-class thresholds (``eval_thresholds=loaded``). Yields
+       per-class CV F1 (mean+std) measured at production thresholds.
+    6) ``run_assembly_step`` — pure aggregation: pick per-class winners
+       and stitch loaded thresholds.
+    7) ``train_best`` per member — uses each member's CV-selected best
+       model and training configs.
+    8) ``eval_final`` on the ``AssemblyModel`` wrapping both trained members.
     """
     from pathlib import Path
 
@@ -786,8 +830,10 @@ def _run_assembly_training_pipeline(
     member_configs = [m['config'] for m in members_raw]
     member_paths = [c['paths'] for c in member_configs]
     member_emb = [c['emb'] for c in member_configs]
-    member_model_cnf_dicts = [c['model'] for c in member_configs]
     member_train_cnf_dicts = [c['train'] for c in member_configs]
+    member_hparam_cnfs = [c.get('hparam', {}) for c in member_configs]
+    member_optuna_cnfs = [c.get('optuna', {}) for c in member_configs]
+    member_tuning_cnfs = [c.get('tuning', {'enabled': False}) for c in member_configs]
 
     log_stage(
         task=task,
@@ -860,56 +906,96 @@ def _run_assembly_training_pipeline(
         member_feature_dims.append(m_dim)
 
     cat_list = list(member_train_data[0].corpus.catList)
-    member_thresholds = [
-        load_thresholds(
-            path=Path(str(m.get('thresholds_path', ''))),
-            cat_list=cat_list,
-            default_threshold=float(eval_cnf.get('threshold_eval', 0.5)),
+    default_threshold = float(eval_cnf.get('threshold_eval', 0.5))
+    member_loaded_thresholds: list[dict[str, float]] = []
+    for member_idx, m in enumerate(members_raw):
+        thr_path = str(m.get('thresholds_path', '') or '')
+        if not thr_path:
+            log_stage(
+                task=task,
+                message=(
+                    f'Assembly member {member_labels[member_idx]} has no '
+                    f'thresholds_path; using global threshold_eval={default_threshold}'
+                ),
+                print_logs=print_logs,
+            )
+            member_loaded_thresholds.append(
+                {str(cid): default_threshold for cid in cat_list}
+            )
+            continue
+        member_loaded_thresholds.append(
+            load_thresholds(
+                path=Path(thr_path),
+                cat_list=cat_list,
+                default_threshold=default_threshold,
+            )
         )
-        for m in members_raw
-    ]
 
     log_stage(
         task=task,
-        message=f'Assembly stage 5: {cv_cnf.get("folds", 5)}-fold per-class selection',
+        message=(
+            f'Assembly stage 5: run_cv per member with eval_thresholds=loaded '
+            f'({cv_cnf.get("folds", 5)} folds, tuning forced off)'
+        ),
+        print_logs=print_logs,
+    )
+    member_cv_results: list[Any] = []
+    for idx in range(len(members_raw)):
+        cv_result = run_cv(
+            train_data=member_train_data[idx],
+            feature_dim=member_feature_dims[idx],
+            hparam_cnf=member_hparam_cnfs[idx],
+            train_cnf=member_train_cnf_dicts[idx],
+            eval_cnf=eval_cnf,
+            cv_cnf=cv_cnf,
+            optuna_cnf=member_optuna_cnfs[idx],
+            tuning_cnf=member_tuning_cnfs[idx],
+            objective_corpora=objective_corpora,
+            print_logs=print_logs,
+            debug=debug,
+            upload_artifacts=upload_artifacts,
+            eval_thresholds=member_loaded_thresholds[idx],
+        )
+        member_cv_results.append(cv_result)
+
+    log_stage(
+        task=task,
+        message='Assembly stage 6: aggregate per-member CV into per-class assembly',
         print_logs=print_logs,
     )
     assembly_result = run_assembly_step(
-        member_train_data=member_train_data,
-        member_feature_dims=member_feature_dims,
-        member_model_cnfs=member_model_cnf_dicts,
-        member_train_cnfs=member_train_cnf_dicts,
-        member_thresholds=member_thresholds,
+        member_cv_results=member_cv_results,
         member_labels=member_labels,
+        cat_list=cat_list,
+        member_loaded_thresholds=member_loaded_thresholds,
         eval_cnf=eval_cnf,
-        cv_cnf=cv_cnf,
         objective_corpora=objective_corpora,
         print_logs=print_logs,
-        debug=debug,
         upload_artifacts=upload_artifacts,
         mapping_artifact_name=str(assembly_cnf.get('mapping_artifact_name', 'assembly_class_to_model')),
     )
 
     log_stage(
         task=task,
-        message='Assembly stage 6: train_best per member (parallelizable)',
+        message='Assembly stage 7: train_best per member (parallelizable)',
         print_logs=print_logs,
     )
     trained_members: list[Any] = []
-    if assembly_result: # to avod to much computing at once 
-        for idx in range(len(members_raw)):
-            train_cfg_dict = dict(member_train_cnf_dicts[idx])
-            train_cfg_dict['early_stopping_patience'] = 0
-            trained = train_best(
-                train_data=member_train_data[idx],
-                test_data=member_test_data[idx],
-                feature_dim=member_feature_dims[idx],
-                best_model_cnf=member_model_cnf_dicts[idx],
-                train_cnf=train_cfg_dict,
-                print_logs=print_logs,
-            )
-            trained_members.append(trained)
-    
+    for idx in range(len(members_raw)):
+        cv_for_member = member_cv_results[idx]
+        best_train_cnf = dict(cv_for_member.best_training_config)
+        best_model_cnf = dict(cv_for_member.best_model_config)
+        best_train_cnf['early_stopping_patience'] = 0
+        trained = train_best(
+            train_data=member_train_data[idx],
+            test_data=member_test_data[idx],
+            feature_dim=member_feature_dims[idx],
+            best_model_cnf=best_model_cnf,
+            train_cnf=best_train_cnf,
+            print_logs=print_logs,
+        )
+        trained_members.append(trained)
+
     assembled_model = AssemblyModel(
         members=trained_members,
         cat_list=cat_list,
@@ -920,7 +1006,7 @@ def _run_assembly_training_pipeline(
 
     log_stage(
         task=task,
-        message='Assembly stage 7: evaluating assembled model on test',
+        message='Assembly stage 8: evaluating assembled model on test',
         print_logs=print_logs,
     )
     # eval_final's `test_data` is used only as the gold-label / corpus carrier
