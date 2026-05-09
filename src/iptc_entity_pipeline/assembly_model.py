@@ -56,6 +56,8 @@ class AssemblyModel:
         members: Sequence[Any],
         cat_list: Sequence[str],
         class_to_model: ClassToModelMap,
+        member_eval_data: Mapping[int, Any] | None = None,
+        member_feature_dims: Sequence[int] | None = None,
     ) -> None:
         if len(members) < 1:
             raise ValueError('AssemblyModel requires at least one member')
@@ -79,6 +81,17 @@ class AssemblyModel:
                 f'class_to_model.assignments contains out-of-range member indices: '
                 f'{dict(list(bad_idx.items())[:5])}'
             )
+        if member_eval_data is not None:
+            missing = [i for i in range(len(members)) if i not in member_eval_data]
+            if missing:
+                raise ValueError(
+                    f'member_eval_data missing entries for member indices: {missing}'
+                )
+        if member_feature_dims is not None and len(member_feature_dims) != len(members):
+            raise ValueError(
+                f'member_feature_dims has {len(member_feature_dims)} entries '
+                f'but {len(members)} members were provided'
+            )
 
         self._members = tuple(members)
         self.catList = list(cat_list)
@@ -86,6 +99,12 @@ class AssemblyModel:
         self._owned: tuple[set[str], ...] = tuple(
             {cid for cid, idx in class_to_model.assignments.items() if idx == m_idx}
             for m_idx in range(len(members))
+        )
+        self._member_eval_data: dict[int, Any] = (
+            dict(member_eval_data) if member_eval_data is not None else {}
+        )
+        self._member_feature_dims: tuple[int, ...] = (
+            tuple(int(d) for d in member_feature_dims) if member_feature_dims is not None else ()
         )
         self._device = getattr(members[0], '_device', None)
 
@@ -113,9 +132,17 @@ class AssemblyModel:
         pair is member ``m``'s sigmoid score for ``c``. Classes outside
         :pyattr:`catList` are dropped.
 
-        :param evalData: Dataset to score (each member receives the same
-            evaluation dataset since the per-member feature alignment is
-            handled at dataset-construction time).
+        When ``member_eval_data`` was provided at construction, each member
+        is scored against its own dataset (member ``i`` uses
+        ``member_eval_data[i]``). This is required when members have
+        different feature pipelines: feeding member 1 a dataset built for
+        member 0's pipeline would be a shape/semantics mismatch. The
+        ``evalData`` argument is then used as a fallback for any member
+        that has no entry in ``member_eval_data`` and as the canonical
+        source of doc identity / row count for the combined output.
+
+        :param evalData: Fallback evaluation dataset used when no
+            per-member dataset was registered for a given member.
         :param thr: Forwarded to each member. Use the pipeline's default
             ``threshold_predict`` (``-9999``) so all scores survive — the
             per-class thresholding happens later in
@@ -123,21 +150,24 @@ class AssemblyModel:
         :param returnScores: Kept for signature parity; the assembly always
             returns scored labels.
         :param sigmoidScores: Forwarded to each member.
-        :return: ``list[list[(cat_id, score)]]`` aligned with the docs in
-            ``evalData``.
+        :return: ``list[list[(cat_id, score)]]`` aligned with member 0's
+            dataset (and by row-alignment also with all other members').
         """
-        per_member = [
-            m.classifyDataset(
-                evalData, thr=thr, returnScores=True, sigmoidScores=sigmoidScores,
+        per_member: list[list[Any]] = []
+        for m_idx, member in enumerate(self._members):
+            member_data = self._member_eval_data.get(m_idx, evalData)
+            per_member.append(
+                member.classifyDataset(
+                    member_data, thr=thr, returnScores=True, sigmoidScores=sigmoidScores,
+                )
             )
-            for m in self._members
-        ]
         n_docs = len(per_member[0])
         for idx, preds in enumerate(per_member):
             if len(preds) != n_docs:
                 raise ValueError(
                     f'AssemblyModel: member={idx} produced {len(preds)} docs '
-                    f'vs primary {n_docs}'
+                    f'vs primary {n_docs}; per-member eval datasets must be '
+                    f'row-aligned (validate_member_catlists checks this)'
                 )
 
         out: list[list[tuple[str, float]]] = []
@@ -176,7 +206,7 @@ class AssemblyModel:
             member_paths.append(str(member_path))
 
         manifest_path = anchor.with_name(f'{anchor.name}.assembly_manifest.json')
-        manifest = {
+        manifest: dict[str, Any] = {
             'schema_version': '1',
             'anchor_path': str(anchor),
             'member_labels': list(labels),
@@ -184,6 +214,8 @@ class AssemblyModel:
             'cat_list': list(self.catList),
             'assignments': {str(k): int(v) for k, v in self._class_to_model.assignments.items()},
         }
+        if self._member_feature_dims:
+            manifest['member_feature_dims'] = list(self._member_feature_dims)
         with manifest_path.open('w', encoding='utf-8') as out:
             json.dump(manifest, out, ensure_ascii=False, indent=2, sort_keys=True)
         LOGGER.info(
