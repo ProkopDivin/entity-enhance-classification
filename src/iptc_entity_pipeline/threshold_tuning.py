@@ -8,7 +8,8 @@ per-class threshold sweep on dev predictions:
 1. For each candidate threshold ``t`` in the configured grid, filter the
    predictions and compute per-class stats via :func:`evalutil.multiStats`.
 2. For each class, pick the threshold that maximizes F-beta (default beta=1).
-3. Aggregate per-fold per-class thresholds across CV folds (mean by default).
+3. Aggregate per-fold per-class thresholds across CV folds (``mean`` by default;
+   ``median`` / ``mode`` optional).
 4. Use the aggregated map as ``customThresholds`` for the final model
    evaluation.
 
@@ -17,7 +18,7 @@ Public entry points:
 - :func:`eval_at_thresholds` — per-threshold per-class stats.
 - :func:`select_thresholds_by_f1` — per-class argmax over thresholds.
 - :func:`tune_thresholds` — fold-level convenience wrapper.
-- :func:`aggregate_fold_thresholds` — mean/mode aggregation + report table.
+- :func:`aggregate_fold_thresholds` — mean / median / mode aggregation + report table.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from statistics import mean, mode, pstdev
+from statistics import mean, median, mode, pstdev
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
@@ -44,8 +45,8 @@ class ThresholdTuningResult:
         category in the corpus ``catList``. Categories never observed in any
         fold fall back to ``default_threshold``.
     :param fold_thresholds: Tuple of per-fold ``class -> threshold`` mappings.
-    :param report_df: Per-class report with mean / std / mode / min / max
-        thresholds plus the selected value, indexed by category id.
+    :param report_df: Per-class report with mean / std / mode / median / min /
+        max thresholds plus the selected value, indexed by category id.
     """
 
     cat_to_threshold: dict[str, float]
@@ -160,16 +161,16 @@ def aggregate_fold_thresholds(
 
     Categories not seen in any fold fall back to ``default_threshold``. The
     report table has one row per category and includes mean, std (population),
-    mode, min, max, the number of folds the class was tuned on, and the final
-    selected value. Rows are sorted by category id for deterministic output.
+    mode, median, min, max, the number of folds the class was tuned on, and the
+    final selected value. Rows are sorted by category id for deterministic output.
 
     :param fold_thresholds: Per-fold ``class -> threshold`` mappings.
     :param cat_list: Full category list (every entry gets a row).
     :param default_threshold: Fallback for classes never seen in any fold.
-    :param aggregation: ``'mean'`` (default) or ``'mode'``.
+    :param aggregation: ``'mean'`` (default), ``'median'``, or ``'mode'``.
     :return: Aggregated thresholds and per-class report DataFrame.
     """
-    if aggregation not in {'mean', 'mode'}:
+    if aggregation not in {'mean', 'median', 'mode'}:
         raise ValueError(f'Unsupported threshold aggregation: {aggregation}')
 
     per_class: dict[str, list[float]] = defaultdict(list)
@@ -191,6 +192,7 @@ def aggregate_fold_thresholds(
                 'threshold_mean': float('nan'),
                 'threshold_std': float('nan'),
                 'threshold_mode': float('nan'),
+                'threshold_median': float('nan'),
                 'threshold_min': float('nan'),
                 'threshold_max': float('nan'),
                 'threshold_selected': selected,
@@ -199,9 +201,15 @@ def aggregate_fold_thresholds(
         thr_mean = float(mean(values))
         thr_std = float(pstdev(values)) if len(values) > 1 else 0.0
         thr_mode = _safe_mode(values)
+        thr_median = float(median(values))
         thr_min = float(min(values))
         thr_max = float(max(values))
-        selected = thr_mean if aggregation == 'mean' else thr_mode
+        if aggregation == 'mean':
+            selected = thr_mean
+        elif aggregation == 'median':
+            selected = thr_median
+        else:
+            selected = thr_mode
         cat_to_threshold[cat] = float(selected)
         rows.append({
             'category_id': cat,
@@ -210,6 +218,7 @@ def aggregate_fold_thresholds(
             'threshold_mean': thr_mean,
             'threshold_std': thr_std,
             'threshold_mode': thr_mode,
+            'threshold_median': thr_median,
             'threshold_min': thr_min,
             'threshold_max': thr_max,
             'threshold_selected': float(selected),
