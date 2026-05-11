@@ -251,6 +251,14 @@ def evaluate_fold(
             eval_corpus=val_data.corpus,
             tuning_cfg=tuning_cfg,
         )
+        df_corpora_fold, df_classes_fold, pred_scores = evaluateModel(
+            model=train_result.model,
+            evalData=val_data,
+            evaluation_config=eval_cfg,
+            customThresholds=fold_thresholds,
+            connect_config=False,
+            returnPredictions=True,
+        )
     else:
         fold_thresholds = {}
     micro_row = extract_micro_row(

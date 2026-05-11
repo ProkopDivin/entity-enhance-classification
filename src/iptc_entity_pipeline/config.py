@@ -1035,7 +1035,7 @@ class Assembly1Cnf(BaseCnf):
     ``True`` for fast local single-model iteration; that default would
     silently collapse the assembly to a single fold.
     """
-
+    tuning: ThresholdTuningCnf = field(default_factory=lambda: ThresholdTuningCnf(enabled=True))
     debug: bool = field(default_factory=lambda: False)
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
