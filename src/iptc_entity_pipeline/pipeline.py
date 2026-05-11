@@ -352,12 +352,12 @@ def run_cv(
     task.connect(asdict(optuna_cfg), name='optunaConfig')
     task.connect(asdict(tuning_cfg), name='thresholdTuningConfig')
 
-    if eval_thresholds is not None and tuning_cfg.enabled:
-        logger.info(
-            'Assembly mode: external eval_thresholds provided, '
-            'forcing tuning_cfg.enabled=False'
-        )
-        tuning_cfg = replace(tuning_cfg, enabled=False)
+    #if eval_thresholds is not None and tuning_cfg.enabled:
+    #    logger.info(
+    #        'Assembly mode: external eval_thresholds provided, '
+    #        'forcing tuning_cfg.enabled=False'
+    #    )
+    #    tuning_cfg = replace(tuning_cfg, enabled=False)
 
     x_full, y_full = prepare_cv(train_data=train_data)
     logger.info(f'CV data prepared: x_shape={x_full.shape}, y_shape={y_full.shape}, feature_dim={feature_dim}')
@@ -469,6 +469,7 @@ def run_assembly_step(
     print_logs: bool = True,
     upload_artifacts: bool = False,
     mapping_artifact_name: str = 'assembly_class_to_model',
+    sign_test: bool = False,
 ):
     """Build the assembly from each member's pre-computed :class:`CvResult`.
 
@@ -512,6 +513,7 @@ def run_assembly_step(
             list(member_loaded_thresholds)
             if member_loaded_thresholds is not None else None
         ),
+        sign_test=bool(sign_test),
     )
 
     report_assembly_tables(
@@ -984,6 +986,7 @@ def _run_assembly_training_pipeline(
         print_logs=print_logs,
         upload_artifacts=upload_artifacts,
         mapping_artifact_name=str(assembly_cnf.get('mapping_artifact_name', 'assembly_class_to_model')),
+        sign_test=bool(assembly_cnf.get('sign_test', False)),
     )
 
     log_stage(
