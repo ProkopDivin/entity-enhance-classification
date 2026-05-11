@@ -352,12 +352,12 @@ def run_cv(
     task.connect(asdict(optuna_cfg), name='optunaConfig')
     task.connect(asdict(tuning_cfg), name='thresholdTuningConfig')
 
-    #if eval_thresholds is not None and tuning_cfg.enabled:
-    #    logger.info(
-    #        'Assembly mode: external eval_thresholds provided, '
-    #        'forcing tuning_cfg.enabled=False'
-    #    )
-    #    tuning_cfg = replace(tuning_cfg, enabled=False)
+    if eval_thresholds is not None and tuning_cfg.enabled:
+        logger.info(
+            'Assembly mode: external eval_thresholds provided, '
+            'forcing tuning_cfg.enabled=False'
+        )
+        tuning_cfg = replace(tuning_cfg, enabled=False)
 
     x_full, y_full = prepare_cv(train_data=train_data)
     logger.info(f'CV data prepared: x_shape={x_full.shape}, y_shape={y_full.shape}, feature_dim={feature_dim}')
