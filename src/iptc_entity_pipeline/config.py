@@ -1042,7 +1042,6 @@ class Assembly1Cnf(BaseCnf):
     ``True`` for fast local single-model iteration; that default would
     silently collapse the assembly to a single fold.
     """
-    tuning: ThresholdTuningCnf = field(default_factory=lambda: ThresholdTuningCnf(enabled=True))
     debug: bool = field(default_factory=lambda: False)
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
@@ -1071,8 +1070,8 @@ class Assembly2Cnf(BaseCnf):
     basis when that non-primary beats the primary in ``folds - 1`` or
     more CV folds.
     """
-    tuning: ThresholdTuningCnf = field(default_factory=lambda: ThresholdTuningCnf(enabled=True))
     debug: bool = field(default_factory=lambda: False)
+    test_sign_test: bool = field(default_factory=lambda: True)
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
             enabled=True,
@@ -1100,7 +1099,6 @@ class AssemblyDebug(BaseCnf):
     Each member directly carries a full pipeline config instance. Threshold
     files come from prior single-model debug runs in ``results/saved_models``.
     """
-    tuning: ThresholdTuningCnf = field(default_factory=lambda: ThresholdTuningCnf(enabled=True))
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
             enabled=True,
