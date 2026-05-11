@@ -25,6 +25,7 @@ from iptc_entity_pipeline.dataset_builder import (
 )
 from iptc_entity_pipeline.evaluate import aggregate_fold_dfs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
+from iptc_entity_pipeline.seeding import fold_seed, set_global_seed
 from iptc_entity_pipeline.threshold_tuning import (
     ThresholdTuningResult,
     aggregate_fold_thresholds,
@@ -207,6 +208,7 @@ def evaluate_fold(
     objective_corpora: str,
     fold_idx: int,
     print_logs: bool,
+    random_seed: int,
     eval_thresholds: Mapping[str, float] | None = None,
 ) -> FoldEvalOutput:
     """Train and evaluate one CV fold.
@@ -214,6 +216,9 @@ def evaluate_fold(
     Always returns the per-fold per-corpora and per-class evaluation tables
     so callers can aggregate them across folds into mean+std summaries.
 
+    :param random_seed: Pipeline-wide seed. Re-applied here with a per-fold
+        offset so model initialization and DataLoader shuffling are
+        reproducible and decoupled from upstream RNG consumption.
     :param eval_thresholds: Optional per-class thresholds to apply during
         per-fold evaluation (forwarded to ``evaluateModel`` as
         ``customThresholds``). Used by the assembly pipeline to score each
@@ -221,6 +226,7 @@ def evaluate_fold(
         the global ``eval_cfg.threshold_eval`` is used. Independent of
         ``tuning_cfg``.
     """
+    set_global_seed(seed=fold_seed(base_seed=random_seed, fold_idx=fold_idx))
     train_result = train_model(
         train_data=fit_data,
         dev_data=val_data,
@@ -362,15 +368,21 @@ def _build_pruner(*, optuna_module: Any, optuna_cfg: OptunaCnf) -> Any:
     raise ValueError(f'Unsupported Optuna pruner: {optuna_cfg.pruner}')
 
 
-def _build_sampler(*, optuna_module: Any, optuna_cfg: OptunaCnf, space: HyperparamSpace) -> Any:
+def _build_sampler(
+    *,
+    optuna_module: Any,
+    optuna_cfg: OptunaCnf,
+    space: HyperparamSpace,
+    random_seed: int,
+) -> Any:
     """Create Optuna sampler based on configuration."""
     sampler_name = optuna_cfg.sampler.strip().lower()
     if sampler_name == 'grid':
         return optuna_module.samplers.GridSampler(search_space=_build_search_space(space=space))
     if sampler_name == 'tpe':
-        return optuna_module.samplers.TPESampler(seed=int(optuna_cfg.seed))
+        return optuna_module.samplers.TPESampler(seed=int(random_seed))
     if sampler_name == 'random':
-        return optuna_module.samplers.RandomSampler(seed=int(optuna_cfg.seed))
+        return optuna_module.samplers.RandomSampler(seed=int(random_seed))
     raise ValueError(f'Unsupported Optuna sampler: {optuna_cfg.sampler}')
 
 
@@ -394,6 +406,7 @@ def run_combination(
     debug: bool,
     print_logs: bool,
     clearml_logger: Any,
+    random_seed: int,
     trial: Any = None,
     eval_thresholds: Mapping[str, float] | None = None,
 ) -> tuple[CombinationResult, int]:
@@ -414,7 +427,7 @@ def run_combination(
     cv_splitter = MultilabelStratifiedKFold(
         n_splits=cv_cfg.folds,
         shuffle=True,
-        random_state=cv_cfg.random_seed,
+        random_state=int(random_seed),
     )
     fold_curves: list[CvFoldCurves] = []
     fold_rows: list[dict[str, Any]] = []
@@ -437,6 +450,7 @@ def run_combination(
             objective_corpora=objective_corpora,
             fold_idx=fold_idx,
             print_logs=print_logs,
+            random_seed=random_seed,
             eval_thresholds=eval_thresholds,
         )
         completed_trainings += 1
@@ -512,6 +526,7 @@ def select_best(
     debug: bool,
     print_logs: bool,
     clearml_logger: Any,
+    random_seed: int,
     eval_thresholds: Mapping[str, float] | None = None,
 ) -> BestSelection:
     """Run Optuna-managed search and select the best trial by mean F1."""
@@ -550,7 +565,12 @@ def select_best(
 
     study = optuna.create_study(
         direction=optuna_cfg.direction,
-        sampler=_build_sampler(optuna_module=optuna, optuna_cfg=optuna_cfg, space=space),
+        sampler=_build_sampler(
+            optuna_module=optuna,
+            optuna_cfg=optuna_cfg,
+            space=space,
+            random_seed=random_seed,
+        ),
         pruner=_build_pruner(optuna_module=optuna, optuna_cfg=optuna_cfg),
     )
 
@@ -580,6 +600,7 @@ def select_best(
             debug=debug,
             print_logs=print_logs,
             clearml_logger=clearml_logger,
+            random_seed=random_seed,
             trial=trial,
             eval_thresholds=eval_thresholds,
         )

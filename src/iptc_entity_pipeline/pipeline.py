@@ -304,6 +304,7 @@ def run_cv(
     optuna_cnf: Mapping[str, Any],
     tuning_cnf: Mapping[str, Any],
     objective_corpora: str,
+    random_seed: int,
     print_logs: bool = True,
     debug: bool = False,
     upload_artifacts: bool = False,
@@ -329,8 +330,10 @@ def run_cv(
         conf_from_dict,
     )
     from iptc_entity_pipeline.cross_validation import build_cv_df, build_cv_result, prepare_cv, select_best
+    from iptc_entity_pipeline.seeding import set_global_seed
 
     conf_logging()
+    set_global_seed(seed=int(random_seed))
     logger = logging.getLogger(__name__)
     task = Task.current_task()
     clearml_logger = task.get_logger()
@@ -374,6 +377,7 @@ def run_cv(
         debug=debug,
         print_logs=print_logs,
         clearml_logger=clearml_logger,
+        random_seed=int(random_seed),
         eval_thresholds=eval_thresholds,
     )
 
@@ -553,12 +557,15 @@ def train_best(
     feature_dim: int,
     best_model_cnf: Mapping[str, Any],
     train_cnf: Mapping[str, Any],
+    random_seed: int,
     print_logs: bool = True,
 ):
     """Train final model on full train set with best hyperparams from CV."""
     from iptc_entity_pipeline.config import ModelCnf, TrainingCnf, conf_from_dict
+    from iptc_entity_pipeline.seeding import set_global_seed
 
     conf_logging()
+    set_global_seed(seed=int(random_seed))
     logger = logging.getLogger(__name__)
     task = Task.current_task()
     clearml_logger = task.get_logger()
@@ -791,6 +798,7 @@ def _run_assembly_training_pipeline(
     print_logs: bool,
     debug: bool,
     upload_artifacts: bool,
+    random_seed: int,
 ) -> None:
     """Run the dual-model assembly variant of the training pipeline.
 
@@ -834,6 +842,7 @@ def _run_assembly_training_pipeline(
     member_hparam_cnfs = [c.get('hparam', {}) for c in member_configs]
     member_optuna_cnfs = [c.get('optuna', {}) for c in member_configs]
     member_tuning_cnfs = [c.get('tuning', {'enabled': False}) for c in member_configs]
+    member_random_seeds = [int(c.get('random_seed', random_seed)) for c in member_configs]
 
     log_stage(
         task=task,
@@ -951,6 +960,7 @@ def _run_assembly_training_pipeline(
             optuna_cnf=member_optuna_cnfs[idx],
             tuning_cnf=member_tuning_cnfs[idx],
             objective_corpora=objective_corpora,
+            random_seed=member_random_seeds[idx],
             print_logs=print_logs,
             debug=debug,
             upload_artifacts=upload_artifacts,
@@ -963,6 +973,7 @@ def _run_assembly_training_pipeline(
         message='Assembly stage 6: aggregate per-member CV into per-class assembly',
         print_logs=print_logs,
     )
+    # simplify this 
     assembly_result = run_assembly_step(
         member_cv_results=member_cv_results,
         member_labels=member_labels,
@@ -992,6 +1003,7 @@ def _run_assembly_training_pipeline(
             feature_dim=member_feature_dims[idx],
             best_model_cnf=best_model_cnf,
             train_cnf=best_train_cnf,
+            random_seed=member_random_seeds[idx],
             print_logs=print_logs,
         )
         trained_members.append(trained)
@@ -1080,11 +1092,13 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     config_name = str(cnf.get('config_name', 'wpentities'))
     task.add_tags([config_name])
 
+    from iptc_entity_pipeline.seeding import set_global_seed
+
     paths_cnf = cnf['paths']
     emb_cnf = cnf['emb']
     train_cnf = cnf['train']
     eval_cnf = cnf['eval']
-    cv_cnf = cnf.get('cv', {'folds': 5, 'random_seed': 43})
+    cv_cnf = cnf.get('cv', {'folds': 5})
     optuna_cnf = cnf.get('optuna', {})
     tuning_cnf = cnf.get('tuning', {'enabled': False})
     assembly_cnf = cnf.get('assembly') or {'enabled': False}
@@ -1096,6 +1110,8 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     print_logs = bool(cnf.get('print_logs', True))
     debug = bool(cnf.get('debug', False))
     upload_artifacts = bool(cnf.get('upload_artifacts', False))
+    random_seed = int(cnf.get('random_seed', 43))
+    set_global_seed(seed=random_seed)
 
     if assembly_cnf.get('enabled'):
         _run_assembly_training_pipeline(
@@ -1109,6 +1125,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
             print_logs=print_logs,
             debug=debug,
             upload_artifacts=upload_artifacts,
+            random_seed=random_seed,
         )
         return
 
@@ -1176,6 +1193,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         optuna_cnf=optuna_cnf,
         tuning_cnf=tuning_cnf,
         objective_corpora=obj_corpora,
+        random_seed=random_seed,
         print_logs=print_logs,
         debug=debug,
         upload_artifacts=upload_artifacts,
@@ -1194,6 +1212,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         feature_dim=feature_dim,
         best_model_cnf=cv_result.best_model_config,
         train_cnf=cv_result.best_training_config,
+        random_seed=random_seed,
         print_logs=print_logs,
     )
 

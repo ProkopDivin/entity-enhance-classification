@@ -101,20 +101,23 @@ class EvaluationCnf:
 
 @dataclass(frozen=True)
 class CvCnf:
-    """Cross-validation setup."""
+    """Cross-validation setup. The pipeline-wide ``BaseCnf.random_seed``
+    drives the fold splitter; this block intentionally has no seed field."""
 
     folds: int = 5
-    random_seed: int = 43
 
 
 @dataclass(frozen=True)
 class OptunaCnf:
-    """Optuna optimization behavior for CV hyperparameter search."""
+    """Optuna optimization behavior for CV hyperparameter search.
+
+    The pipeline-wide ``BaseCnf.random_seed`` drives the sampler seed;
+    this block intentionally has no seed field.
+    """
 
     sampler: Literal['grid', 'tpe', 'random'] = 'grid'
     direction: str = 'maximize'
     n_trials: int = 30
-    seed: int = 43
     pruner: str = 'median'
     startup_trials: int = 5
     warmup_steps: int = 2
@@ -155,6 +158,11 @@ class BaseCnf:
     tuning: ThresholdTuningCnf = field(default_factory=ThresholdTuningCnf)
     objective_corpora: str = 'All-datapoint'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
+    # Single random seed that drives every randomness source in the pipeline:
+    # global RNGs (python random / numpy / torch CPU+CUDA, cudnn deterministic),
+    # the CV fold splitter, the Optuna sampler, and per-fold model init /
+    # DataLoader shuffling (re-seeded with a fold-derived offset).
+    random_seed: int = 43
     print_logs: bool = True
     upload_artifacts: bool = True
     debug: bool = True
@@ -270,22 +278,22 @@ class WpEntitiesCnf(BaseCnfWithHPO2):
 @dataclass(frozen=True)
 class WpEntitiesCnf2(BaseCnfWithHPO2):
     """Default entity-enhanced configuration."""
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=294613))
-    
+    random_seed: int = 294613
+
 @dataclass(frozen=True)
 class WpEntitiesCnf3(BaseCnfWithHPO2):
     """Default entity-enhanced configuration."""
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=999751))
+    random_seed: int = 999751
 
 @dataclass(frozen=True)
 class WpEntitiesCnf4(BaseCnfWithHPO2):
     """Default entity-enhanced configuration."""
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=212654))
+    random_seed: int = 212654
 
 @dataclass(frozen=True)
 class WpEntitiesCnf5(BaseCnfWithHPO2):
     """Default entity-enhanced configuration."""
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=984621))
+    random_seed: int = 984621
     
     
 @dataclass(frozen=True)
@@ -352,25 +360,25 @@ class NoEmbeddingsCnf(BaseCnf):
 @dataclass(frozen=True)
 class ArticleOnlyCnf2(ArticleOnlyCnf):
     """Article-only configuration without entity embeddings."""
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=294613))
-    
+    random_seed: int = 294613
+
 
 @dataclass(frozen=True)
 class ArticleOnlyCnf3(ArticleOnlyCnf):
     """Article-only configuration without entity embeddings."""
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=999751))
-    
-    
+    random_seed: int = 999751
+
+
 @dataclass(frozen=True)
 class ArticleOnlyCnf4(ArticleOnlyCnf):
     """Article-only configuration without entity embeddings."""
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=212654))
-    
-    
+    random_seed: int = 212654
+
+
 @dataclass(frozen=True)
 class ArticleOnlyCnf5(ArticleOnlyCnf):
     """Article-only configuration without entity embeddings."""
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=984621))   
+    random_seed: int = 984621
 
 
 @dataclass(frozen=True)
@@ -403,7 +411,7 @@ class DebugCnf(BaseCnf):
         )
     )
 
-    cv: CvCnf = field(default_factory=lambda: replace(CvCnf(), random_seed=2))
+    random_seed: int = 2
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
@@ -784,6 +792,71 @@ class BestWpEntitiesF1Cnf(BestWpEntitiesCnf):
         )
     )
 
+
+@dataclass(frozen=True)
+class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+
+@dataclass(frozen=True)
+class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    
+@dataclass(frozen=True)
+class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    
+@dataclass(frozen=True)
+class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    
+@dataclass(frozen=True)
+class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
 
 @dataclass(frozen=True)
 class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
