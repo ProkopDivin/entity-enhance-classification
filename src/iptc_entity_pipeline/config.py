@@ -130,7 +130,8 @@ class ThresholdTuningCnf:
     When ``enabled``, after each CV fold of the best Optuna trial the dev-set
     raw scores are scanned over the ``thresholds`` grid and the threshold that
     maximizes F-beta is selected per class. Per-fold per-class thresholds are
-    aggregated across folds (mean by default) and the resulting map is reused
+    aggregated across folds (``mean`` by default; ``median`` and ``mode`` also
+    supported) and the resulting map is reused
     by the final-model evaluation as ``customThresholds``.
     """
 
@@ -140,7 +141,7 @@ class ThresholdTuningCnf:
         default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(5, 16))
     )
     f_beta: float = 1.0
-    aggregation: Literal['mean', 'mode'] = 'mean'
+    aggregation: Literal['mean', 'median', 'mode'] = 'mean'
 
 
 @dataclass(frozen=True)
@@ -210,11 +211,17 @@ class AssemblyCnf:
         member; ties on average F1 resolve to the primary.
     :param mapping_artifact_name: ClearML artifact name for the
         ``class_to_model`` mapping JSON.
+    :param sign_test: When True, per-class selection switches from "pick
+        member with highest mean CV F1" to a sign-test rule: the primary
+        member is kept unless the non-primary member strictly beats it in
+        at least ``folds - 1`` of the CV folds (e.g. 4 out of 5). Ties in
+        a fold count as a primary win.
     """
 
     enabled: bool = True
     members: tuple[AssemblyMemberCnf, ...] = ()
     mapping_artifact_name: str = 'assembly_class_to_model'
+    sign_test: bool = False
 
 
 @dataclass(frozen=True)
@@ -1055,6 +1062,36 @@ class Assembly1Cnf(BaseCnf):
         )
     )
 
+@dataclass(frozen=True)
+class Assembly2Cnf(BaseCnf):
+    """Dual-model assembly with sign-test per-class selection.
+
+    Same member layout as :class:`Assembly1Cnf` but the primary member is
+    kept by default and only swapped to the non-primary on a per-class
+    basis when that non-primary beats the primary in ``folds - 1`` or
+    more CV folds.
+    """
+    tuning: ThresholdTuningCnf = field(default_factory=lambda: ThresholdTuningCnf(enabled=True))
+    debug: bool = field(default_factory=lambda: False)
+    assembly: AssemblyCnf = field(
+        default_factory=lambda: AssemblyCnf(
+            enabled=True,
+            sign_test=True,
+            members=(
+                AssemblyMemberCnf(
+                    config=BestWpEntitiesTunedCnf(),
+                    thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_wpentities_tuned_20260507_102033/thresholds.json',
+                    label='wpentities_tuned',
+                ),
+                AssemblyMemberCnf(
+                    config=BestArticleOnlyTunedCnf(),
+                    thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_article_only_tuned_20260507_102132/thresholds.json',
+                    label='article_only_tuned',
+                ),
+            ),
+        )
+    )
+
 
 @dataclass(frozen=True)
 class AssemblyDebug(BaseCnf):
@@ -1063,7 +1100,7 @@ class AssemblyDebug(BaseCnf):
     Each member directly carries a full pipeline config instance. Threshold
     files come from prior single-model debug runs in ``results/saved_models``.
     """
-
+    tuning: ThresholdTuningCnf = field(default_factory=lambda: ThresholdTuningCnf(enabled=True))
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
             enabled=True,

@@ -58,7 +58,7 @@ class CvResult:
         externally-loaded map is echoed here so downstream consumers have a
         single threshold field to read from. Otherwise ``None``.
     :param threshold_report_df: Per-class tuning report (mean / std / mode /
-        min / max + selected value), or ``None`` if tuning is disabled.
+        median / min / max + selected value), or ``None`` if tuning is disabled.
     :param cv_per_class_df: Per-class P/R/F1 (mean + std) aggregated across
         the best trial's folds. Same shape as ``eval_final``'s
         ``df_classes_test`` plus ``_std`` columns; indexed by IPTC
@@ -76,6 +76,11 @@ class CvResult:
     threshold_report_df: pd.DataFrame | None = None
     cv_per_class_df: pd.DataFrame | None = None
     cv_per_corpora_df: pd.DataFrame | None = None
+    # Per-fold per-class evaluation tables from the best Optuna trial.
+    # Carried separately from ``cv_per_class_df`` (which is the mean+std
+    # aggregate) so the assembly step's sign-test selector can compare
+    # member F1 fold-by-fold rather than just on the aggregated mean.
+    cv_per_class_fold_dfs: tuple[pd.DataFrame, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -245,22 +250,24 @@ def evaluate_fold(
         connect_config=False,
         returnPredictions=True,
     )
+    
     if tuning_cfg is not None and tuning_cfg.enabled:
         fold_thresholds = tune_thresholds(
             pred_wgh_cats=pred_scores,
             eval_corpus=val_data.corpus,
             tuning_cfg=tuning_cfg,
         )
-        df_corpora_fold, df_classes_fold, pred_scores = evaluateModel(
+        df_corpora_fold, df_classes_fold, pred_scores =evaluateModel(
             model=train_result.model,
             evalData=val_data,
             evaluation_config=eval_cfg,
-            customThresholds=fold_thresholds,
+            customThresholds=custom_thresholds,
             connect_config=False,
             returnPredictions=True,
         )
     else:
         fold_thresholds = {}
+        
     micro_row = extract_micro_row(
         df_corpora_fold=df_corpora_fold,
         objective_corpora=objective_corpora,
@@ -744,4 +751,8 @@ def build_cv_result(
         threshold_report_df=threshold_report_df,
         cv_per_class_df=cv_per_class_df,
         cv_per_corpora_df=cv_per_corpora_df,
+        cv_per_class_fold_dfs=(
+            tuple(selection.best_fold_classes_dfs)
+            if selection.best_fold_classes_dfs else None
+        ),
     )

@@ -160,6 +160,81 @@ def select_class_to_model(
     return ClassToModelMap(assignments=assignments, member_labels=tuple(member_labels))
 
 
+def select_class_to_model_sign_test(
+    *,
+    member_fold_class_dfs: Sequence[Sequence[pd.DataFrame] | None],
+    cat_list: Sequence[str],
+    member_labels: Sequence[str],
+    primary_idx: int = 0,
+) -> ClassToModelMap:
+    """Sign-test per-class selection between two members.
+
+    The primary member is kept for every class by default. For each
+    non-primary member, count the folds where its F1 strictly exceeds
+    the primary's F1 for that class; if the count is at least
+    ``n_folds - 1`` (e.g. 4 out of 5), the class is reassigned to the
+    non-primary. Ties or NaN F1 in a fold count as a primary win.
+
+    :param member_fold_class_dfs: Per-member tuple of per-fold per-class
+        DataFrames. Index labels follow :func:`_class_index_for` (same
+        encoding as ``cv_per_class_df``). ``None`` for a member is
+        treated as "no fold data" — that member never wins.
+    """
+    n_members = len(member_labels)
+    if n_members < 2:
+        return ClassToModelMap(
+            assignments={str(cid): primary_idx for cid in cat_list},
+            member_labels=tuple(member_labels),
+        )
+
+    primary_folds = member_fold_class_dfs[primary_idx]
+    if primary_folds is None or len(primary_folds) == 0:
+        return ClassToModelMap(
+            assignments={str(cid): primary_idx for cid in cat_list},
+            member_labels=tuple(member_labels),
+        )
+    n_folds = len(primary_folds)
+    win_threshold = max(1, n_folds - 1)
+
+    assignments: dict[str, int] = {}
+    for cat_id in cat_list:
+        cid = str(cat_id)
+        row_idx = _class_index_for(cid)
+        primary_f1s = [_fold_f1(df=df, row_idx=row_idx) for df in primary_folds]
+
+        chosen = primary_idx
+        for m_idx in range(n_members):
+            if m_idx == primary_idx:
+                continue
+            other_folds = member_fold_class_dfs[m_idx]
+            if other_folds is None or len(other_folds) != n_folds:
+                continue
+            wins = sum(
+                1 for fold_idx in range(n_folds)
+                if _fold_f1(df=other_folds[fold_idx], row_idx=row_idx) > primary_f1s[fold_idx]
+            )
+            if wins >= win_threshold:
+                chosen = m_idx
+                break
+        assignments[cid] = chosen
+    return ClassToModelMap(assignments=assignments, member_labels=tuple(member_labels))
+
+
+def _fold_f1(*, df: pd.DataFrame | None, row_idx: str) -> float:
+    """Return F1 for one class in one fold, or ``-inf`` if missing."""
+    if df is None or row_idx not in df.index:
+        return float('-inf')
+    value = df.loc[row_idx].get('F1')
+    if value is None:
+        return float('-inf')
+    try:
+        if pd.isna(value):
+            return float('-inf')
+    except (TypeError, ValueError):
+        pass
+    return float(value)
+
+
 def stitch_thresholds(
     *,
     class_to_model: ClassToModelMap,
@@ -318,6 +393,7 @@ def build_assembly_from_cv(
     objective_corpora: str,
     primary_idx: int = 0,
     member_loaded_thresholds: Sequence[Mapping[str, float] | None] | None = None,
+    sign_test: bool = False,
 ) -> AssemblyCvResult:
     """
     Build the assembly result from each member's :class:`CvResult`.
@@ -356,12 +432,20 @@ def build_assembly_from_cv(
         cat_list=cat_list,
         member_labels=member_labels,
     )
-    class_to_model = select_class_to_model(
-        per_class_f1_df=per_class_f1_df,
-        cat_list=cat_list,
-        member_labels=member_labels,
-        primary_idx=primary_idx,
-    )
+    if sign_test:
+        class_to_model = select_class_to_model_sign_test(
+            member_fold_class_dfs=[cv.cv_per_class_fold_dfs for cv in member_cv_results],
+            cat_list=cat_list,
+            member_labels=member_labels,
+            primary_idx=primary_idx,
+        )
+    else:
+        class_to_model = select_class_to_model(
+            per_class_f1_df=per_class_f1_df,
+            cat_list=cat_list,
+            member_labels=member_labels,
+            primary_idx=primary_idx,
+        )
     stitched = stitch_thresholds(
         class_to_model=class_to_model,
         member_thresholds=member_thresholds,
