@@ -807,7 +807,7 @@ class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
     )
 
 @dataclass(frozen=True)
-class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+class BestWpEntitiesTunedCnf2(BestWpEntitiesCnf):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
     The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
@@ -818,9 +818,10 @@ class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    random_seed: int = 53351
     
 @dataclass(frozen=True)
-class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+class BestWpEntitiesTunedCnf3(BestWpEntitiesCnf):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
     The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
@@ -831,9 +832,11 @@ class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    random_seed: int = 163485
+    
     
 @dataclass(frozen=True)
-class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+class BestWpEntitiesTunedCnf4(BestWpEntitiesCnf):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
     The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
@@ -844,9 +847,11 @@ class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    random_seed: int = 61144
+    
     
 @dataclass(frozen=True)
-class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+class BestWpEntitiesTunedCnf5(BestWpEntitiesCnf):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
     The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
@@ -857,19 +862,9 @@ class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    random_seed: int = 8689129
 
-@dataclass(frozen=True)
-class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled.
 
-    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
-    and per-class thresholds are aggregated by mean across folds, then reused
-    when evaluating the final model on test.
-    """
-
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
-    )
 
 
 @dataclass(frozen=True)
@@ -985,7 +980,34 @@ class BestArticleOnlyTunedCnf(BestArticleOnlyCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+
+@dataclass(frozen=True)
+class BestArticleOnlyTunedCnf2(BestArticleOnlyCnf):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    random_seed: int = 53351
+
+@dataclass(frozen=True)  
+class BestArticleOnlyTunedCnf3(BestArticleOnlyCnf):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    random_seed: int = 163485
     
+@dataclass(frozen=True)  
+class BestArticleOnlyTunedCnf4(BestArticleOnlyCnf):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    random_seed: int = 61144
+    
+@dataclass(frozen=True)  
+class BestArticleOnlyTunedCnf5(BestArticleOnlyCnf):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    random_seed: int = 8689129
     
 @dataclass(frozen=True)
 class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
@@ -1123,8 +1145,16 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities': BestWpEntitiesCnf(),
         'best_wpentities_f1': BestWpEntitiesF1Cnf(),
         'best_wpentities_tuned': BestWpEntitiesTunedCnf(),
+        'best_wpentities_tuned_2': BestWpEntitiesTunedCnf2(),
+        'best_wpentities_tuned_3': BestWpEntitiesTunedCnf3(),
+        'best_wpentities_tuned_4': BestWpEntitiesTunedCnf4(),
+        'best_wpentities_tuned_5': BestWpEntitiesTunedCnf5(),
         'best_article_only': BestArticleOnlyCnf(),
         'best_article_only_tuned': BestArticleOnlyTunedCnf(),
+        'best_article_only_tuned_2': BestArticleOnlyTunedCnf2(),
+        'best_article_only_tuned_3': BestArticleOnlyTunedCnf3(),
+        'best_article_only_tuned_4': BestArticleOnlyTunedCnf4(),
+        'best_article_only_tuned_5': BestArticleOnlyTunedCnf5(),
         'best_wpentities_all_langs': BestWpentitiesAllLangsCnf(),
         'best_wpentities_nl': BestWpentitiesNlCnf(),
         'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
@@ -1140,7 +1170,6 @@ def _config_map() -> dict[str, BaseCnf]:
         'article_only_3': ArticleOnlyCnf3(),
         'article_only_4': ArticleOnlyCnf4(),
         'article_only_5': ArticleOnlyCnf5(),
-        
         'learning_rate': TunningLearningRateCnf(),
         'learning_rate_f1': TunningLearningRateF1Cnf(),
         'assembly1': Assembly1Cnf(),
