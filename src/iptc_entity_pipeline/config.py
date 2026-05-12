@@ -141,7 +141,7 @@ class ThresholdTuningCnf:
         default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(5, 16))
     )
     f_beta: float = 1.0
-    aggregation: Literal['mean', 'median', 'mode'] = 'mean'
+    aggregation: Literal['mean', 'median', 'mode'] = 'mean' # remove other never tried and not usefull 
 
 
 @dataclass(frozen=True)
@@ -812,6 +812,7 @@ class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    
 
 @dataclass(frozen=True)
 class BestWpEntitiesTunedCnf2(BestWpEntitiesCnf):
@@ -1071,7 +1072,6 @@ class Assembly2Cnf(BaseCnf):
     more CV folds.
     """
     debug: bool = field(default_factory=lambda: False)
-    test_sign_test: bool = field(default_factory=lambda: True)
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
             enabled=True,
@@ -1209,6 +1209,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'learning_rate_f1': TunningLearningRateF1Cnf(),
         'assembly1': Assembly1Cnf(),
         'assembly_debug': AssemblyDebug(),
+        'assembly2': Assembly2Cnf(),
     }
 
 
