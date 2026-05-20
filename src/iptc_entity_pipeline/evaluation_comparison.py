@@ -72,16 +72,24 @@ _CMP_METRICS_CORE: tuple[tuple[str, str], ...] = (
     ('recall', 'Recall'),
     ('f1', 'F1'),
 )
+_CMP_METRICS_REPORT: tuple[tuple[str, str], ...] = _CMP_METRICS_CORE
 _CMP_METRICS_CLASSES: tuple[tuple[str, str], ...] = _CMP_METRICS_CORE + (
     ('false_positive_count', 'False Positive Count'),
 )
 _CMP_METRICS_CORPORA: tuple[tuple[str, str], ...] = _CMP_METRICS_CORE + (
     ('false_positive_rate', 'False Positive Rate'),
 )
+_CLASSES_COMPARISON_DROP_COLS: tuple[str, ...] = (
+    'False Positive Count_current',
+    'False Positive Count_base',
+    'False Positive Count_diff',
+)
 
 _RESULT_SHEETS: tuple[tuple[str, str, bool], ...] = (
     ('corpora_comparison', 'corpora_comparison', False),
     ('classes_comparison', 'classes_comparison', False),
+    ('class_confusion_counts', 'class_confusion_counts', False),
+    ('class_thresholds', 'class_thresholds', False),
     ('summary_comparison', 'summary_comparison', False),
     ('top_improved_categories', 'top_improved', False),
     ('top_degraded_categories', 'top_degraded', False),
@@ -115,6 +123,8 @@ class ComparisonResult:
 
     corpora_comparison: pd.DataFrame
     classes_comparison: pd.DataFrame
+    class_confusion_counts: pd.DataFrame
+    class_thresholds: pd.DataFrame
     summary_comparison: pd.DataFrame
     top_improved_categories: pd.DataFrame
     top_degraded_categories: pd.DataFrame
@@ -379,6 +389,20 @@ def compare_runs(
     base_thr_vec = thresholds_vector(
         cat_ids=cat_ids, cat_to_thr=base_thresholds, default_threshold=threshold_eval,
     )
+    class_confusion_df = build_class_confusion_counts_df(
+        current_df=current_aligned_df,
+        base_df=base_aligned_df,
+        gold_map=gold_map,
+        cat_ids=cat_ids,
+        current_thr_vec=current_thr_vec,
+        base_thr_vec=base_thr_vec,
+    )
+    class_thresholds_df = build_class_thresholds_df(
+        cat_ids=cat_ids,
+        default_threshold=threshold_eval,
+        current_thresholds=current_thresholds,
+        base_thresholds=base_thresholds,
+    )
     mcnemar_df = build_mcnemar_significance_df(
         current_df=current_aligned_df,
         base_df=base_aligned_df,
@@ -415,24 +439,32 @@ def compare_runs(
         cat_ids=cat_ids,
         alpha=BRIER_TEST_ALPHA,
         min_positive_samples=BRIER_MIN_POSITIVE_SAMPLES,
-        threshold_eval=threshold_eval,
-        cat_to_thr_current=current_thresholds if use_saved_thresholds else {},
-        cat_to_thr_base=base_thresholds if use_saved_thresholds else {},
     )
     top_improved_df, top_degraded_df = add_brier_to_top_change_dfs(
         improved_df=top_improved_df,
         degraded_df=top_degraded_df,
         brier_df=brier_df,
     )
+    label_to_cat_id = build_label_to_cat_id_map(cat_ids=cat_ids)
     if top_changes_only:
         empty_df = pd.DataFrame()
         excel_path = Path(output_path) if output_path is not None else None
         result = ComparisonResult(
             corpora_comparison=empty_df,
             classes_comparison=empty_df,
+            class_confusion_counts=empty_df,
+            class_thresholds=empty_df,
             summary_comparison=empty_df,
-            top_improved_categories=top_improved_df,
-            top_degraded_categories=top_degraded_df,
+            top_improved_categories=with_class_id_column(
+                df=top_improved_df,
+                key_col='IPTC Category',
+                label_to_cat_id=label_to_cat_id,
+            ),
+            top_degraded_categories=with_class_id_column(
+                df=top_degraded_df,
+                key_col='IPTC Category',
+                label_to_cat_id=label_to_cat_id,
+            ),
             top_improved_stats=empty_df,
             top_degraded_stats=empty_df,
             hamming_loss_comparison=empty_df,
@@ -443,9 +475,17 @@ def compare_runs(
             entity_impact_random=empty_df,
             article_f1_diff_avg_stats=empty_df,
             current_corpora=current_run.corpora_df,
-            current_classes=current_run.classes_df,
+            current_classes=with_class_id_column(
+                df=current_run.classes_df,
+                key_col='IPTC Category',
+                label_to_cat_id=label_to_cat_id,
+            ),
             base_corpora=base_run.corpora_df,
-            base_classes=base_run.classes_df,
+            base_classes=with_class_id_column(
+                df=base_run.classes_df,
+                key_col='IPTC Category',
+                label_to_cat_id=label_to_cat_id,
+            ),
             excel_path=excel_path,
         )
         if excel_path is not None:
@@ -467,10 +507,11 @@ def compare_runs(
         if only_diff
         else corpora_cmp_full
     )
+    classes_cmp_clean = classes_cmp_full.drop(columns=list(_CLASSES_COMPARISON_DROP_COLS), errors='ignore')
     classes_cmp_df = (
-        diff_only_df(df=classes_cmp_full, key_col='IPTC Category', cmp_metrics=_CMP_METRICS_CLASSES)
+        diff_only_df(df=classes_cmp_clean, key_col='IPTC Category', cmp_metrics=_CMP_METRICS_REPORT)
         if only_diff
-        else classes_cmp_full
+        else classes_cmp_clean
     )
     summary_df = build_summary_df(
         current_run=current_run,
@@ -515,23 +556,49 @@ def compare_runs(
     excel_path = Path(output_path) if output_path is not None else None
     result = ComparisonResult(
         corpora_comparison=corpora_cmp_df,
-        classes_comparison=classes_cmp_df,
+        classes_comparison=with_class_id_column(
+            df=classes_cmp_df,
+            key_col='IPTC Category',
+            label_to_cat_id=label_to_cat_id,
+        ),
+        class_confusion_counts=class_confusion_df,
+        class_thresholds=class_thresholds_df,
         summary_comparison=summary_df,
-        top_improved_categories=top_improved_df,
-        top_degraded_categories=top_degraded_df,
+        top_improved_categories=with_class_id_column(
+            df=top_improved_df,
+            key_col='IPTC Category',
+            label_to_cat_id=label_to_cat_id,
+        ),
+        top_degraded_categories=with_class_id_column(
+            df=top_degraded_df,
+            key_col='IPTC Category',
+            label_to_cat_id=label_to_cat_id,
+        ),
         top_improved_stats=top_improved_stats_df,
         top_degraded_stats=top_degraded_stats_df,
         hamming_loss_comparison=hamming_df,
-        pr_auc_per_class=pr_auc_df,
+        pr_auc_per_class=with_class_id_column(
+            df=pr_auc_df,
+            key_col='IPTC Category',
+            label_to_cat_id=label_to_cat_id,
+        ),
         pr_auc_summary=pr_auc_summary_df,
         entity_impact_improvers=entity_improvers_df,
         entity_impact_decaders=entity_decaders_df,
         entity_impact_random=entity_random_df,
         article_f1_diff_avg_stats=article_avg_stats_df,
         current_corpora=current_run.corpora_df,
-        current_classes=current_run.classes_df,
+        current_classes=with_class_id_column(
+            df=current_run.classes_df,
+            key_col='IPTC Category',
+            label_to_cat_id=label_to_cat_id,
+        ),
         base_corpora=base_run.corpora_df,
-        base_classes=base_run.classes_df,
+        base_classes=with_class_id_column(
+            df=base_run.classes_df,
+            key_col='IPTC Category',
+            label_to_cat_id=label_to_cat_id,
+        ),
         excel_path=excel_path,
     )
     if excel_path is not None:
@@ -882,6 +949,123 @@ def diff_only_df(
     return df.loc[:, cols]
 
 
+def build_label_to_cat_id_map(*, cat_ids: Sequence[str]) -> dict[str, str]:
+    """Build mapping from class label to raw class id for stable joins."""
+    return {safe_cat_label(cat_id=cat_id): cat_id for cat_id in cat_ids}
+
+
+def format_class_id(cat_id: Any) -> str:
+    """Format a class id as plain ``<id>`` or empty string for missing values."""
+    if cat_id is None or (isinstance(cat_id, float) and np.isnan(cat_id)):
+        return ''
+    cat_id_str = str(cat_id).strip()
+    if not cat_id_str:
+        return ''
+    if cat_id_str.startswith('(') and cat_id_str.endswith(')'):
+        return cat_id_str[1:-1].strip()
+    return cat_id_str
+
+
+def with_class_id_column(
+    *,
+    df: pd.DataFrame,
+    key_col: str,
+    label_to_cat_id: Mapping[str, str],
+) -> pd.DataFrame:
+    """Attach ``class_id`` column to one class-level dataframe."""
+    result = df.copy()
+    if key_col not in result.columns and result.index.name == key_col:
+        result = result.reset_index()
+    if 'class_id' in result.columns:
+        result['class_id'] = result['class_id'].map(format_class_id)
+        return result
+    if 'cat_id' in result.columns:
+        cat_ids = result['cat_id']
+    elif key_col in result.columns:
+        cat_ids = result[key_col].map(label_to_cat_id)
+    else:
+        result['class_id'] = ''
+        return result
+    result['class_id'] = cat_ids.map(format_class_id)
+    if key_col in result.columns:
+        cols = [key_col, 'class_id']
+        cols.extend(col for col in result.columns if col not in cols)
+        return result.loc[:, cols]
+    return result
+
+
+def build_class_confusion_counts_df(
+    *,
+    current_df: pd.DataFrame,
+    base_df: pd.DataFrame,
+    gold_map: GoldLabelMap,
+    cat_ids: Sequence[str],
+    current_thr_vec: np.ndarray,
+    base_thr_vec: np.ndarray,
+) -> pd.DataFrame:
+    """Build per-class confusion-count comparison table for current vs base."""
+    article_ids = list(current_df['article_id'])
+    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(bool)
+    not_gold_matrix = np.logical_not(gold_matrix)
+    current_pred = build_score_matrix(df=current_df, cat_ids=cat_ids) >= current_thr_vec
+    base_pred = build_score_matrix(df=base_df, cat_ids=cat_ids) >= base_thr_vec
+
+    fp_current = np.logical_and(current_pred, not_gold_matrix).sum(axis=0, dtype=np.int64)
+    fp_base = np.logical_and(base_pred, not_gold_matrix).sum(axis=0, dtype=np.int64)
+    fn_current = np.logical_and(np.logical_not(current_pred), gold_matrix).sum(axis=0, dtype=np.int64)
+    fn_base = np.logical_and(np.logical_not(base_pred), gold_matrix).sum(axis=0, dtype=np.int64)
+    tp_current = np.logical_and(current_pred, gold_matrix).sum(axis=0, dtype=np.int64)
+    tp_base = np.logical_and(base_pred, gold_matrix).sum(axis=0, dtype=np.int64)
+    tn_current = np.logical_and(np.logical_not(current_pred), not_gold_matrix).sum(axis=0, dtype=np.int64)
+    tn_base = np.logical_and(np.logical_not(base_pred), not_gold_matrix).sum(axis=0, dtype=np.int64)
+
+    rows: list[dict[str, Any]] = []
+    for idx, cat_id in enumerate(cat_ids):
+        rows.append(
+            {
+                'IPTC Category': safe_cat_label(cat_id=cat_id),
+                'class_id': format_class_id(cat_id=cat_id),
+                'Fp_current': int(fp_current[idx]),
+                'Fp_base': int(fp_base[idx]),
+                'Fp_diff': int(fp_current[idx] - fp_base[idx]),
+                'Fn_current': int(fn_current[idx]),
+                'Fn_base': int(fn_base[idx]),
+                'Fn_diff': int(fn_current[idx] - fn_base[idx]),
+                'Tp_current': int(tp_current[idx]),
+                'Tp_base': int(tp_base[idx]),
+                'Tp_diff': int(tp_current[idx] - tp_base[idx]),
+                'Tn_current': int(tn_current[idx]),
+                'Tn_base': int(tn_base[idx]),
+                'Tn_diff': int(tn_current[idx] - tn_base[idx]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_class_thresholds_df(
+    *,
+    cat_ids: Sequence[str],
+    default_threshold: float,
+    current_thresholds: Mapping[str, float],
+    base_thresholds: Mapping[str, float],
+) -> pd.DataFrame:
+    """Build per-class threshold table for current/base runs."""
+    rows: list[dict[str, Any]] = []
+    for cat_id in cat_ids:
+        current_thr = float(current_thresholds.get(cat_id, default_threshold))
+        base_thr = float(base_thresholds.get(cat_id, default_threshold))
+        rows.append(
+            {
+                'IPTC Category': safe_cat_label(cat_id=cat_id),
+                'class_id': format_class_id(cat_id=cat_id),
+                'threshold_current': current_thr,
+                'threshold_base': base_thr,
+                'threshold_diff': current_thr - base_thr,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 # ---------------------------------------------------------------------------
 # Summary and metric row helpers
 # ---------------------------------------------------------------------------
@@ -942,7 +1126,7 @@ def build_summary_df(
     for summary_key, (group_name, row_name) in SUMMARY_ROWS.items():
         current_row = tables[f'{group_name}_current'].loc[row_name]
         base_row = tables[f'{group_name}_base'].loc[row_name]
-        mets = _CMP_METRICS_CLASSES if group_name == 'classes' else _CMP_METRICS_CORPORA
+        mets = _CMP_METRICS_REPORT
         rows.append(
             _metric_row(summary_key=summary_key, current=current_row, base=base_row, cmp_metrics=mets),
         )
@@ -958,7 +1142,7 @@ def build_summary_df(
             _avg_metrics_row(
                 summary_key=f'macro_over_classes_support_{label}',
                 sub_df=sub,
-                cmp_metrics=_CMP_METRICS_CLASSES,
+                cmp_metrics=_CMP_METRICS_REPORT,
             )
         )
 
@@ -970,7 +1154,7 @@ def build_summary_df(
             _avg_metrics_row(
                 summary_key=f'macro_over_corpora_prefix_{prefix}',
                 sub_df=sub,
-                cmp_metrics=_CMP_METRICS_CORPORA,
+                cmp_metrics=_CMP_METRICS_REPORT,
             )
         )
 
@@ -979,7 +1163,7 @@ def build_summary_df(
         _avg_metrics_row(
             summary_key=f'macro_over_corpora_{EUROSPORT_TOKEN}',
             sub_df=corpora_filtered[eurosport_mask],
-            cmp_metrics=_CMP_METRICS_CORPORA,
+            cmp_metrics=_CMP_METRICS_REPORT,
         )
     )
 
@@ -990,7 +1174,7 @@ def build_summary_df(
             summary_key='macro_over_corpora',
             current=macro_corpora_current,
             base=macro_corpora_base,
-            cmp_metrics=_CMP_METRICS_CORPORA,
+            cmp_metrics=_CMP_METRICS_REPORT,
         )
     )
     return pd.DataFrame(rows)
@@ -1018,9 +1202,6 @@ def build_top_change_dfs(*, classes_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.
         'F1_current',
         'F1_base',
         'F1_diff',
-        'False Positive Count_current',
-        'False Positive Count_base',
-        'False Positive Count_diff',
     ]
     improved_df = df[df['F1_diff'] > 0].sort_values(
         by=['F1_diff', 'ranking_score', 'article_frequency'],
@@ -1149,11 +1330,9 @@ def _add_mcnemar_to_top_change_df(
     """Merge McNemar rows and expose a direction-aware pass flag."""
     cols = [
         'IPTC Category',
-        'mcnemar_p_value',
         'mcnemar_p_value_fdr',
         'mcnemar_n10_current_only_correct',
         'mcnemar_n01_base_only_correct',
-        'mcnemar_disagreements',
         pass_col,
     ]
     result = df.merge(mcnemar_df.reindex(columns=cols), on='IPTC Category', how='left')
@@ -1161,11 +1340,9 @@ def _add_mcnemar_to_top_change_df(
     result = result.drop(columns=[pass_col])
     metric_cols = [
         'mcnemar_pass',
-        'mcnemar_p_value',
         'mcnemar_p_value_fdr',
         'mcnemar_n10_current_only_correct',
         'mcnemar_n01_base_only_correct',
-        'mcnemar_disagreements',
     ]
     base_cols = [col for col in result.columns if col not in metric_cols]
     return result.loc[:, base_cols + metric_cols]
@@ -1362,9 +1539,6 @@ def build_brier_significance_df(
     cat_ids: Sequence[str],
     alpha: float = BRIER_TEST_ALPHA,
     min_positive_samples: int = BRIER_MIN_POSITIVE_SAMPLES,
-    threshold_eval: float | None = None,
-    cat_to_thr_current: Mapping[str, float] | None = None,
-    cat_to_thr_base: Mapping[str, float] | None = None,
 ) -> pd.DataFrame:
     """Build per-class Brier-score Wilcoxon significance rows with FDR correction.
 
@@ -1377,10 +1551,6 @@ def build_brier_significance_df(
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(float)
     current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
     base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
-
-    thr_c = dict(cat_to_thr_current) if cat_to_thr_current else {}
-    thr_b = dict(cat_to_thr_base) if cat_to_thr_base else {}
-    default_thr = float(threshold_eval) if threshold_eval is not None else 0.5
 
     rows: list[dict[str, Any]] = []
     for idx, cat_id in enumerate(cat_ids):
@@ -1426,32 +1596,11 @@ def build_brier_significance_df(
         else:
             p_val_neg = float('nan')
 
-        in_c = str(cat_id) in thr_c
-        in_b = str(cat_id) in thr_b
-        if in_c and in_b:
-            saved_thr_runs = 'both'
-        elif in_c:
-            saved_thr_runs = 'current'
-        elif in_b:
-            saved_thr_runs = 'base'
-        else:
-            saved_thr_runs = 'none'
-
-        eff_c = float(thr_c.get(str(cat_id), default_thr))
-        eff_b = float(thr_b.get(str(cat_id), default_thr))
-
         rows.append(
             {
                 'IPTC Category': safe_cat_label(cat_id=cat_id),
                 'cat_id': cat_id,
-                'brier_gold_positive_count': gold_positive_count,
-                'brier_gold_negative_count': neg_n,
                 'brier_wilcoxon_eligible': wilcox_eligible_int,
-                'saved_custom_threshold_run': saved_thr_runs,
-                'custom_threshold_saved_current': int(in_c),
-                'custom_threshold_saved_base': int(in_b),
-                'effective_threshold_current': eff_c,
-                'effective_threshold_base': eff_b,
                 'brier_p_value': p_val,
                 'brier_mean_error_diff': mean_diff,
                 'brier_current_mean_error': float(np.mean(current_errors)),
@@ -1540,29 +1689,15 @@ def add_brier_to_top_change_dfs(
 
 def _add_brier_to_top_change_df(*, df: pd.DataFrame, brier_df: pd.DataFrame, pass_col: str) -> pd.DataFrame:
     """Merge Brier rows and expose a direction-aware pass flag."""
-    diag_cols = [
-        'brier_gold_positive_count',
-        'brier_wilcoxon_eligible',
-        'saved_custom_threshold_run',
-        'custom_threshold_saved_current',
-        'custom_threshold_saved_base',
-        'effective_threshold_current',
-        'effective_threshold_base',
-    ]
     stratified_cols = [
-        'brier_p_value_pos',
         'brier_p_value_fdr_pos',
-        'brier_p_value_neg',
         'brier_p_value_fdr_neg',
         'brier_stratified_passed_1_test',
         'brier_stratified_passed_2_tests',
     ]
-    cols = ['IPTC Category', *diag_cols, 'brier_p_value', 'brier_p_value_fdr']
+    cols = ['IPTC Category', 'brier_wilcoxon_eligible', 'brier_p_value']
     cols.extend(
         [
-            'brier_mean_error_diff',
-            'brier_current_mean_error',
-            'brier_base_mean_error',
             pass_col,
             *stratified_cols,
         ],
@@ -1572,12 +1707,9 @@ def _add_brier_to_top_change_df(*, df: pd.DataFrame, brier_df: pd.DataFrame, pas
     result = result.drop(columns=[pass_col])
     for col in ('brier_stratified_passed_1_test', 'brier_stratified_passed_2_tests'):
         result[col] = result[col].fillna(0).astype(int)
-    metric_cols = ['brier_pass', *diag_cols, 'brier_p_value', 'brier_p_value_fdr']
+    metric_cols = ['brier_pass', 'brier_wilcoxon_eligible', 'brier_p_value']
     metric_cols.extend(
         [
-            'brier_mean_error_diff',
-            'brier_current_mean_error',
-            'brier_base_mean_error',
             *stratified_cols,
         ],
     )
