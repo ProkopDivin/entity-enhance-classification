@@ -157,6 +157,7 @@ class ThresholdTuningCnf:
     )
     f_beta: float = 1.0
     aggregation: Literal['mean', 'median', 'mode'] = 'mean' # remove other not usefull 
+    min_folds_for_tuning: int = 3
 
 
 @dataclass(frozen=True)
