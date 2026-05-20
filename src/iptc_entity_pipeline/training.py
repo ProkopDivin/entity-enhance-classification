@@ -29,6 +29,8 @@ class TrainingResult:
     dev_loss_per_epoch: tuple[float, ...]
     train_f1_per_epoch: tuple[float, ...]
     dev_f1_per_epoch: tuple[float, ...]
+    train_macro_relevant_f1_per_epoch: tuple[float, ...]
+    dev_macro_relevant_f1_per_epoch: tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ class CvFoldCurves:
     dev_loss_per_epoch: tuple[float, ...]
     train_f1_per_epoch: tuple[float, ...]
     dev_f1_per_epoch: tuple[float, ...]
+    train_macro_relevant_f1_per_epoch: tuple[float, ...]
+    dev_macro_relevant_f1_per_epoch: tuple[float, ...]
 
 
 def combo_params_json(*, model_config: ModelCnf, training_config: TrainingCnf) -> str:
@@ -173,6 +177,8 @@ def train_model(
         dev_loss_per_epoch=tuple(result.dev_losses),
         train_f1_per_epoch=calc_f1_curve(precision_curve=result.train_precisions, recall_curve=result.train_recalls),
         dev_f1_per_epoch=calc_f1_curve(precision_curve=result.dev_precisions, recall_curve=result.dev_recalls),
+        train_macro_relevant_f1_per_epoch=tuple(result.train_macro_relevant_f1s),
+        dev_macro_relevant_f1_per_epoch=tuple(result.dev_macro_relevant_f1s),
     )
 
 

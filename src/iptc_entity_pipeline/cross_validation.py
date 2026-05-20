@@ -161,27 +161,35 @@ def log_training_progress(
     clearml_logger.report_text(training_progress_message, print_console=True)
 
 
-def extract_micro_row(
+def extract_metric_rows(
     *,
     df_corpora_fold: Any,
+    df_classes_fold: Any,
     objective_corpora: str,
     averaging_type: str,
-) -> Mapping[str, Any]:
-    """Pick the per-fold metric row, preferring 'All-micro' and falling back to objective."""
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    """Pick per-fold micro/datapoint and relevant-macro metric rows."""
     if 'All-micro' in df_corpora_fold.index:
-        return df_corpora_fold.loc['All-micro'].to_dict()
-    return get_obj_row(
-        df_corpora=df_corpora_fold,
-        objective_corpora=objective_corpora,
-        averaging_type=averaging_type,
-    )
+        micro_or_datapoint_row = df_corpora_fold.loc['All-micro'].to_dict()
+    else:
+        micro_or_datapoint_row = get_obj_row(
+            df_corpora=df_corpora_fold,
+            objective_corpora=objective_corpora,
+            averaging_type=averaging_type,
+        )
+    macro_row_name = 'All - macro avg'
+    if macro_row_name not in df_classes_fold.index:
+        raise ValueError(f'Missing required class aggregate row: {macro_row_name}')
+    macro_relevant_row = df_classes_fold.loc[macro_row_name].to_dict()
+    return micro_or_datapoint_row, macro_relevant_row
 
 
 @dataclass(frozen=True)
 class FoldEvalOutput:
     """Per-fold evaluation outputs collected by :func:`evaluate_fold`.
 
-    :param micro_row: Single-row metrics chosen by :func:`extract_micro_row`.
+    :param micro_or_datapoint_row: Single-row micro/datapoint metrics.
+    :param macro_relevant_row: Relevant-class macro row from classes table.
     :param dev_loss: Final dev loss for the fold.
     :param epochs_run: Number of epochs the fold actually ran (early stop).
     :param fold_curve: Per-epoch train/dev loss + F1 curves.
@@ -192,7 +200,8 @@ class FoldEvalOutput:
     :param df_classes: Per-class evaluation table at the same thresholds.
     """
 
-    micro_row: Mapping[str, Any]
+    micro_or_datapoint_row: Mapping[str, Any]
+    macro_relevant_row: Mapping[str, Any]
     dev_loss: float
     epochs_run: int
     fold_curve: CvFoldCurves
@@ -260,8 +269,9 @@ def evaluate_fold(
     else:
         fold_thresholds = {}
         
-    micro_row = extract_micro_row(
+    micro_or_datapoint_row, macro_relevant_row = extract_metric_rows(
         df_corpora_fold=df_corpora_fold,
+        df_classes_fold=df_classes_fold,
         objective_corpora=objective_corpora,
         averaging_type=eval_cfg.averaging_type,
     )
@@ -271,9 +281,12 @@ def evaluate_fold(
         dev_loss_per_epoch=train_result.dev_loss_per_epoch,
         train_f1_per_epoch=train_result.train_f1_per_epoch,
         dev_f1_per_epoch=train_result.dev_f1_per_epoch,
+        train_macro_relevant_f1_per_epoch=train_result.train_macro_relevant_f1_per_epoch,
+        dev_macro_relevant_f1_per_epoch=train_result.dev_macro_relevant_f1_per_epoch,
     )
     return FoldEvalOutput(
-        micro_row=micro_row,
+        micro_or_datapoint_row=micro_or_datapoint_row,
+        macro_relevant_row=macro_relevant_row,
         dev_loss=float(train_result.final_dev_loss),
         epochs_run=int(train_result.epochs_run),
         fold_curve=fold_curve,
@@ -303,6 +316,12 @@ def summarize_combination(
         'Precision_std': float(df['Precision'].std(ddof=0)),
         'Recall_mean': float(df['Recall'].mean()),
         'Recall_std': float(df['Recall'].std(ddof=0)),
+        'F1_micro_mean': float(df['F1_micro'].mean()),
+        'F1_micro_std': float(df['F1_micro'].std(ddof=0)),
+        'Precision_micro_mean': float(df['Precision_micro'].mean()),
+        'Precision_micro_std': float(df['Precision_micro'].std(ddof=0)),
+        'Recall_micro_mean': float(df['Recall_micro'].mean()),
+        'Recall_micro_std': float(df['Recall_micro'].std(ddof=0)),
     }
 
 
@@ -493,9 +512,12 @@ def run_combination(
                 'params': params_json,
                 'epochs': float(fold_out.epochs_run),
                 'Loss': fold_out.dev_loss,
-                'Precision': float(fold_out.micro_row['Precision']),
-                'Recall': float(fold_out.micro_row['Recall']),
-                'F1': float(fold_out.micro_row['F1']),
+                'Precision': float(fold_out.macro_relevant_row['Precision']),
+                'Recall': float(fold_out.macro_relevant_row['Recall']),
+                'F1': float(fold_out.macro_relevant_row['F1']),
+                'Precision_micro': float(fold_out.micro_or_datapoint_row['Precision']),
+                'Recall_micro': float(fold_out.micro_or_datapoint_row['Recall']),
+                'F1_micro': float(fold_out.micro_or_datapoint_row['F1']),
             }
         )
         if trial is not None:
@@ -653,16 +675,25 @@ def select_best(
 
 
 _CV_DEV_RENAME: Mapping[str, str] = {
-    'Precision_mean': 'Precision',
-    'Recall_mean': 'Recall',
-    'F1_mean': 'F1',
+    'Precision_micro_mean': 'Precision',
+    'Recall_micro_mean': 'Recall',
+    'F1_micro_mean': 'F1',
     'Loss_mean': 'Loss',
+    'Precision_mean': 'Precision_macro_relevant',
+    'Recall_mean': 'Recall_macro_relevant',
+    'F1_mean': 'F1_macro_relevant',
 }
 
-_CV_DEV_PASSTHROUGH: tuple[str, ...] = (
-    'params', 'epochs',
-    'Precision_std', 'Recall_std', 'F1_std', 'Loss_std',
-)
+_CV_DEV_STD_RENAME: Mapping[str, str] = {
+    'Precision_micro_std': 'Precision_std',
+    'Recall_micro_std': 'Recall_std',
+    'F1_micro_std': 'F1_std',
+    'Precision_std': 'Precision_macro_relevant_std',
+    'Recall_std': 'Recall_macro_relevant_std',
+    'F1_std': 'F1_macro_relevant_std',
+}
+
+_CV_DEV_PASSTHROUGH: tuple[str, ...] = ('params', 'epochs', 'Loss_std')
 
 
 def build_cv_df(
@@ -682,6 +713,7 @@ def build_cv_df(
     folds_df = pd.DataFrame(fold_rows)
     row: dict[str, Any] = {k: best_trial[k] for k in _CV_DEV_PASSTHROUGH}
     row.update({new: best_trial[old] for old, new in _CV_DEV_RENAME.items()})
+    row.update({new: best_trial[old] for old, new in _CV_DEV_STD_RENAME.items()})
     cv_dev_df = pd.DataFrame([row], index=pd.Index([objective_corpora], name='Corpus Name'))
     return trials_df, folds_df, cv_dev_df
 

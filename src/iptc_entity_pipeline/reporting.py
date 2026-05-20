@@ -27,6 +27,14 @@ def report_eval(*, logger: Any, title: str, row: Mapping[str, Any], iteration: i
     logger.report_scalar(title=title, series='Precision', value=row['Precision'], iteration=iteration)
     logger.report_scalar(title=title, series='Recall', value=row['Recall'], iteration=iteration)
     logger.report_scalar(title=title, series='F1', value=row['F1'], iteration=iteration)
+    optional_series = (
+        ('Precision_macro_relevant', 'Precision_macro_relevant'),
+        ('Recall_macro_relevant', 'Recall_macro_relevant'),
+        ('F1_macro_relevant', 'F1_macro_relevant'),
+    )
+    for key, series in optional_series:
+        if key in row:
+            logger.report_scalar(title=title, series=series, value=float(row[key]), iteration=iteration)
 
 
 
@@ -56,6 +64,19 @@ def report_cv_std(
         value=float(row['F1_std']),
         iteration=iteration,
     )
+    macro_std_series = (
+        ('Precision_macro_relevant_std', 'Precision_macro_relevant_std'),
+        ('Recall_macro_relevant_std', 'Recall_macro_relevant_std'),
+        ('F1_macro_relevant_std', 'F1_macro_relevant_std'),
+    )
+    for key, series in macro_std_series:
+        if key in row:
+            logger.report_scalar(
+                title=title,
+                series=series,
+                value=float(row[key]),
+                iteration=iteration,
+            )
 
 
 def report_cv_curve(
@@ -135,6 +156,24 @@ def report_cv_fold(
             yaxis='f1',
             mode='lines+markers',
         )
+        logger.report_scatter2d(
+            title='Cross Validation Fold F1 Macro Relevant',
+            series=f'train fold {fold_curve.fold_id}',
+            iteration=iteration,
+            scatter=_scatter_xy(fold_curve.train_macro_relevant_f1_per_epoch),
+            xaxis='epoch',
+            yaxis='f1',
+            mode='lines+markers',
+        )
+        logger.report_scatter2d(
+            title='Cross Validation Fold F1 Macro Relevant',
+            series=f'dev fold {fold_curve.fold_id}',
+            iteration=iteration,
+            scatter=_scatter_xy(fold_curve.dev_macro_relevant_f1_per_epoch),
+            xaxis='epoch',
+            yaxis='f1',
+            mode='lines+markers',
+        )
 
 
 def report_test_curve(*, logger: Any, result: TrainingResult, dev_series: str = 'test') -> None:
@@ -142,6 +181,12 @@ def report_test_curve(*, logger: Any, result: TrainingResult, dev_series: str = 
     charts = (
         ChartSpec('Final Model Loss', 'loss', result.train_loss_per_epoch, result.dev_loss_per_epoch),
         ChartSpec('Final Model F1', 'f1', result.train_f1_per_epoch, result.dev_f1_per_epoch),
+        ChartSpec(
+            'Final Model F1 Macro Relevant',
+            'f1',
+            result.train_macro_relevant_f1_per_epoch,
+            result.dev_macro_relevant_f1_per_epoch,
+        ),
         ChartSpec('Final Model Precision', 'precision', result.train_precision_per_epoch, result.dev_precision_per_epoch),
         ChartSpec('Final Model Recall', 'recall', result.train_recall_per_epoch, result.dev_recall_per_epoch),
     )

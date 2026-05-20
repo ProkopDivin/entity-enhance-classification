@@ -28,6 +28,7 @@ from statsmodels.stats.multitest import multipletests
 import numpy as np
 import pandas as pd
 
+from iptc_entity_pipeline.category_sets import load_relevant_cat_ids, load_tail_cat_ids
 from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.data_loading import sanitize_name
 from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, evaluate_predictions, get_cat_name, get_iptc_topics
@@ -41,7 +42,9 @@ LOG = logging.getLogger(__name__)
 # saved by earlier versions of this pipeline before the rename.
 THRESHOLD_FILENAMES: tuple[str, ...] = ('custom_thresholds.json', 'thresholds.json')
 
-AGG_CLASS_ROWS = frozenset({'All - micro avg', 'All - macro avg', 'All - datapoint avg'})
+CLASS_MACRO_ROW = 'All - macro avg'
+CLASS_TAIL_ROW = 'All - tail avg'
+AGG_CLASS_ROWS = frozenset({'All - micro avg', CLASS_MACRO_ROW, CLASS_TAIL_ROW, 'All - datapoint avg'})
 AGG_CORPUS_ROWS = frozenset({'All-macro', 'All-micro', 'All-datapoint'})
 SUMMARY_ROWS = {
     'macro_over_classes_all': ('classes', 'All - macro avg'),
@@ -346,8 +349,23 @@ def compare_runs(
         uniform comparison under ``threshold_eval``.
     :return: Structured :class:`ComparisonResult`.
     """
+    relevant_cat_ids = load_relevant_cat_ids()
+    tail_cat_ids = load_tail_cat_ids()
     current_pred, current_corpus = load_run(run_dir=current_run_dir)
     base_pred, base_corpus = load_run(run_dir=base_run_dir)
+    validate_subset_ids_in_corpora(
+        current_corpus=current_corpus,
+        base_corpus=base_corpus,
+        subset_ids=tail_cat_ids,
+        subset_name='tail',
+    )
+    validate_subset_ids_in_corpora(
+        current_corpus=current_corpus,
+        base_corpus=base_corpus,
+        subset_ids=relevant_cat_ids,
+        subset_name='relevant',
+        require_all=False,
+    )
 
     current_thresholds = load_custom_thresholds(run_dir=current_run_dir) if use_saved_thresholds else {}
     base_thresholds = load_custom_thresholds(run_dir=base_run_dir) if use_saved_thresholds else {}
@@ -369,10 +387,50 @@ def compare_runs(
         evaluation_config=evaluation_config,
         cat_to_thr=base_thresholds or None,
     )
+    current_classes_df = replace_macro_row_in_run_classes_df(
+        classes_df=current_run.classes_df,
+        class_ids=relevant_cat_ids,
+        row_label=CLASS_MACRO_ROW,
+        subset_name='relevant',
+        require_all=False,
+    )
+    base_classes_df = replace_macro_row_in_run_classes_df(
+        classes_df=base_run.classes_df,
+        class_ids=relevant_cat_ids,
+        row_label=CLASS_MACRO_ROW,
+        subset_name='relevant',
+        require_all=False,
+    )
+    current_classes_df = replace_macro_row_in_run_classes_df(
+        classes_df=current_classes_df,
+        class_ids=tail_cat_ids,
+        row_label=CLASS_TAIL_ROW,
+        subset_name='tail',
+        require_all=True,
+        insert_after_label=CLASS_MACRO_ROW,
+    )
+    base_classes_df = replace_macro_row_in_run_classes_df(
+        classes_df=base_classes_df,
+        class_ids=tail_cat_ids,
+        row_label=CLASS_TAIL_ROW,
+        subset_name='tail',
+        require_all=True,
+        insert_after_label=CLASS_MACRO_ROW,
+    )
+    current_run_summary = RunEval(
+        aligned_df=current_run.aligned_df,
+        corpora_df=current_run.corpora_df,
+        classes_df=current_classes_df,
+    )
+    base_run_summary = RunEval(
+        aligned_df=base_run.aligned_df,
+        corpora_df=base_run.corpora_df,
+        classes_df=base_classes_df,
+    )
 
     classes_cmp_full = build_cmp_df(
-        current_df=current_run.classes_df,
-        base_df=base_run.classes_df,
+        current_df=current_classes_df,
+        base_df=base_classes_df,
         key_col='IPTC Category',
         info_cols=['Data Count'],
         cmp_metrics=_CMP_METRICS_CLASSES,
@@ -476,13 +534,13 @@ def compare_runs(
             article_f1_diff_avg_stats=empty_df,
             current_corpora=current_run.corpora_df,
             current_classes=with_class_id_column(
-                df=current_run.classes_df,
+                df=current_classes_df,
                 key_col='IPTC Category',
                 label_to_cat_id=label_to_cat_id,
             ),
             base_corpora=base_run.corpora_df,
             base_classes=with_class_id_column(
-                df=base_run.classes_df,
+                df=base_classes_df,
                 key_col='IPTC Category',
                 label_to_cat_id=label_to_cat_id,
             ),
@@ -514,10 +572,12 @@ def compare_runs(
         else classes_cmp_clean
     )
     summary_df = build_summary_df(
-        current_run=current_run,
-        base_run=base_run,
+        current_run=current_run_summary,
+        base_run=base_run_summary,
         classes_cmp=classes_cmp_full,
         corpora_cmp=corpora_cmp_full,
+        relevant_cat_ids=relevant_cat_ids,
+        tail_cat_ids=tail_cat_ids,
     )
     top_improved_stats_df, top_degraded_stats_df = build_top_change_stats_dfs(
         improved_df=top_improved_df,
@@ -589,13 +649,13 @@ def compare_runs(
         article_f1_diff_avg_stats=article_avg_stats_df,
         current_corpora=current_run.corpora_df,
         current_classes=with_class_id_column(
-            df=current_run.classes_df,
+            df=current_classes_df,
             key_col='IPTC Category',
             label_to_cat_id=label_to_cat_id,
         ),
         base_corpora=base_run.corpora_df,
         base_classes=with_class_id_column(
-            df=base_run.classes_df,
+            df=base_classes_df,
             key_col='IPTC Category',
             label_to_cat_id=label_to_cat_id,
         ),
@@ -936,6 +996,116 @@ def build_cmp_df(
     return df.reindex(columns=cols)
 
 
+def label_from_cat_id(*, cat_id: str) -> str:
+    """Return class label format used in per-class tables for one cat id."""
+    return '"' + get_cat_name(cat_id) + '"'
+
+
+def labels_for_cat_ids(*, cat_ids: set[str]) -> dict[str, str]:
+    """Map class table label to category id for requested ids."""
+    return {label_from_cat_id(cat_id=cat_id): cat_id for cat_id in cat_ids}
+
+
+def validate_subset_ids_in_corpora(
+    *,
+    current_corpus: Any,
+    base_corpus: Any,
+    subset_ids: set[str],
+    subset_name: str,
+    require_all: bool = True,
+) -> None:
+    """Validate subset ids against corpus cat lists as an early-fast check."""
+    current_ids = {str(cat_id) for cat_id in getattr(current_corpus, 'catList', [])}
+    base_ids = {str(cat_id) for cat_id in getattr(base_corpus, 'catList', [])}
+    if not require_all:
+        return
+    missing_current = sorted(subset_ids - current_ids)
+    missing_base = sorted(subset_ids - base_ids)
+    if missing_current or missing_base:
+        cur_preview = ', '.join(missing_current[:10]) if missing_current else 'none'
+        base_preview = ', '.join(missing_base[:10]) if missing_base else 'none'
+        raise ValueError(
+            'Missing required subset classes at startup: '
+            f'subset={subset_name} '
+            f'missing_in_current={cur_preview} '
+            f'missing_in_base={base_preview}'
+        )
+
+
+def class_subset_by_ids(
+    *,
+    classes_cmp: pd.DataFrame,
+    class_ids: set[str],
+    require_all: bool,
+    subset_name: str,
+) -> pd.DataFrame:
+    """Filter non-aggregate class rows to a category-id subset."""
+    classes_filtered = classes_cmp[~classes_cmp['IPTC Category'].isin(AGG_CLASS_ROWS)].copy()
+    label_to_id = labels_for_cat_ids(cat_ids=class_ids)
+    classes_filtered['cat_id'] = classes_filtered['IPTC Category'].map(label_to_id).astype(object)
+    present_ids = set(classes_filtered['cat_id'].dropna().astype(str).tolist())
+    if require_all:
+        missing = sorted(class_ids - present_ids)
+        if missing:
+            preview = ', '.join(missing[:10])
+            raise ValueError(f'Missing {subset_name} classes in comparison output: {preview}')
+    subset = classes_filtered[classes_filtered['cat_id'].isin(class_ids)].copy()
+    if subset.empty:
+        raise ValueError(f'No rows matched {subset_name} category set')
+    return subset
+
+
+def replace_macro_row_in_run_classes_df(
+    *,
+    classes_df: pd.DataFrame,
+    class_ids: set[str],
+    row_label: str = CLASS_MACRO_ROW,
+    subset_name: str,
+    require_all: bool,
+    insert_after_label: str | None = None,
+) -> pd.DataFrame:
+    """Replace ``All - macro avg`` row in one run's classes table."""
+    table = classes_df.reset_index().copy()
+    classes_filtered = table[~table['IPTC Category'].isin(AGG_CLASS_ROWS)].copy()
+    label_to_id = labels_for_cat_ids(cat_ids=class_ids)
+    classes_filtered['cat_id'] = classes_filtered['IPTC Category'].map(label_to_id).astype(object)
+    subset = classes_filtered[classes_filtered['cat_id'].isin(class_ids)].copy()
+    if subset.empty:
+        raise ValueError(f'No rows matched {subset_name} category set for classes row replacement')
+    if require_all:
+        present_ids = set(classes_filtered['cat_id'].dropna().astype(str))
+        missing = sorted(class_ids - present_ids)
+        if missing:
+            preview = ', '.join(missing[:10])
+            raise ValueError(f'Missing {subset_name} classes in classes table: {preview}')
+
+    row: dict[str, Any] = {'IPTC Category': row_label}
+    row['Data Count'] = int(len(subset))
+    for col in ('Precision', 'Recall', 'F1', 'False Positive Count'):
+        if col in table.columns:
+            row[col] = float(subset[col].mean())
+
+    mask = table['IPTC Category'] == row_label
+    if mask.any():
+        for key, value in row.items():
+            table.loc[mask, key] = value
+    else:
+        insert_at: int | None = None
+        if insert_after_label is not None:
+            after_idx = table.index[table['IPTC Category'] == insert_after_label]
+            if len(after_idx) > 0:
+                insert_at = int(after_idx[0]) + 1
+        row_df = pd.DataFrame([row])
+        if insert_at is None:
+            table = pd.concat([table, row_df], ignore_index=True)
+        else:
+            table = pd.concat(
+                [table.iloc[:insert_at], row_df, table.iloc[insert_at:]],
+                ignore_index=True,
+            )
+    return table.set_index('IPTC Category')
+
+
 def diff_only_df(
     *,
     df: pd.DataFrame,
@@ -1114,6 +1284,8 @@ def build_summary_df(
     base_run: RunEval,
     classes_cmp: pd.DataFrame,
     corpora_cmp: pd.DataFrame,
+    relevant_cat_ids: set[str],
+    tail_cat_ids: set[str],
 ) -> pd.DataFrame:
     """Build compact summary rows from aggregate evaluation outputs."""
     rows: list[dict[str, Any]] = []
@@ -1132,6 +1304,33 @@ def build_summary_df(
         )
 
     classes_filtered = classes_cmp[~classes_cmp['IPTC Category'].isin(AGG_CLASS_ROWS)].copy()
+    classes_relevant = class_subset_by_ids(
+        classes_cmp=classes_cmp,
+        class_ids=relevant_cat_ids,
+        require_all=False,
+        subset_name='relevant',
+    )
+    rows.append(
+        _avg_metrics_row(
+            summary_key='macro_over_classes_relevant',
+            sub_df=classes_relevant,
+            cmp_metrics=_CMP_METRICS_REPORT,
+        )
+    )
+    classes_tail = class_subset_by_ids(
+        classes_cmp=classes_cmp,
+        class_ids=tail_cat_ids,
+        require_all=True,
+        subset_name='tail',
+    )
+    rows.append(
+        _avg_metrics_row(
+            summary_key='macro_over_classes_tail',
+            sub_df=classes_tail,
+            cmp_metrics=_CMP_METRICS_REPORT,
+        )
+    )
+
     classes_filtered['support'] = classes_filtered['Data Count_current'].combine_first(
         classes_filtered['Data Count_base']
     )

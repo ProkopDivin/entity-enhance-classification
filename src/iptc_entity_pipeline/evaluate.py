@@ -8,6 +8,7 @@ from typing import Any, Mapping, NamedTuple, Sequence
 
 import pandas as pd
 
+from iptc_entity_pipeline.category_sets import load_relevant_cat_ids
 from iptc_entity_pipeline.config import EvaluationCnf
 
 LOGGER = logging.getLogger(__name__)
@@ -320,24 +321,30 @@ def evaluate_classes(
     if per_class:
         categories = eval_corpus.catList
         category_names = ['"' + get_cat_name(cat) + '"' for cat in categories]
-        fp_per_class: list[int] = []
+        fp_by_cat: dict[str, int] = {}
         for category in categories:
             pred_vals = [1 if category in cats else 0 for cats in pred_cats]
             gold_vals = [1 if category in doc.cats else 0 for doc in eval_corpus]
             class_to_data, _, _ = evalutil.classStats(trueVals=gold_vals, predVals=pred_vals)
             pos = class_to_data[1]
-            fp_per_class.append(int(pos.predCnt - pos.correctCnt))
+            fp_by_cat[str(category)] = int(pos.predCnt - pos.correctCnt)
             accumulator.append_metrics(data_count=sum(gold_vals), stats=pos)
     else:
-        fp_per_class = []
+        fp_by_cat = {}
 
     gold_vals = [doc.cats for doc in eval_corpus]
     avg_stats, micro_stats, class_stats = evalutil.multiStats(goldVals=gold_vals, predVals=pred_cats)
 
     micro_fp = int(micro_stats.predCnt - micro_stats.correctCnt)
+    relevant_ids = load_relevant_cat_ids()
+    available_ids = {str(cat) for cat in class_stats}
+    macro_cat_ids = [cat_id for cat_id in relevant_ids if cat_id in available_ids]
+    if not macro_cat_ids:
+        LOGGER.warning('No relevant classes found in eval catList; falling back to all classes for macro metrics')
+        macro_cat_ids = [str(cat) for cat in class_stats]
     macro_mean_fp = (
-        sum(fp_per_class) / len(fp_per_class)
-        if fp_per_class
+        sum(fp_by_cat[cat_id] for cat_id in macro_cat_ids if cat_id in fp_by_cat) / len(macro_cat_ids)
+        if macro_cat_ids
         else float('nan')
     )
 
@@ -345,7 +352,7 @@ def evaluate_classes(
     category_names.append('All - micro avg')
 
     macro_avg = AvgData.empty()
-    for cat in class_stats:
+    for cat in macro_cat_ids:
         macro_avg.update(prec=class_stats[cat].precision, recall=class_stats[cat].recall)
     accumulator.append_metrics(
         data_count=avg_stats.cnt,

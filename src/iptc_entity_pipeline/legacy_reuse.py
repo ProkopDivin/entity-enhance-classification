@@ -25,6 +25,7 @@ from geneea.catlib.model.nnet import EntityAttentionMLP, EntityNoPoolingMLP, MLP
 from geneea.catlib.vec.dataset import EmbeddingDataset
 from geneea.catlib.vec.vectorizer import Vectorizer
 
+from iptc_entity_pipeline.category_sets import load_relevant_cat_ids
 from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.dataset_builder import RaggedEmbeddingDataset, ragged_collate_fn
 
@@ -67,6 +68,7 @@ class EpochStats:
     precision: list[float] = field(default_factory=list)
     recall: list[float] = field(default_factory=list)
     loss: list[float] = field(default_factory=list)
+    macro_relevant_f1: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,8 @@ class LegacyTrainResult:
     dev_precisions: list[float]
     dev_recalls: list[float]
     dev_losses: list[float]
+    train_macro_relevant_f1s: list[float]
+    dev_macro_relevant_f1s: list[float]
 
 
 # ---------------------------------------------------------------------------
@@ -179,16 +183,24 @@ def _validate_split(
     dataloader: torch.utils.data.DataLoader,
     loss_fn: nn.Module,
     thr: float = 0.0,
-) -> tuple[float, float, float]:
+    relevant_indices: list[int] | None = None,
+) -> tuple[float, float, float, float]:
     """Compute precision, recall, and mean loss over a dataloader split.
 
-    :return: ``(precision, recall, mean_loss)`` tuple.
+    :return: ``(precision, recall, mean_loss, macro_relevant_f1)`` tuple.
     """
     total_gold = 0.0
     total_pred = 0.0
     total_correct = 0.0
     total_loss = 0.0
     num_batches = len(dataloader)
+    relevant_idx_tensor = (
+        torch.as_tensor(relevant_indices, dtype=torch.long, device=model._device)
+        if relevant_indices else None
+    )
+    tp_rel = np.zeros(len(relevant_indices), dtype=np.int64) if relevant_indices else None
+    fp_rel = np.zeros(len(relevant_indices), dtype=np.int64) if relevant_indices else None
+    fn_rel = np.zeros(len(relevant_indices), dtype=np.int64) if relevant_indices else None
 
     with torch.no_grad():
         model._nn.eval()
@@ -196,15 +208,39 @@ def _validate_split(
             x_batch = _batch_to_device(x_batch, device=model._device)
             y_batch = y_batch.to(model._device)
             pred = model._nn(x_batch)
+            pred_bin = pred > thr
+            gold_bin = y_batch > 0.5
             total_loss += loss_fn(pred, y_batch).item()
-            total_pred += (pred > thr).type(torch.float).sum().item()
-            total_gold += (y_batch > 0.5).type(torch.float).sum().item()
-            total_correct += torch.logical_and(pred > thr, y_batch > 0.5).type(torch.float).sum().item()
+            total_pred += pred_bin.type(torch.float).sum().item()
+            total_gold += gold_bin.type(torch.float).sum().item()
+            total_correct += torch.logical_and(pred_bin, gold_bin).type(torch.float).sum().item()
+            if relevant_idx_tensor is not None and tp_rel is not None and fp_rel is not None and fn_rel is not None:
+                pred_rel = pred_bin.index_select(dim=1, index=relevant_idx_tensor)
+                gold_rel = gold_bin.index_select(dim=1, index=relevant_idx_tensor)
+                tp_rel += torch.logical_and(pred_rel, gold_rel).sum(dim=0).detach().cpu().numpy().astype(np.int64)
+                fp_rel += (
+                    torch.logical_and(pred_rel, torch.logical_not(gold_rel))
+                    .sum(dim=0).detach().cpu().numpy().astype(np.int64)
+                )
+                fn_rel += (
+                    torch.logical_and(torch.logical_not(pred_rel), gold_rel)
+                    .sum(dim=0).detach().cpu().numpy().astype(np.int64)
+                )
 
     mean_loss = total_loss / num_batches
     precision = total_correct / (total_pred or 1.0)
     recall = total_correct / (total_gold or 1.0)
-    return precision, recall, mean_loss
+    macro_relevant_f1 = float('nan')
+    if tp_rel is not None and fp_rel is not None and fn_rel is not None and len(tp_rel) > 0:
+        denom = (2 * tp_rel) + fp_rel + fn_rel
+        per_class_f1 = np.divide(
+            2 * tp_rel,
+            denom,
+            out=np.zeros(len(tp_rel), dtype=float),
+            where=denom > 0,
+        )
+        macro_relevant_f1 = float(np.mean(per_class_f1))
+    return precision, recall, mean_loss, macro_relevant_f1
 
 
 def _calc_f1(*, precision: float, recall: float) -> float:
@@ -259,6 +295,7 @@ def _report_stats_scalars(
     recall: float,
     loss: float,
     iteration: int,
+    macro_relevant_f1: float = float('nan'),
 ) -> None:
     """Report precision/recall/loss series for one iteration."""
     logger.report_scalar(title=title, series='Precision', value=precision, iteration=iteration)
@@ -359,6 +396,14 @@ def trainClassificationModel(
     optimizer = opt_factory(model._nn.parameters(), lr)
     scheduler = sched_factory(optimizer)
     model.catList = list(trainData.catList)
+    relevant_cat_ids = load_relevant_cat_ids()
+    cat_to_idx = {str(cat_id): idx for idx, cat_id in enumerate(model.catList)}
+    relevant_indices = [cat_to_idx[cat_id] for cat_id in sorted(relevant_cat_ids) if cat_id in cat_to_idx]
+    _log_info(
+        logger=clearml_logger,
+        message=f'Relevant macro tracking classes found={len(relevant_indices)}/{len(relevant_cat_ids)}',
+        print_logs=print_logs,
+    )
     _log_info(
         logger=clearml_logger, message=f'Training model with {len(model.catList)} categories', print_logs=print_logs,
     )
@@ -400,7 +445,12 @@ def trainClassificationModel(
         _log_elapsed(logger=clearml_logger, label='time make train epoch', started_at=last_time, print_logs=print_logs)
 
         last_time = time.time()
-        dev_prec, dev_rec, dev_loss = _validate_split(model=model, dataloader=dev_loader, loss_fn=loss_fn)
+        dev_prec, dev_rec, dev_loss, dev_macro_relevant_f1 = _validate_split(
+            model=model,
+            dataloader=dev_loader,
+            loss_fn=loss_fn,
+            relevant_indices=relevant_indices,
+        )
         _log_validation(c_log=clearml_logger, precision=dev_prec, recall=dev_rec, loss=dev_loss, print_logs=print_logs)
         validation_done_label = f'time {validation_split_name} validation done'
         _log_elapsed(logger=clearml_logger, label=validation_done_label, started_at=last_time, print_logs=print_logs)
@@ -409,6 +459,7 @@ def trainClassificationModel(
         dev_stats.precision.append(dev_prec)
         dev_stats.recall.append(dev_rec)
         dev_stats.loss.append(dev_loss)
+        dev_stats.macro_relevant_f1.append(dev_macro_relevant_f1)
         _report_stats_scalars(
             logger=clearml_logger,
             title=f'{validation_title} Training Stats',
@@ -416,6 +467,7 @@ def trainClassificationModel(
             recall=dev_rec,
             loss=dev_loss,
             iteration=epoch,
+            macro_relevant_f1=dev_macro_relevant_f1,
         )
 
         if es_patience > 0:
@@ -451,13 +503,19 @@ def trainClassificationModel(
         _log_elapsed(logger=clearml_logger, label='time done', started_at=last_time, print_logs=print_logs)
 
         last_time = time.time()
-        train_prec, train_rec, train_loss = _validate_split(model=model, dataloader=train_loader, loss_fn=loss_fn)
+        train_prec, train_rec, train_loss, train_macro_relevant_f1 = _validate_split(
+            model=model,
+            dataloader=train_loader,
+            loss_fn=loss_fn,
+            relevant_indices=relevant_indices,
+        )
         _log_elapsed(logger=clearml_logger, label='time train validation done', started_at=last_time, print_logs=print_logs)
 
         last_time = time.time()
         train_stats.precision.append(train_prec)
         train_stats.recall.append(train_rec)
         train_stats.loss.append(train_loss)
+        train_stats.macro_relevant_f1.append(train_macro_relevant_f1)
         _report_stats_scalars(
             logger=clearml_logger,
             title='Train Training Stats',
@@ -465,6 +523,7 @@ def trainClassificationModel(
             recall=train_rec,
             loss=train_loss,
             iteration=epoch,
+            macro_relevant_f1=train_macro_relevant_f1,
         )
 
         if es_patience > 0 and epochs_without_improvement >= es_patience:
@@ -496,6 +555,8 @@ def trainClassificationModel(
         dev_precisions=list(dev_stats.precision),
         dev_recalls=list(dev_stats.recall),
         dev_losses=list(dev_stats.loss),
+        train_macro_relevant_f1s=list(train_stats.macro_relevant_f1),
+        dev_macro_relevant_f1s=list(dev_stats.macro_relevant_f1),
     )
 
 
