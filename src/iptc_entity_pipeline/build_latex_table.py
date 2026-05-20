@@ -8,6 +8,13 @@ For each subdirectory under the input comparison root the script extracts:
 - CV F1 mean / std from the ``dev_cv_summary`` sheet of the latest matching
   ``final_evaluation_tables_*.xlsx`` in ``results/saved_models``.
 
+If the root contains ``summary_comparison.csv`` but there are no experiment
+subdirectories with resolvable names, the root directory itself is treated as
+a single experiment (same CSV layout as a leaf folder). The saved-model
+``config_name`` is taken from the folder name (``_vs_`` prefix or YAML
+``overrides``) or from ``--flat-config-name`` when the folder name does not
+encode the config (e.g. timestamped bundle dirs).
+
 Display tags are derived automatically from the part of the directory name
 before ``_vs_`` (e.g. ``wpentities_weighted_mean_vs_best_article_only_...`` ->
 ``wpentities_weighted_mean``) and then translated through the ``aliases``
@@ -23,6 +30,11 @@ are bolded.
 Example::
 
     python -m iptc_entity_pipeline.build_latex_table results/comparisons
+
+Flat bundle (CSV files next to the path you pass)::
+
+    python -m iptc_entity_pipeline.build_latex_table results/comparisons/run123 \\
+        --flat-config-name best_wpentities_all_langs
 """
 
 from __future__ import annotations
@@ -256,8 +268,18 @@ def list_comparison_subdirs(*, comparison_dir: Path) -> list[Path]:
     return subdirs
 
 
-def collect_experiments(*, comparison_dir: Path, config: MappingConfig) -> list[ExperimentEntry]:
-    """Collect experiment metadata for all valid comparison subdirectories."""
+def collect_experiments(
+    *,
+    comparison_dir: Path,
+    config: MappingConfig,
+    flat_config_name: str | None = None,
+) -> list[ExperimentEntry]:
+    """Collect experiment metadata for all valid comparison subdirectories.
+
+    When no subdirectory yields an experiment but ``summary_comparison.csv``
+    exists on ``comparison_dir`` itself, the root is treated as one experiment
+    (flat bundle layout).
+    """
     experiments: list[ExperimentEntry] = []
     for sub in list_comparison_subdirs(comparison_dir=comparison_dir):
         config_name = resolve_config_name(dir_name=sub.name, overrides=config.overrides)
@@ -272,6 +294,39 @@ def collect_experiments(*, comparison_dir: Path, config: MappingConfig) -> list[
                 display_tag=display_tag,
             )
         )
+
+    if experiments:
+        return experiments
+
+    summary_at_root = comparison_dir / SUMMARY_FILENAME
+    if not summary_at_root.is_file():
+        return experiments
+
+    if flat_config_name and flat_config_name.strip():
+        cn = flat_config_name.strip()
+    else:
+        cn = resolve_config_name(dir_name=comparison_dir.name, overrides=config.overrides)
+    if cn is None:
+        LOG.warning(
+            f'Found {SUMMARY_FILENAME} at comparison root {comparison_dir} but could not '
+            f'derive config_name from directory name {comparison_dir.name!r}. '
+            'Use --flat-config-name (saved-model prefix, e.g. best_wpentities_all_langs) '
+            'or rename the directory to <config>_vs_<baseline>_...'
+        )
+        return experiments
+
+    display_tag = apply_aliases(name=cn, aliases=config.aliases)
+    experiments.append(
+        ExperimentEntry(
+            subdir=comparison_dir,
+            config_name=cn,
+            display_tag=display_tag,
+        )
+    )
+    LOG.info(
+        f'Using flat comparison layout at {comparison_dir} '
+        f'(config_name={cn}, display_tag={display_tag})'
+    )
     return experiments
 
 
@@ -280,12 +335,17 @@ def collect_rows(
     comparison_dir: Path,
     saved_models_dir: Path,
     config: MappingConfig,
+    flat_config_name: str | None = None,
 ) -> list[TableRow]:
     """Walk subdirectories and assemble one row per matched experiment."""
     experiment_rows: dict[str, TableRow] = {}
     base_metrics: Mapping[str, float] | None = None
 
-    for experiment in collect_experiments(comparison_dir=comparison_dir, config=config):
+    for experiment in collect_experiments(
+        comparison_dir=comparison_dir,
+        config=config,
+        flat_config_name=flat_config_name,
+    ):
         summary_csv = experiment.subdir / SUMMARY_FILENAME
         if not summary_csv.is_file():
             LOG.warning(f'Skipping {experiment.subdir.name}: missing {SUMMARY_FILENAME}')
@@ -851,6 +911,16 @@ def main() -> None:
         choices=('DEBUG', 'INFO', 'WARNING', 'ERROR'),
         help='Logging verbosity.',
     )
+    parser.add_argument(
+        '--flat-config-name',
+        type=str,
+        default=None,
+        help=(
+            'When all comparison CSVs live at the comparison root (no experiment '
+            'subfolders), set the saved-model config name if the folder name does '
+            'not match <config>_vs_... or YAML overrides (e.g. best_wpentities_all_langs).'
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -872,6 +942,7 @@ def main() -> None:
             comparison_dir=comparison_dir,
             saved_models_dir=args.saved_models_dir,
             config=config,
+            flat_config_name=args.flat_config_name,
         )
         if rows:
             name = args.name or derive_output_name(comparison_dir=comparison_dir)
@@ -884,7 +955,11 @@ def main() -> None:
             LOG.warning('No rows produced for overview table.')
 
     if args.mode in ('per_experiment', 'all'):
-        experiments = collect_experiments(comparison_dir=comparison_dir, config=config)
+        experiments = collect_experiments(
+            comparison_dir=comparison_dir,
+            config=config,
+            flat_config_name=args.flat_config_name,
+        )
         written = write_per_experiment_tables(experiments=experiments, output_dir=output_dir)
         LOG.info(f'Wrote {written} per-experiment table files into {output_dir}')
         wrote_any = wrote_any or written > 0

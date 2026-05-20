@@ -41,7 +41,14 @@ class EmbeddingCnf:
     use_article_embeddings: bool = True
     use_entity_embeddings: bool = True
     combine_method: str = 'concat'
-    entity_pooling: str = 'sum'
+    entity_pooling: Literal[
+        'sum',
+        'mean',
+        'weighted_mean',
+        'weighted_sum',
+        'weighted_sum_relevance',
+        'no_pooling',
+    ] = 'sum'
 
 
 @dataclass(frozen=True)
@@ -51,6 +58,10 @@ class ModelCnf:
     hidden_dim: int = 1024
     dropouts1: float = 0.0
     dropouts2: float = 0.3
+    nn_type: str = 'mlp'
+    entity_dim: int = 0
+    attention_hidden_dim: int = 128
+    attention_dropout: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -83,6 +94,8 @@ class HyperparamSpace:
     hidden_dims: tuple[int, ...] = (1024,)
     dropouts1: tuple[float, ...] = (0.0,)
     dropouts2: tuple[float, ...] = (0.3,)
+    attention_hidden_dims: tuple[int, ...] = (128,)
+    attention_dropouts: tuple[float, ...] = (0.0,)
     batch_sizes: tuple[int, ...] = (100,)
     learning_rates: tuple[float, ...] = (0.00037,)
 
@@ -135,7 +148,7 @@ class ThresholdTuningCnf:
     by the final-model evaluation as ``customThresholds``.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     thresholds: tuple[float, ...] = field(
         # používám jen pro toto
         default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(5, 16))
@@ -322,6 +335,9 @@ class WPEntitiesWeightedMeanCnf(BaseCnfWithHPO):
             use_entity_relevance_weights=True,
             entity_pooling='weighted_mean',
         )
+    )
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
 
 
@@ -529,6 +545,9 @@ class WPEntitiesRelTH3(BaseCnf):
     
 @dataclass(frozen=True)
 class WPEntitiesRelTH5(BaseCnfWithHPO):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
@@ -713,6 +732,9 @@ class WPEntitiesMentionWeightedSumCnf(BaseCnfWithHPO):
             entity_pooling='weighted_sum',
         )
     )
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
 
 
 @dataclass(frozen=True)
@@ -725,6 +747,11 @@ class WPEntitiesRelevanceWeightedSumCnf(BaseCnfWithHPO):
             entity_pooling='weighted_sum_relevance',
         )
     )
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+
+
 
 
 def resolve_paths(config: BaseCnf, root_dir: str | Path) -> BaseCnf:
@@ -786,6 +813,9 @@ class BestWpEntitiesCnf(BaseCnfWithHPO):
     )
 
 
+
+
+
 @dataclass(frozen=True)
 class BestWpEntitiesF1Cnf(BestWpEntitiesCnf):
     train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1'))
@@ -812,6 +842,7 @@ class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    
     
 
 @dataclass(frozen=True)
@@ -871,9 +902,84 @@ class BestWpEntitiesTunedCnf5(BestWpEntitiesCnf):
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
     random_seed: int = 8689129
+  
+    
+@dataclass(frozen=True)
+class BestWpEntitiesAttentionCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with explicit attention over entities."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=512,
+        )
+    )
 
 
+@dataclass(frozen=True)
+class WPEntitiesAttentionHPOCnf(BestWpEntitiesTunedCnf):
+    """Entity-enhanced configuration with explicit attention over entities."""
 
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.0,),
+            dropouts2=(0.0,),
+            attention_hidden_dims=(64, 128, 256, 512),
+            attention_dropouts=(0.0,),
+
+        )
+    )
+    
+@dataclass(frozen=True)
+class WPEntitiesAttentionHPOCnf2(BestWpEntitiesTunedCnf):
+    """Entity-enhanced configuration with explicit attention over entities."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.0,),
+            dropouts2=(0.0,),
+            attention_hidden_dims=(512,),
+            attention_dropouts=(0.0, 0.1, 0.3, 0.5),
+
+        )
+    )
 
 @dataclass(frozen=True)
 class BestArticleOnlyCnf(BaseCnfWithHPO):
@@ -1030,6 +1136,29 @@ class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
+class WikipediaIntroEntitiesCnf(BestWpEntitiesCnf):
+    """Entity-enhanced configuration using Wikidata description embeddings."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/cuted-article-embeddings',
+        )
+    )
+    
+@dataclass(frozen=True)
+class WikipediaArticleEntitiesCnf(BestWpEntitiesCnf):
+    """Entity-enhanced configuration using Wikidata description embeddings."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/selected-article-embeddings',
+        )
+    )
+    
+
+@dataclass(frozen=True)
 class Assembly1Cnf(BaseCnf):
     """Dual-model assembly demo using two tuned single-model configs.
 
@@ -1091,6 +1220,27 @@ class Assembly2Cnf(BaseCnf):
         )
     )
 
+@dataclass(frozen=True)
+class Assembly3Cnf(BaseCnf):
+    debug: bool = field(default_factory=lambda: False)
+    assembly: AssemblyCnf = field(
+        default_factory=lambda: AssemblyCnf(
+            enabled=True,
+            sign_test=True,
+            members=(
+                AssemblyMemberCnf(
+                    config=BestWpEntitiesAttentionCnf(),
+                    thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/wpentities_attention_20260514_014702/custom_thresholds.json',
+                    label='wpentities_tuned+attention',
+                ),
+                AssemblyMemberCnf(
+                    config=BestArticleOnlyTunedCnf(),
+                    thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_article_only_tuned_20260513_230745/custom_thresholds.json',
+                    label='article_only_tuned+attention',
+                ),
+            ),
+        )
+    )
 
 @dataclass(frozen=True)
 class AssemblyDebug(BaseCnf):
@@ -1171,14 +1321,18 @@ def _config_map() -> dict[str, BaseCnf]:
         'no_embeddings': NoEmbeddingsCnf(),
         'wpentities': WpEntitiesCnf(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
+        'wpentities_rel_th_5': WPEntitiesRelTH5(),
+        'wpentities_attention': BestWpEntitiesAttentionCnf(),
+        'wpentities_attention_hpo': WPEntitiesAttentionHPOCnf(),
+        'wpentities_attention_hpo_2': WPEntitiesAttentionHPOCnf2(),
         'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumCnf(),
         'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumCnf(),
         'wpentities_en_nl': WPEntitiesEnNlCnf(),
         'wpentities_nl': WPEntitiesNlCnf(),
         'wpentities_all_langs': WPEntitiesAllLangsCnf(),
-        'wpentities_rel_th_5': WPEntitiesRelTH5(),
+        
         'best_wpentities': BestWpEntitiesCnf(),
-        'best_wpentities_f1': BestWpEntitiesF1Cnf(),
+        #'best_wpentities_f1': BestWpEntitiesF1Cnf(),
         'best_wpentities_tuned': BestWpEntitiesTunedCnf(),
         'best_wpentities_tuned_2': BestWpEntitiesTunedCnf2(),
         'best_wpentities_tuned_3': BestWpEntitiesTunedCnf3(),
@@ -1197,19 +1351,22 @@ def _config_map() -> dict[str, BaseCnf]:
         'wikipedia2vec_entities_all_langs': Wikipedia2VecEntitiesAllLangsCnf(),
         'best_wikipedia2vec_entities': BestWikipedia2VecEntitiesCnf(),
         'wikidata_description_entities': WikidataDescriptionEntitiesCnf(),
-        'wpentities_2': WpEntitiesCnf2(),
-        'wpentities_3': WpEntitiesCnf3(),
-        'wpentities_4': WpEntitiesCnf4(),
-        'wpentities_5': WpEntitiesCnf5(),
-        'article_only_2': ArticleOnlyCnf2(),
-        'article_only_3': ArticleOnlyCnf3(),
-        'article_only_4': ArticleOnlyCnf4(),
-        'article_only_5': ArticleOnlyCnf5(),
-        'learning_rate': TunningLearningRateCnf(),
-        'learning_rate_f1': TunningLearningRateF1Cnf(),
+        'wikipedia_intro_entities': WikipediaIntroEntitiesCnf(),
+        'wikipedia_article_entities': WikipediaArticleEntitiesCnf(),
+        #'wpentities_2': WpEntitiesCnf2(),
+        #'wpentities_3': WpEntitiesCnf3(),
+        #'wpentities_4': WpEntitiesCnf4(),
+        #'wpentities_5': WpEntitiesCnf5(),
+        #'article_only_2': ArticleOnlyCnf2(),
+        #'article_only_3': ArticleOnlyCnf3(),
+        #'article_only_4': ArticleOnlyCnf4(),
+        #'article_only_5': ArticleOnlyCnf5(),
+        #'learning_rate': TunningLearningRateCnf(),
+        #'learning_rate_f1': TunningLearningRateF1Cnf(),
         'assembly1': Assembly1Cnf(),
         'assembly_debug': AssemblyDebug(),
         'assembly2': Assembly2Cnf(),
+        'assembly_attention': Assembly3Cnf(),
     }
 
 

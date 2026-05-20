@@ -148,7 +148,7 @@ def build_dataset(
     """
     from iptc_entity_pipeline.build_dataset import no_entities, report_ent_stats, get_pooling
     from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, conf_from_dict
-    from iptc_entity_pipeline.dataset_builder import build_emb_data
+    from iptc_entity_pipeline.dataset_builder import build_emb_data, build_ragged_emb_data
     from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
     from iptc_entity_pipeline.feature_builder import FeatureBuilder
 
@@ -199,6 +199,32 @@ def build_dataset(
     )
 
     task = Task.current_task()
+    if emb.entity_pooling == 'no_pooling':
+        logger.info('Building ragged no-pooling features for train corpus (%s articles)', len(corpora.train))
+        train_ragged = builder.build_ragged_features(
+            corpus=corpora.train,
+            clearml_logger=task.get_logger() if task is not None else None,
+        )
+        logger.info('Building ragged no-pooling features for test corpus (%s articles)', len(corpora.test))
+        test_ragged = builder.build_ragged_features(
+            corpus=corpora.test,
+            clearml_logger=task.get_logger() if task is not None else None,
+        )
+        report_ent_stats(stats=test_ragged.stats, clearml_task=task, logger=logger)
+        report_ent_stats(stats=train_ragged.stats, clearml_task=task, logger=logger)
+        train_data = build_ragged_emb_data(
+            corpus=corpora.train,
+            article_matrix=train_ragged.article_matrix,
+            entity_matrices=train_ragged.entity_matrices,
+        )
+        test_data = build_ragged_emb_data(
+            corpus=corpora.test,
+            article_matrix=test_ragged.article_matrix,
+            entity_matrices=test_ragged.entity_matrices,
+        )
+        feature_dim = int(train_ragged.article_matrix.shape[1])
+        return train_data, test_data, feature_dim
+
     logger.info('Building linked features for train corpus (%s articles)', len(corpora.train))
     x_train, train_stats = builder.build_features(
         corpus=corpora.train,
@@ -297,6 +323,7 @@ def validate_member_catlists(corpora_primary, corpora_secondary):
 def run_cv(
     train_data,
     feature_dim: int,
+    model_cnf: Mapping[str, Any],
     hparam_cnf: Mapping[str, Any],
     train_cnf: Mapping[str, Any],
     eval_cnf: Mapping[str, Any],
@@ -324,6 +351,7 @@ def run_cv(
         CvCnf,
         EvaluationCnf,
         HyperparamSpace,
+        ModelCnf,
         OptunaCnf,
         ThresholdTuningCnf,
         TrainingCnf,
@@ -339,6 +367,7 @@ def run_cv(
     clearml_logger = task.get_logger()
 
     space = conf_from_dict(HyperparamSpace, hparam_cnf)
+    base_model = conf_from_dict(ModelCnf, model_cnf)
     base_training = conf_from_dict(TrainingCnf, train_cnf)
     eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
     cv_cfg = conf_from_dict(CvCnf, cv_cnf)
@@ -346,6 +375,7 @@ def run_cv(
     tuning_cfg = conf_from_dict(ThresholdTuningCnf, tuning_cnf)
 
     task.connect(asdict(space), name='hyperparamSpace')
+    task.connect(asdict(base_model), name='modelConfig')
     task.connect(asdict(base_training), name='trainingConfig')
     task.connect(asdict(eval_cfg), name='evaluationConfig')
     task.connect(asdict(cv_cfg), name='cvConfig')
@@ -364,6 +394,7 @@ def run_cv(
 
     selection = select_best(
         space=space,
+        base_model=base_model,
         base_training=base_training,
         train_data=train_data,
         x_full=x_full,
@@ -840,6 +871,7 @@ def _run_assembly_training_pipeline(
     member_configs = [m['config'] for m in members_raw]
     member_paths = [c['paths'] for c in member_configs]
     member_emb = [c['emb'] for c in member_configs]
+    member_model_cnf_dicts = [c['model'] for c in member_configs]
     member_train_cnf_dicts = [c['train'] for c in member_configs]
     member_hparam_cnfs = [c.get('hparam', {}) for c in member_configs]
     member_optuna_cnfs = [c.get('optuna', {}) for c in member_configs]
@@ -955,6 +987,7 @@ def _run_assembly_training_pipeline(
         cv_result = run_cv(
             train_data=member_train_data[idx],
             feature_dim=member_feature_dims[idx],
+            model_cnf=member_model_cnf_dicts[idx],
             hparam_cnf=member_hparam_cnfs[idx],
             train_cnf=member_train_cnf_dicts[idx],
             eval_cnf=eval_cnf,
@@ -1099,6 +1132,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
 
     paths_cnf = cnf['paths']
     emb_cnf = cnf['emb']
+    model_cnf = cnf['model']
     train_cnf = cnf['train']
     eval_cnf = cnf['eval']
     cv_cnf = cnf.get('cv', {'folds': 5})
@@ -1189,6 +1223,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     cv_result = run_cv(
         train_data=train_data,
         feature_dim=feature_dim,
+        model_cnf=model_cnf,
         hparam_cnf=hparam_cnf,
         train_cnf=train_cnf,
         eval_cnf=eval_cnf,
