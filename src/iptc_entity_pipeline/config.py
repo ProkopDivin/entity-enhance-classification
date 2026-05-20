@@ -70,18 +70,20 @@ class TrainingCnf:
     
     learning_rate: float = 0.00037
     epochs: int = 100
-    batch_size: int = 100
+    batch_size: int = 64
     optimizer_name: str = 'adam'
    
     lr_scheduler_name: str = 'stepLR'
     step_size: int = 1
-    gamma: float = 1
+    gamma: float = 1 # for now 
     loss_name: str = 'bceWithLogitsLoss'
     # 0 = disabled. When > 0, monitors dev loss, stops after this many epochs
     # without improvement, and restores the best weights.
     early_stopping_patience: int = 5
-    early_stopping_min_delta: float = 0.000000001
-    early_stopping_metric: Literal['loss', 'f1'] = 'loss'
+    early_stopping_min_delta: float = 0.000000001 # because of small classes the improvement can be very small
+    # because the validation set is different than test set - not splited chronologically 
+    # we do not want to overfit it - not expecting all the articles be the same
+    early_stopping_metric: Literal['loss', 'f1'] = 'loss'  
 
 
 @dataclass(frozen=True)
@@ -154,7 +156,7 @@ class ThresholdTuningCnf:
         default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(5, 16))
     )
     f_beta: float = 1.0
-    aggregation: Literal['mean', 'median', 'mode'] = 'mean' # remove other never tried and not usefull 
+    aggregation: Literal['mean', 'median', 'mode'] = 'mean' # remove other not usefull 
 
 
 @dataclass(frozen=True)
@@ -170,7 +172,7 @@ class BaseCnf:
     optuna: OptunaCnf = field(default_factory=OptunaCnf)
     hparam: HyperparamSpace = field(default_factory=HyperparamSpace)
     tuning: ThresholdTuningCnf = field(default_factory=ThresholdTuningCnf)
-    objective_corpora: str = 'All-datapoint'
+    objective_corpora: str = 'micro-f1'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     # Single random seed that drives every randomness source in the pipeline:
     # global RNGs (python random / numpy / torch CPU+CUDA, cudnn deterministic),
