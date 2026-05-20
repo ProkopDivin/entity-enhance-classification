@@ -769,6 +769,7 @@ def build_cv_result(
             cat_list=cat_list,
             default_threshold=default_threshold,
             aggregation=tuning_cfg.aggregation,
+            min_folds_for_tuning=tuning_cfg.min_folds_for_tuning,
         )
         tuned_thresholds = tuning_result.cat_to_threshold
         threshold_report_df = tuning_result.report_df

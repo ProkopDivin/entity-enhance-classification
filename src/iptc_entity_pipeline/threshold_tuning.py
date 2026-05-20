@@ -156,22 +156,31 @@ def aggregate_fold_thresholds(
     cat_list: Sequence[str],
     default_threshold: float,
     aggregation: str = 'mean',
+    min_folds_for_tuning: int = 1,
 ) -> ThresholdTuningResult:
     """Aggregate per-fold per-class thresholds into a single map plus report.
 
-    Categories not seen in any fold fall back to ``default_threshold``. The
-    report table has one row per category and includes mean, std (population),
-    mode, median, min, max, the number of folds the class was tuned on, and the
-    final selected value. Rows are sorted by category id for deterministic output.
+    Categories not seen in any fold or seen in fewer than
+    ``min_folds_for_tuning`` folds fall back to ``default_threshold``. The report
+    table has one row per category and includes mean, std (population), mode,
+    median, min, max, the number of folds the class was tuned on, and the final
+    selected value. Rows are sorted by category id for deterministic output.
 
     :param fold_thresholds: Per-fold ``class -> threshold`` mappings.
     :param cat_list: Full category list (every entry gets a row).
     :param default_threshold: Fallback for classes never seen in any fold.
     :param aggregation: ``'mean'`` (default), ``'median'``, or ``'mode'``.
+    :param min_folds_for_tuning: Minimum number of folds required to use an
+        aggregated tuned threshold. Classes with fewer supporting folds fall
+        back to ``default_threshold``.
     :return: Aggregated thresholds and per-class report DataFrame.
     """
     if aggregation not in {'mean', 'median', 'mode'}:
         raise ValueError(f'Unsupported threshold aggregation: {aggregation}')
+    if min_folds_for_tuning < 1:
+        raise ValueError(
+            f'min_folds_for_tuning must be >= 1, got {min_folds_for_tuning}'
+        )
 
     per_class: dict[str, list[float]] = defaultdict(list)
     for fold in fold_thresholds:
@@ -204,7 +213,9 @@ def aggregate_fold_thresholds(
         thr_median = float(median(values))
         thr_min = float(min(values))
         thr_max = float(max(values))
-        if aggregation == 'mean':
+        if len(values) < min_folds_for_tuning:
+            selected = float(default_threshold)
+        elif aggregation == 'mean':
             selected = thr_mean
         elif aggregation == 'median':
             selected = thr_median
