@@ -3,14 +3,94 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
 import torch
 from geneea.catlib.data import Corpus
 from geneea.catlib.vec.dataset import EmbeddingDataset
+from torch.utils.data import Dataset
 
 LOGGER = logging.getLogger(__name__)
+
+
+class RaggedEmbeddingDataset(Dataset):
+    """Dataset carrying article vectors and per-sample ragged entity vectors."""
+
+    def __init__(
+        self,
+        *,
+        corpus: Any,
+        article_x: torch.Tensor,
+        entity_x: Sequence[torch.Tensor],
+        y: torch.Tensor,
+    ) -> None:
+        if len(article_x) != len(entity_x) or len(article_x) != len(y):
+            raise ValueError('RaggedEmbeddingDataset requires equal lengths for article_x, entity_x, and y')
+        self.corpus = corpus
+        self.X = article_x
+        self.entity_X = tuple(entity_x)
+        self.Y = y
+        self.catList = list(corpus.catList) if hasattr(corpus, 'catList') else []
+
+    def __len__(self) -> int:
+        return int(self.X.shape[0])
+
+    def __getitem__(self, idx: int) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        return (
+            {
+                'article_embeddings': self.X[idx],
+                'entity_embeddings': self.entity_X[idx],
+            },
+            self.Y[idx],
+        )
+
+    def saveEmbeds(self, file_name: str | Path) -> None:
+        """
+        Save article embeddings as TSV (docId, space-delimited vector elements).
+
+        This preserves compatibility with artifact writers that expect the
+        ``EmbeddingDataset.saveEmbeds`` interface.
+        """
+        with open(file_name, 'w', encoding='utf-8') as f:
+            for i, doc in enumerate(self.corpus):
+                vector = self.X[i]
+                vector_str = ' '.join(f'{v:.4g}' for v in vector)
+                f.write(f'{doc.id}\t{vector_str}\n')
+
+    @staticmethod
+    def collate_fn(batch: Sequence[tuple[dict[str, torch.Tensor], torch.Tensor]]) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        """Expose collate function for generic DataLoader call-sites."""
+        return ragged_collate_fn(batch)
+
+
+def ragged_collate_fn(batch: Sequence[tuple[dict[str, torch.Tensor], torch.Tensor]]) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    """Collate ragged entity embeddings into a padded batch tensor."""
+    features, labels = zip(*batch)
+    article_batch = torch.stack([item['article_embeddings'] for item in features])
+    entity_list = [item['entity_embeddings'] for item in features]
+    max_entities = max((int(entities.shape[0]) for entities in entity_list), default=0)
+    entity_dim = int(entity_list[0].shape[1]) if entity_list and entity_list[0].ndim == 2 else 0
+
+    padded_entities = torch.zeros(
+        (len(entity_list), max_entities, entity_dim),
+        dtype=article_batch.dtype,
+    )
+    entity_mask = torch.zeros((len(entity_list), max_entities), dtype=torch.bool)
+    for row_idx, entities in enumerate(entity_list):
+        length = int(entities.shape[0])
+        if length == 0:
+            continue
+        padded_entities[row_idx, :length, :] = entities
+        entity_mask[row_idx, :length] = True
+
+    labels_batch = torch.stack(list(labels))
+    return {
+        'article_embeddings': article_batch,
+        'entity_embeddings': padded_entities,
+        'entity_mask': entity_mask,
+    }, labels_batch
 
 
 def to_numpy_array(*, matrix_like: Any) -> np.ndarray:
@@ -52,6 +132,25 @@ def build_emb_data(*, corpus: Any, x_matrix: np.ndarray) -> Any:
     y_tensor = torch.as_tensor(y_matrix, dtype=torch.float32)
     return EmbeddingDataset(corpus, x_tensor, y_tensor)
 
+
+def build_ragged_emb_data(
+    *,
+    corpus: Any,
+    article_matrix: np.ndarray,
+    entity_matrices: Sequence[np.ndarray],
+) -> RaggedEmbeddingDataset:
+    """Build ragged embedding dataset for no-pooling mode."""
+    y_matrix = build_multilabel_targets(corpus=corpus)
+    article_x = torch.as_tensor(article_matrix, dtype=torch.float32)
+    entity_x = tuple(torch.as_tensor(matrix, dtype=torch.float32) for matrix in entity_matrices)
+    y_tensor = torch.as_tensor(y_matrix, dtype=torch.float32)
+    return RaggedEmbeddingDataset(
+        corpus=corpus,
+        article_x=article_x,
+        entity_x=entity_x,
+        y=y_tensor,
+    )
+
 def _build_dataset_with_targets(
     *,
     corpus: Any,
@@ -67,6 +166,9 @@ def _build_dataset_with_targets(
 
 def merge_datasets(*, left_data: Any, right_data: Any) -> Any:
     """Merge two embedding datasets by concatenating corpus docs and feature matrices."""
+    if isinstance(left_data, RaggedEmbeddingDataset) or isinstance(right_data, RaggedEmbeddingDataset):
+        raise NotImplementedError('merge_datasets is not implemented for RaggedEmbeddingDataset')
+
     merged_docs = list(left_data.corpus) + list(right_data.corpus)
     merged_corpus = Corpus(doc for doc in merged_docs)
     merged_x = np.vstack([to_numpy_array(matrix_like=left_data.X), to_numpy_array(matrix_like=right_data.X)])
@@ -84,6 +186,23 @@ def merge_datasets(*, left_data: Any, right_data: Any) -> Any:
 
 def slice_dataset(*, dataset: Any, indices: Sequence[int]) -> Any:
     """Return dataset subset by explicit positional indices."""
+    if isinstance(dataset, RaggedEmbeddingDataset):
+        docs = list(dataset.corpus)
+        selected_docs = [docs[idx] for idx in indices]
+        selected_corpus = Corpus(doc for doc in selected_docs)
+        if hasattr(dataset.corpus, 'catList'):
+            setattr(selected_corpus, 'catList', list(dataset.corpus.catList))
+        idx_tensor = torch.as_tensor(indices, dtype=torch.long)
+        selected_article = dataset.X.index_select(0, idx_tensor)
+        selected_labels = dataset.Y.index_select(0, idx_tensor)
+        selected_entities = tuple(dataset.entity_X[idx] for idx in indices)
+        return RaggedEmbeddingDataset(
+            corpus=selected_corpus,
+            article_x=selected_article,
+            entity_x=selected_entities,
+            y=selected_labels,
+        )
+
     docs = list(dataset.corpus)
     x_matrix = to_numpy_array(matrix_like=dataset.X)
     selected_docs = [docs[idx] for idx in indices]

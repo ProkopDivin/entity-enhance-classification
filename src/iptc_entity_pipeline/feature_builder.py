@@ -27,6 +27,15 @@ class FeatureBuildStats:
     entity_dim: int
 
 
+@dataclass(frozen=True)
+class RaggedFeatureData:
+    """Ragged entity features for no-pooling mode."""
+
+    article_matrix: np.ndarray
+    entity_matrices: tuple[np.ndarray, ...]
+    stats: FeatureBuildStats
+
+
 @dataclass
 class _BuildTracking:
     """Mutable counters/state used while building one corpus matrix."""
@@ -175,4 +184,57 @@ class FeatureBuilder:
             entity_dim=int(entity_dim),
         )
         return matrix, stats
+
+    def build_ragged_features(
+        self,
+        *,
+        corpus: Any,
+        clearml_logger: Any | None = None,
+    ) -> RaggedFeatureData:
+        """Build article vectors and per-document entity matrices for no-pooling mode."""
+        if not self._use_article_embeddings:
+            raise ValueError('no_pooling mode currently requires use_article_embeddings=True')
+
+        entity_dim = self._entity_embedding_store.infer_embedding_dim()
+        tracking = self._init_tracking()
+        article_rows: list[np.ndarray] = []
+        entity_rows: list[np.ndarray] = []
+        total_docs = len(corpus)
+        assert self._article_embedding_provider is not None
+
+        for doc in corpus:
+            pooling_result = self._pooling_strategy.pool(
+                doc=doc,
+                entity_embedding_store=self._entity_embedding_store,
+                embedding_dim=entity_dim,
+            )
+            self._update_log(
+                doc_id=doc.id,
+                pooling_result=pooling_result,
+                tracking=tracking,
+            )
+            article_embedding = self._article_embedding_provider.get_embedding(article_id=doc.id)
+            article_rows.append(np.asarray(article_embedding, dtype=np.float32))
+            if pooling_result.pooled_embedding.ndim == 1:
+                if pooling_result.found_embeddings == 0:
+                    entity_rows.append(np.zeros((0, entity_dim), dtype=np.float32))
+                else:
+                    entity_rows.append(np.asarray(pooling_result.pooled_embedding, dtype=np.float32).reshape(1, -1))
+            else:
+                entity_rows.append(np.asarray(pooling_result.pooled_embedding, dtype=np.float32))
+
+        final_stats_message = self._final_message(tracking=tracking, total_docs=total_docs)
+        self._report_final_stats(final_stats_message=final_stats_message, clearml_logger=clearml_logger)
+        stats = FeatureBuildStats(
+            unique_requested_wdids=frozenset(tracking.unique_requested_wdids),
+            unique_missing_wdids=frozenset(tracking.unique_missing_wdids),
+            total_found_embeddings=tracking.total_found_embeddings,
+            total_missing_embeddings=tracking.total_missing_embeddings,
+            entity_dim=int(entity_dim),
+        )
+        return RaggedFeatureData(
+            article_matrix=np.vstack(article_rows),
+            entity_matrices=tuple(entity_rows),
+            stats=stats,
+        )
 

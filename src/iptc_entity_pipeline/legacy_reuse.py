@@ -14,20 +14,46 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, Type
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 from clearml import Task
-from geneea.catlib.model.nnet import NeuralCategModel
+from geneea.catlib.model.nnet import EntityAttentionMLP, EntityNoPoolingMLP, MLP, MLPNN, NeuralCategModel
 from geneea.catlib.vec.dataset import EmbeddingDataset
 from geneea.catlib.vec.vectorizer import Vectorizer
 
 from iptc_entity_pipeline.config import EvaluationCnf
+from iptc_entity_pipeline.dataset_builder import RaggedEmbeddingDataset, ragged_collate_fn
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _batch_to_device(batch: Any, *, device: torch.device) -> Any:
+    """Move tensor containers to target device."""
+    if torch.is_tensor(batch):
+        return batch.to(device)
+    if isinstance(batch, dict):
+        return {key: _batch_to_device(value, device=device) for key, value in batch.items()}
+    if isinstance(batch, tuple):
+        return tuple(_batch_to_device(item, device=device) for item in batch)
+    if isinstance(batch, list):
+        return [_batch_to_device(item, device=device) for item in batch]
+    return batch
+
+
+def _resolve_nn_type(model_config: Mapping[str, Any]) -> Type[MLPNN]:
+    """Resolve NN architecture from legacy model config payload."""
+    nn_name = str(model_config.get('nnType', 'mlp')).strip().lower()
+    if nn_name == 'mlp':
+        return MLP
+    if nn_name == 'entity_no_pooling':
+        return EntityNoPoolingMLP
+    if nn_name == 'entity_attention_mlp':
+        return EntityAttentionMLP
+    raise ValueError(f'Unknown nnType: {nn_name}')
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +193,7 @@ def _validate_split(
     with torch.no_grad():
         model._nn.eval()
         for x_batch, y_batch in dataloader:
-            x_batch = x_batch.to(model._device)
+            x_batch = _batch_to_device(x_batch, device=model._device)
             y_batch = y_batch.to(model._device)
             pred = model._nn(x_batch)
             total_loss += loss_fn(pred, y_batch).item()
@@ -276,12 +302,24 @@ def createClassificationModel(
         if connect_config:
             task.connect(modelConfig, name='modelConfig')
 
+    nn_type = _resolve_nn_type(model_config=modelConfig)
+    nn_kwargs: dict[str, Any] = {}
+    if nn_type in {EntityNoPoolingMLP, EntityAttentionMLP}:
+        nn_kwargs['entityDim'] = int(modelConfig['entityDim'])
+    if nn_type is EntityAttentionMLP:
+        nn_kwargs.update({
+            'attentionHiddenDim': int(modelConfig['attentionHiddenDim']),
+            'attentionDropout': float(modelConfig.get('attentionDropout', 0.0)),
+        })
+
     return NeuralCategModel.create(
         embDim=embDim,
         outDim=outDim,
         hiddenDim=modelConfig['hiddenDim'],
         dropouts=[modelConfig['dropouts1'], modelConfig['dropouts2']],
+        nnType=nn_type,
         textVectorizer=textVectorizer,
+        nnKwargs=nn_kwargs,
     )
 
 
@@ -325,10 +363,20 @@ def trainClassificationModel(
         logger=clearml_logger, message=f'Training model with {len(model.catList)} categories', print_logs=print_logs,
     )
 
+    train_collate = ragged_collate_fn if isinstance(trainData, RaggedEmbeddingDataset) else None
+    dev_collate = ragged_collate_fn if isinstance(devData, RaggedEmbeddingDataset) else None
     train_loader = torch.utils.data.DataLoader(
-        trainData, batch_size=trainingConfig['batchSize'], shuffle=True, drop_last=True,
+        trainData,
+        batch_size=trainingConfig['batchSize'],
+        shuffle=True,
+        drop_last=True,
+        collate_fn=train_collate,
     )
-    dev_loader = torch.utils.data.DataLoader(devData, batch_size=trainingConfig['batchSize'])
+    dev_loader = torch.utils.data.DataLoader(
+        devData,
+        batch_size=trainingConfig['batchSize'],
+        collate_fn=dev_collate,
+    )
 
     train_stats = EpochStats()
     dev_stats = EpochStats()

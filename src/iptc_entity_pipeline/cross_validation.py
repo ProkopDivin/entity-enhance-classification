@@ -310,13 +310,21 @@ def _build_configs_from_trial(
     *,
     trial: Any,
     space: HyperparamSpace,
+    base_model: ModelCnf,
     base_training: TrainingCnf,
 ) -> tuple[ModelCnf, TrainingCnf]:
     """Build model/training configs from one Optuna trial suggestion."""
-    model_config = ModelCnf(
+    model_config = replace(
+        base_model,
         hidden_dim=trial.suggest_categorical('hidden_dim', list(space.hidden_dims)),
         dropouts1=trial.suggest_categorical('dropouts1', list(space.dropouts1)),
         dropouts2=trial.suggest_categorical('dropouts2', list(space.dropouts2)),
+        attention_hidden_dim=trial.suggest_categorical(
+            'attention_hidden_dim', list(space.attention_hidden_dims),
+        ),
+        attention_dropout=trial.suggest_categorical(
+            'attention_dropout', list(space.attention_dropouts),
+        ),
     )
     training_config = replace(
         base_training,
@@ -332,6 +340,8 @@ def _build_search_space(*, space: HyperparamSpace) -> dict[str, list[Any]]:
         'hidden_dim': list(space.hidden_dims),
         'dropouts1': list(space.dropouts1),
         'dropouts2': list(space.dropouts2),
+        'attention_hidden_dim': list(space.attention_hidden_dims),
+        'attention_dropout': list(space.attention_dropouts),
         'batch_size': list(space.batch_sizes),
         'learning_rate': list(space.learning_rates),
     }
@@ -343,6 +353,8 @@ def _count_total_combinations(*, space: HyperparamSpace) -> int:
         len(space.hidden_dims)
         * len(space.dropouts1)
         * len(space.dropouts2)
+        * len(space.attention_hidden_dims)
+        * len(space.attention_dropouts)
         * len(space.batch_sizes)
         * len(space.learning_rates)
     )
@@ -520,6 +532,7 @@ def run_combination(
 def select_best(
     *,
     space: HyperparamSpace,
+    base_model: ModelCnf,
     base_training: TrainingCnf,
     train_data: EmbeddingDataset,
     x_full: np.ndarray,
@@ -586,6 +599,7 @@ def select_best(
         combo_model_cfg, combo_train_cfg = _build_configs_from_trial(
             trial=trial,
             space=space,
+            base_model=base_model,
             base_training=base_training,
         )
         combo_result, completed_after_trial = run_combination(

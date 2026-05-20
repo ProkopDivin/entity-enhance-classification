@@ -19,6 +19,7 @@ from iptc_entity_pipeline.pooling import (
     EntityPoolingStrategy,
     MeanEntityPooling,
     MentionWeightedSumEntityPooling,
+    NoEntityPooling,
     SumEntityPooling,
     WeightedMeanEntityPooling,
     WeightedSumEntityPooling,
@@ -123,6 +124,9 @@ def get_pooling(
     elif emb_cfg.entity_pooling == 'sum':
         pooling = SumEntityPooling()
         logger.info('Using unweighted entity pooling (sum)')
+    elif emb_cfg.entity_pooling == 'no_pooling':
+        pooling = NoEntityPooling()
+        logger.info('Using no entity pooling (raw per-entity vectors)')
     else:
         raise ValueError(f'Unsupported entity_pooling: {emb_cfg.entity_pooling}')
     return pooling

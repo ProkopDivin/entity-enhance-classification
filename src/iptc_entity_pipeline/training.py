@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from iptc_entity_pipeline.config import ModelCnf, TrainingCnf
-from iptc_entity_pipeline.dataset_builder import to_numpy_array
+from iptc_entity_pipeline.dataset_builder import RaggedEmbeddingDataset, to_numpy_array
 from iptc_entity_pipeline.legacy_reuse import LegacyTrainResult, createClassificationModel, trainClassificationModel
 
 LOGGER = logging.getLogger(__name__)
@@ -45,7 +45,10 @@ class CvFoldCurves:
 def combo_params_json(*, model_config: ModelCnf, training_config: TrainingCnf) -> str:
     """Serialize selected hyperparameters as JSON for tabular display."""
     payload = {
+        'nn_type': model_config.nn_type,
         'hidden_dim': model_config.hidden_dim,
+        'attention_hidden_dim': model_config.attention_hidden_dim,
+        'attention_dropout': model_config.attention_dropout,
         'batch_size': training_config.batch_size,
         'dropouts1': model_config.dropouts1,
         'dropouts2': model_config.dropouts2,
@@ -54,12 +57,16 @@ def combo_params_json(*, model_config: ModelCnf, training_config: TrainingCnf) -
     return json.dumps(payload, sort_keys=True)
 
 
-def model_payload(*, model_config: ModelCnf) -> dict[str, Any]:
+def model_payload(*, model_config: ModelCnf, nn_type: str = 'mlp') -> dict[str, Any]:
     """Build model payload expected by legacy model factory."""
     return {
         'hiddenDim': model_config.hidden_dim,
         'dropouts1': model_config.dropouts1,
         'dropouts2': model_config.dropouts2,
+        'nnType': nn_type,
+        'entityDim': model_config.entity_dim,
+        'attentionHiddenDim': model_config.attention_hidden_dim,
+        'attentionDropout': model_config.attention_dropout,
     }
 
 
@@ -128,10 +135,20 @@ def train_model(
         out_dim = int(to_numpy_array(matrix_like=train_data.Y).shape[1])
     else:
         out_dim = int(train_data.corpus.catCnt)
+    is_ragged = isinstance(train_data, RaggedEmbeddingDataset)
+    requested_nn = str(getattr(model_config, 'nn_type', 'mlp')).strip().lower() or 'mlp'
+    nn_type = requested_nn
+    if is_ragged and nn_type == 'mlp':
+        nn_type = 'entity_attention_mlp'
+
+    entity_dim = int(getattr(model_config, 'entity_dim', 0))
+    if entity_dim <= 0 and is_ragged and len(train_data.entity_X) > 0 and train_data.entity_X[0].ndim == 2:
+        entity_dim = int(train_data.entity_X[0].shape[1])
+
     model = createClassificationModel(
         embDim=int(feature_dim),
         outDim=out_dim,
-        modelConfig=model_payload(model_config=model_config),
+        modelConfig=model_payload(model_config=model_config, nn_type=nn_type) | {'entityDim': entity_dim},
         textVectorizer='not None',
         logConfig=log_config,
         connect_config=connect_config,
