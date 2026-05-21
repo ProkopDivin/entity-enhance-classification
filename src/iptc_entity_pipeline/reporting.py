@@ -20,21 +20,77 @@ class ChartSpec(NamedTuple):
     dev_curve: Sequence[float]
 
 LOGGER = logging.getLogger(__name__)
+STD_METRIC_SERIES = (
+    'Precision_std',
+    'Recall_std',
+    'F1_std',
+    'Precision_macro_relevant_std',
+    'Recall_macro_relevant_std',
+    'F1_macro_relevant_std',
+)
+METRIC_SERIES = (
+    'Precision',
+    'Recall',
+    'F1',
+    'Precision_macro_relevant',
+    'Recall_macro_relevant',
+    'F1_macro_relevant',
+)
+
+def _relevant_macro_scalar_row(macro_row: Any) -> dict[str, float]:
+    """Map classes ``All-relevant-macro`` row to :data:`METRIC_SERIES` macro-relevant keys."""
+    return {
+        'Precision_macro_relevant': float(macro_row['Precision']),
+        'Recall_macro_relevant': float(macro_row['Recall']),
+        'F1_macro_relevant': float(macro_row['F1']),
+    }
+
+
+def build_test_scalar_metrics(
+    *,
+    df_corpora_test: Any,
+    df_classes_test: Any,
+    objective_row: str,
+) -> dict[str, float]:
+    """Build combined test scalar dict (objective corpora row + ``All-relevant-macro``).
+
+    Corpora ``All-macro`` / ``All-micro`` and classes ``All-relevant-macro`` are different
+    metrics and must not share one row label.
+
+    :param df_corpora_test: Corpora evaluation table.
+    :param df_classes_test: Classes evaluation table.
+    :param objective_row: Corpora row for objective metrics (e.g. ``All-micro``).
+    :return: Keys aligned with :data:`METRIC_SERIES` for artifacts and pipeline transport.
+    """
+    from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW
+
+    corpora_row = df_corpora_test.loc[objective_row]
+    macro_row = df_classes_test.loc[CLASS_RELEVANT_MACRO_ROW]
+    objective_metrics = {
+        'Precision': float(corpora_row['Precision']),
+        'Recall': float(corpora_row['Recall']),
+        'F1': float(corpora_row['F1']),
+    }
+    relevant_macro_metrics = _relevant_macro_scalar_row(macro_row)
+    metrics = {**objective_metrics, **relevant_macro_metrics}
+    LOGGER.info(
+        f'Test scalar metrics: objective_row={objective_row}, '
+        f'F1={objective_metrics["F1"]:.4f}, '
+        f'F1_macro_relevant={relevant_macro_metrics["F1_macro_relevant"]:.4f}'
+    )
+    return metrics
 
 
 def report_eval(*, logger: Any, title: str, row: Mapping[str, Any], iteration: int = 0) -> None:
-    """Report shared eval metrics to ClearML scalar charts."""
-    logger.report_scalar(title=title, series='Precision', value=row['Precision'], iteration=iteration)
-    logger.report_scalar(title=title, series='Recall', value=row['Recall'], iteration=iteration)
-    logger.report_scalar(title=title, series='F1', value=row['F1'], iteration=iteration)
-    optional_series = (
-        ('Precision_macro_relevant', 'Precision_macro_relevant'),
-        ('Recall_macro_relevant', 'Recall_macro_relevant'),
-        ('F1_macro_relevant', 'F1_macro_relevant'),
-    )
-    for key, series in optional_series:
-        if key in row:
-            logger.report_scalar(title=title, series=series, value=float(row[key]), iteration=iteration)
+    """Report shared eval metrics to ClearML scalar charts.
+
+    Expects ``row`` keys from evaluation tables or :func:`cross_validation._build_cv_dev_row`
+    (``METRIC_SERIES`` names: micro as ``Precision``/``Recall``/``F1``, macro-relevant
+    as ``*_macro_relevant``).
+    """
+    for series in METRIC_SERIES:
+        if series in row:
+            logger.report_scalar(title=title, series=series, value=float(row[series]), iteration=iteration)
 
 
 
@@ -46,35 +102,12 @@ def report_cv_std(
     iteration: int = 0,
 ) -> None:
     """Report standard deviations from CV objective metrics."""
-    logger.report_scalar(
-        title=title,
-        series='Precision_std',
-        value=float(row['Precision_std']),
-        iteration=iteration,
-    )
-    logger.report_scalar(
-        title=title,
-        series='Recall_std',
-        value=float(row['Recall_std']),
-        iteration=iteration,
-    )
-    logger.report_scalar(
-        title=title,
-        series='F1_std',
-        value=float(row['F1_std']),
-        iteration=iteration,
-    )
-    macro_std_series = (
-        ('Precision_macro_relevant_std', 'Precision_macro_relevant_std'),
-        ('Recall_macro_relevant_std', 'Recall_macro_relevant_std'),
-        ('F1_macro_relevant_std', 'F1_macro_relevant_std'),
-    )
-    for key, series in macro_std_series:
-        if key in row:
+    for series in STD_METRIC_SERIES:
+        if series in row:
             logger.report_scalar(
                 title=title,
                 series=series,
-                value=float(row[key]),
+                value=float(row[series]),
                 iteration=iteration,
             )
 
@@ -92,9 +125,99 @@ def report_cv_curve(
     logger.report_table(title='Cross Validation', series='Folds', iteration=0, table_plot=folds_df)
     logger.report_table(title='Cross Validation', series='Cross Validation Results', iteration=0, table_plot=trials_df)
     if upload_artifacts:
-        task.upload_artifact('cv_trials_dataframe', artifact_object=trials_df)
-        task.upload_artifact('cv_folds_dataframe', artifact_object=folds_df)
-        task.upload_artifact('cv_dev_summary_dataframe', artifact_object=cv_dev_df)
+        task.upload_artifact('cv_trials_dataframe', artifact_object=trials_df.copy(deep=True))
+        task.upload_artifact('cv_folds_dataframe', artifact_object=folds_df.copy(deep=True))
+        task.upload_artifact('cv_dev_summary_dataframe', artifact_object=cv_dev_df.copy(deep=True))
+
+
+def report_cv_result_tables(
+    *,
+    task: Task,
+    clearml_logger: Any,
+    cv_result: Any,
+    threshold_aggregation: str,
+    upload_artifacts: bool = False,
+) -> None:
+    """Report CV result tables and optional artifacts."""
+    if cv_result.threshold_report_df is not None:
+        clearml_logger.report_table(
+            title='Threshold Tuning',
+            series='Per-class thresholds (CV folds)',
+            iteration=0,
+            table_plot=cv_result.threshold_report_df,
+        )
+        n_classes = int(cv_result.threshold_report_df['n_folds'].gt(0).sum())
+        LOGGER.info(
+            f'Threshold tuning: aggregation={threshold_aggregation}, '
+            f'classes_with_tuned_threshold={n_classes}/{len(cv_result.threshold_report_df)}'
+        )
+        if upload_artifacts:
+            task.upload_artifact(
+                'threshold_tuning_report',
+                artifact_object=cv_result.threshold_report_df.copy(deep=True),
+            )
+            task.upload_artifact(
+                'threshold_tuning_thresholds',
+                artifact_object={
+                    str(k): float(v) for k, v in (cv_result.tuned_thresholds or {}).items()
+                },
+            )
+
+    if cv_result.cv_per_corpora_df is not None:
+        clearml_logger.report_table(
+            title='Cross Validation',
+            series='Per-corpora (mean+std)',
+            iteration=0,
+            table_plot=cv_result.cv_per_corpora_df,
+        )
+        if upload_artifacts:
+            task.upload_artifact(
+                'cv_per_corpora_dataframe',
+                artifact_object=cv_result.cv_per_corpora_df.copy(deep=True),
+            )
+    if cv_result.cv_per_class_df is not None:
+        clearml_logger.report_table(
+            title='Cross Validation',
+            series='Per-class (mean+std)',
+            iteration=0,
+            table_plot=cv_result.cv_per_class_df,
+        )
+        if upload_artifacts:
+            task.upload_artifact(
+                'cv_per_class_dataframe',
+                artifact_object=cv_result.cv_per_class_df.copy(deep=True),
+            )
+
+
+def report_cv(
+    *,
+    task: Task,
+    logger: Any,
+    report: Any,
+    upload_artifacts: bool = False,
+) -> None:
+    """Report all CV results to ClearML in a single call.
+
+    :param report: :class:`CvReport` carrying all data needed for
+        trial/fold tables, per-fold loss/F1 curves, and
+        threshold/per-class/per-corpora result tables.
+    """
+    report_cv_curve(
+        task=task,
+        logger=logger,
+        trials_df=report.trials_df,
+        folds_df=report.folds_df,
+        cv_dev_df=report.cv_dev_df,
+        upload_artifacts=upload_artifacts,
+    )
+    report_cv_fold(logger=logger, fold_curves=report.fold_curves)
+    report_cv_result_tables(
+        task=task,
+        clearml_logger=logger,
+        cv_result=report,
+        threshold_aggregation=report.threshold_aggregation,
+        upload_artifacts=upload_artifacts,
+    )
 
 
 def log_stage(*, task: Task, message: str, print_logs: bool) -> None:
@@ -213,58 +336,56 @@ def report_test_curve(*, logger: Any, result: TrainingResult, dev_series: str = 
         )
 
 
-def report_eval_scalars(
+def report_test_eval_scalars(
     *,
     clearml_logger: Any,
-    cv_dev_df: Any,
     df_corpora_test: Any,
-    objective_corpora: str,
-    averaging_type: str,
+    df_classes_test: Any,
+    objective_row: str,
 ) -> None:
-    """Report CV dev and test evaluation scalar metrics to ClearML.
+    """Report final-test scalars under ``Test Evaluation Results``.
+
+    Logs in order:
+
+    1. Objective metrics from the corpora table row (``objective_row``, e.g. ``All-micro``).
+    2. Relevant-class macro from the classes table row ``All-relevant-macro`` (not corpora ``All-macro``).
+    3. Optional extra corpora ``All-micro`` row at iteration 1 when ``objective_row`` is not ``All-micro``.
 
     :param clearml_logger: ClearML logger instance.
-    :param cv_dev_df: Best-trial CV dev summary DataFrame (indexed by objective_corpora).
     :param df_corpora_test: Test corpora evaluation DataFrame.
-    :param objective_corpora: Primary corpus name for objective metrics.
-    :param averaging_type: Averaging type (e.g. 'datapoint', 'micro').
+    :param df_classes_test: Test classes evaluation DataFrame.
+    :param objective_row: Corpora row used as the pipeline objective (e.g. ``All-micro``).
     """
-    if objective_corpora in cv_dev_df.index:
-        row_cv = cv_dev_df.loc[objective_corpora].to_dict()
-    else:
-        row_cv = cv_dev_df.iloc[0].to_dict()
-    report_eval(logger=clearml_logger, title='Dev Cross Validation Mean Results', row=row_cv, iteration=0)
-    if 'Precision_std' in row_cv:
-        report_cv_std(logger=clearml_logger, row=row_cv, title='Dev Cross Validation Mean Results', iteration=0)
+    from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW
 
-    objective_row_name = f'All-{averaging_type}'
-    row_all_test = df_corpora_test.loc[objective_row_name].to_dict()
-    report_eval(logger=clearml_logger, title='Test Evaluation Results', row=row_all_test, iteration=0)
+    title = 'Test Evaluation Results'
+    objective_metrics = df_corpora_test.loc[objective_row].to_dict()
+    report_eval(logger=clearml_logger, title=title, row=objective_metrics, iteration=0)
 
-    if 'All-micro' in df_corpora_test.index:
+    relevant_macro_metrics = _relevant_macro_scalar_row(df_classes_test.loc[CLASS_RELEVANT_MACRO_ROW])
+    report_eval(logger=clearml_logger, title=title, row=relevant_macro_metrics, iteration=0)
+
+    LOGGER.info(
+        f'Test Evaluation Results reported: objective_row={objective_row}, '
+        f'F1={float(objective_metrics["F1"]):.4f}, '
+        f'F1_macro_relevant={relevant_macro_metrics["F1_macro_relevant"]:.4f}'
+    )
+
+    if objective_row != 'All-micro':
         row_micro = df_corpora_test.loc['All-micro'].to_dict()
-        report_eval(logger=clearml_logger, title='Test Evaluation Results (micro)', row=row_micro, iteration=0)
-
-    if objective_corpora in df_corpora_test.index:
-        row_obj = df_corpora_test.loc[objective_corpora].to_dict()
-        report_eval(logger=clearml_logger, title='Objective Test Evaluation Results', row=row_obj, iteration=0)
-    else:
-        LOGGER.warning(
-            'Requested objective_corpora "%s" not found in test corpus index; available=%s',
-            objective_corpora,
-            list(df_corpora_test.index),
-        )
+        report_eval(logger=clearml_logger, title=title, row=row_micro, iteration=1)
 
 
-def report_eval_tables(
+def report_test_eval_tables(
     *,
     clearml_logger: Any,
-    cv_dev_df: Any,
     df_corpora_test: Any,
     df_classes_test: Any,
 ) -> None:
-    """Report evaluation summary tables to ClearML."""
-    clearml_logger.report_table(title='Cross Validation Summary', series='Mean+Std', iteration=0, table_plot=cv_dev_df)
+    """Report final-test evaluation tables to ClearML.
+
+    CV summary tables are reported in the ``run_cv`` step only.
+    """
     clearml_logger.report_table(
         title='Test Evaluation', series='Corpora Dataframe', iteration=0, table_plot=df_corpora_test,
     )

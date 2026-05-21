@@ -161,22 +161,23 @@ def save_outputs(
 def export_eval_excel(
     *,
     excel_path: Path,
-    cv_dev_df: pd.DataFrame,
     df_corpora_test: pd.DataFrame,
     df_classes_test: pd.DataFrame,
     comparison_result: Any = None,
+    cv_dev_df: pd.DataFrame | None = None,
 ) -> None:
     """Write evaluation tables (and optional comparison) to a single Excel workbook.
 
     :param excel_path: Target ``.xlsx`` path.
-    :param cv_dev_df: Best-trial CV dev summary.
     :param df_corpora_test: Test corpora metrics.
     :param df_classes_test: Test per-class metrics.
     :param comparison_result: Optional ``ComparisonResult`` from baseline comparison.
+    :param cv_dev_df: Optional CV dev summary; omitted when already stored from ``run_cv``.
     """
     excel_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(excel_path) as writer:
-        cv_dev_df.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
+        if cv_dev_df is not None:
+            cv_dev_df.to_excel(excel_writer=writer, sheet_name='dev_cv_summary')
         df_corpora_test.to_excel(excel_writer=writer, sheet_name='test_corpora')
         df_classes_test.to_excel(excel_writer=writer, sheet_name='test_classes')
         if comparison_result is not None:

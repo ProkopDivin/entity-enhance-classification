@@ -110,7 +110,7 @@ class EvaluationCnf:
     threshold_eval: float = 0.5
     per_corpus: bool = True
     per_class: bool = True
-    averaging_type: str = 'datapoint'
+    averaging_type: str = 'micro' # strategy for treshold tuning and metric to use for corpora level evaluation
     base_run_dir: str = ''
 
 
@@ -173,7 +173,7 @@ class BaseCnf:
     optuna: OptunaCnf = field(default_factory=OptunaCnf)
     hparam: HyperparamSpace = field(default_factory=HyperparamSpace)
     tuning: ThresholdTuningCnf = field(default_factory=ThresholdTuningCnf)
-    objective_corpora: str = 'micro-f1'
+    objective_row: str = 'All-micro'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     # Single random seed that drives every randomness source in the pipeline:
     # global RNGs (python random / numpy / torch CPU+CUDA, cudnn deterministic),

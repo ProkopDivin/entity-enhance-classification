@@ -31,7 +31,13 @@ import pandas as pd
 from iptc_entity_pipeline.category_sets import load_relevant_cat_ids, load_tail_cat_ids
 from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.data_loading import sanitize_name
-from iptc_entity_pipeline.evaluate import REMOVED_CAT_IDS, evaluate_predictions, get_cat_name, get_iptc_topics
+from iptc_entity_pipeline.evaluate import (
+    CLASS_RELEVANT_MACRO_ROW,
+    REMOVED_CAT_IDS,
+    evaluate_predictions,
+    get_cat_name,
+    get_iptc_topics,
+)
 from iptc_entity_pipeline.model_io import EVAL_CORPUS_FILENAME, PREDICTIONS_FILENAME
 
 LOG = logging.getLogger(__name__)
@@ -42,12 +48,12 @@ LOG = logging.getLogger(__name__)
 # saved by earlier versions of this pipeline before the rename.
 THRESHOLD_FILENAMES: tuple[str, ...] = ('custom_thresholds.json', 'thresholds.json')
 
-CLASS_MACRO_ROW = 'All - macro avg'
+CLASS_MACRO_ROW = CLASS_RELEVANT_MACRO_ROW
 CLASS_TAIL_ROW = 'All - tail avg'
-AGG_CLASS_ROWS = frozenset({'All - micro avg', CLASS_MACRO_ROW, CLASS_TAIL_ROW, 'All - datapoint avg'})
+AGG_CLASS_ROWS = frozenset({'All - micro avg', CLASS_RELEVANT_MACRO_ROW, CLASS_TAIL_ROW, 'All - datapoint avg'})
 AGG_CORPUS_ROWS = frozenset({'All-macro', 'All-micro', 'All-datapoint'})
 SUMMARY_ROWS = {
-    'macro_over_classes_all': ('classes', 'All - macro avg'),
+    'macro_over_classes_all': ('classes', CLASS_RELEVANT_MACRO_ROW),
     'micro_over_labels': ('classes', 'All - micro avg'),
 }
 SUPPORT_BUCKETS: tuple[tuple[int, int, str], ...] = (
@@ -1064,7 +1070,7 @@ def replace_macro_row_in_run_classes_df(
     require_all: bool,
     insert_after_label: str | None = None,
 ) -> pd.DataFrame:
-    """Replace ``All - macro avg`` row in one run's classes table."""
+    """Replace :data:`~iptc_entity_pipeline.evaluate.CLASS_RELEVANT_MACRO_ROW` in one run's classes table."""
     table = classes_df.reset_index().copy()
     classes_filtered = table[~table['IPTC Category'].isin(AGG_CLASS_ROWS)].copy()
     label_to_id = labels_for_cat_ids(cat_ids=class_ids)

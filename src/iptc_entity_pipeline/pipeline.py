@@ -14,7 +14,11 @@ from iptc_entity_pipeline.data_loading import attach_entities, load_and_normaliz
 from iptc_entity_pipeline.evaluation_comparison import build_path, compare_runs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.model_io import save_outputs
-from iptc_entity_pipeline.reporting import log_stage, report_cv_fold, report_cv_curve, report_cv_std, report_eval, report_test_curve
+from iptc_entity_pipeline.reporting import (
+    log_stage,
+    report_cv,
+    report_test_curve,
+)
 
 from iptc_entity_pipeline.training import train_model
 from iptc_entity_pipeline.reporting import conf_logging
@@ -26,10 +30,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 class EvalResult:
     """Outputs of the final evaluation pipeline step."""
 
-    dev_corpora_df: Any
     test_corpora_df: Any
     test_classes_df: Any
     objective_metrics: dict[str, Any]
+    scalar_metrics: dict[str, Any]
 
 
 @PipelineDecorator.component(
@@ -330,7 +334,7 @@ def run_cv(
     cv_cnf: Mapping[str, Any],
     optuna_cnf: Mapping[str, Any],
     tuning_cnf: Mapping[str, Any],
-    objective_corpora: str,
+    objective_row: str,
     random_seed: int,
     print_logs: bool = True,
     debug: bool = False,
@@ -343,7 +347,8 @@ def run_cv(
         per-fold evaluation. Used by the assembly pipeline so each member's
         per-class CV F1 is measured at that member's externally-loaded
         thresholds. When provided, it is also echoed into
-        ``cv_result.tuned_thresholds`` and threshold tuning is bypassed.
+        ``cv.tuned_thresholds`` and threshold tuning is bypassed.
+    :return: Pickle-safe :class:`CvOutputs` with all CV results.
     """
     from dataclasses import asdict
 
@@ -357,12 +362,11 @@ def run_cv(
         TrainingCnf,
         conf_from_dict,
     )
-    from iptc_entity_pipeline.cross_validation import build_cv_df, build_cv_result, prepare_cv, select_best
+    from iptc_entity_pipeline.cross_validation import CV
     from iptc_entity_pipeline.seeding import set_global_seed
 
     conf_logging()
     set_global_seed(seed=int(random_seed))
-    logger = logging.getLogger(__name__)
     task = Task.current_task()
     clearml_logger = task.get_logger()
 
@@ -382,108 +386,35 @@ def run_cv(
     task.connect(asdict(optuna_cfg), name='optunaConfig')
     task.connect(asdict(tuning_cfg), name='thresholdTuningConfig')
 
-    if eval_thresholds is not None and tuning_cfg.enabled:
-        logger.info(
-            'Assembly mode: external eval_thresholds provided, '
-            'forcing tuning_cfg.enabled=False'
-        )
-        tuning_cfg = replace(tuning_cfg, enabled=False)
-
-    x_full, y_full = prepare_cv(train_data=train_data)
-    logger.info(f'CV data prepared: x_shape={x_full.shape}, y_shape={y_full.shape}, feature_dim={feature_dim}')
-
-    selection = select_best(
-        space=space,
-        base_model=base_model,
-        base_training=base_training,
-        train_data=train_data,
-        x_full=x_full,
-        y_full=y_full,
-        feature_dim=feature_dim,
-        eval_cfg=eval_cfg,
-        cv_cfg=cv_cfg,
-        optuna_cfg=optuna_cfg,
-        tuning_cfg=tuning_cfg,
-        objective_corpora=objective_corpora,
+    cv = CV(
+        model_cnf=base_model,
+        hparam_cnf=space,
+        train_cnf=base_training,
+        eval_cnf=eval_cfg,
+        cv_cnf=cv_cfg,
+        optuna_cnf=optuna_cfg,
+        tuning_cnf=tuning_cfg,
+        objective_row=objective_row,
+        random_seed=int(random_seed),
         debug=debug,
+        eval_thresholds=eval_thresholds,
+    )
+    cv.fit(
+        train_data=train_data,
+        feature_dim=feature_dim,
         print_logs=print_logs,
         clearml_logger=clearml_logger,
-        random_seed=int(random_seed),
-        eval_thresholds=eval_thresholds,
     )
 
-    trials_df, folds_df, cv_dev_df = build_cv_df(
-        trial_rows=selection.trial_rows,
-        fold_rows=selection.fold_rows,
-        best_trial=selection.best_trial,
-        objective_corpora=objective_corpora,
-    )
-
-    report_cv_curve(
+    report = cv.prepare_report()
+    report_cv(
         task=task,
         logger=clearml_logger,
-        trials_df=trials_df,
-        folds_df=folds_df,
-        cv_dev_df=cv_dev_df,
+        report=report,
         upload_artifacts=upload_artifacts,
     )
-    report_cv_fold(logger=clearml_logger, fold_curves=selection.best_fold_curves)
-    logger.info(f'CV complete: best_trial F1={selection.best_trial["F1_mean"]:.4f}')
 
-    cv_result = build_cv_result(
-        cv_dev_df=cv_dev_df,
-        selection=selection,
-        patience=base_training.early_stopping_patience,
-        tuning_cfg=tuning_cfg,
-        cat_list=list(train_data.corpus.catList),
-        default_threshold=eval_cfg.threshold_eval,
-        eval_thresholds=eval_thresholds,
-    )
-
-    if cv_result.threshold_report_df is not None:
-        clearml_logger.report_table(
-            title='Threshold Tuning',
-            series='Per-class thresholds (CV folds)',
-            iteration=0,
-            table_plot=cv_result.threshold_report_df,
-        )
-        n_classes = int(cv_result.threshold_report_df['n_folds'].gt(0).sum())
-        logger.info(
-            f'Threshold tuning: aggregation={tuning_cfg.aggregation}, '
-            f'classes_with_tuned_threshold={n_classes}/{len(cv_result.threshold_report_df)}'
-        )
-        if upload_artifacts:
-            task.upload_artifact(
-                'threshold_tuning_report', artifact_object=cv_result.threshold_report_df,
-            )
-            task.upload_artifact(
-                'threshold_tuning_thresholds', artifact_object=dict(cv_result.tuned_thresholds or {}),
-            )
-
-    if cv_result.cv_per_corpora_df is not None:
-        clearml_logger.report_table(
-            title='Cross Validation',
-            series='Per-corpora (mean+std)',
-            iteration=0,
-            table_plot=cv_result.cv_per_corpora_df,
-        )
-        if upload_artifacts:
-            task.upload_artifact(
-                'cv_per_corpora_dataframe', artifact_object=cv_result.cv_per_corpora_df,
-            )
-    if cv_result.cv_per_class_df is not None:
-        clearml_logger.report_table(
-            title='Cross Validation',
-            series='Per-class (mean+std)',
-            iteration=0,
-            table_plot=cv_result.cv_per_class_df,
-        )
-        if upload_artifacts:
-            task.upload_artifact(
-                'cv_per_class_dataframe', artifact_object=cv_result.cv_per_class_df,
-            )
-
-    return cv_result
+    return cv.export_outputs()
 
 @PipelineDecorator.component(
     return_values=['assemblyResult'],
@@ -496,20 +427,20 @@ def run_assembly_step(
     cat_list,
     member_loaded_thresholds,
     eval_cnf: Mapping[str, Any],
-    objective_corpora: str,
+    objective_row: str,
     print_logs: bool = True,
     upload_artifacts: bool = False,
     mapping_artifact_name: str = 'assembly_class_to_model',
     sign_test: bool = False,
 ):
-    """Build the assembly from each member's pre-computed :class:`CvResult`.
+    """Build the assembly from each member's pre-computed :class:`CV` result.
 
     No training of its own: each member must have already gone through
     :func:`run_cv` (with ``eval_thresholds`` set to that member's loaded
-    thresholds) so ``cv_per_class_df`` is populated and per-class F1 was
+    thresholds) so ``per_class_df`` is populated and per-class F1 was
     measured at the production thresholds.
 
-    :param member_cv_results: One :class:`CvResult` per member.
+    :param member_cv_results: One fitted :class:`CV` instance per member.
     :param member_labels: Display labels (member 0 is primary; ties on F1
         resolve to it).
     :param cat_list: Shared train ``catList`` (validated upstream).
@@ -538,7 +469,7 @@ def run_assembly_step(
         member_labels=list(member_labels),
         cat_list=list(cat_list),
         eval_cfg=eval_cfg,
-        objective_corpora=objective_corpora,
+        objective_row=objective_row,
         primary_idx=0,
         member_loaded_thresholds=(
             list(member_loaded_thresholds)
@@ -586,14 +517,18 @@ def run_assembly_step(
 )
 def train_best(
     train_data,
-    test_data,
     feature_dim: int,
     best_model_cnf: Mapping[str, Any],
     train_cnf: Mapping[str, Any],
     random_seed: int,
+    test_data=None,
     print_logs: bool = True,
 ):
-    """Train final model on full train set with best hyperparams from CV."""
+    """Train final model on full train set with best hyperparams from CV.
+
+    :param test_data: Optional monitoring split for per-epoch curves. When
+        omitted, metrics are computed on ``train_data`` (no test leakage).
+    """
     from iptc_entity_pipeline.config import ModelCnf, TrainingCnf, conf_from_dict
     from iptc_entity_pipeline.seeding import set_global_seed
 
@@ -609,27 +544,31 @@ def train_best(
     task.connect(best_model_cnf, name='bestModelConfig')
     task.connect(train_cnf, name='bestTrainingConfig')
 
+    monitor_data = test_data if test_data is not None else train_data
+    curve_label = 'test' if test_data is not None else 'dev'
+    validation_split_name = 'test' if test_data is not None else 'dev'
     logger.info(
         f'Training final model: hidden_dim={model_cfg.hidden_dim}, '
         f'dropouts=({model_cfg.dropouts1}, {model_cfg.dropouts2}), '
         f'lr={train_cfg.learning_rate}, batch_size={train_cfg.batch_size}, '
         f'epochs={train_cfg.epochs}, early_stopping_patience={train_cfg.early_stopping_patience}, '
-        f'feature_dim={feature_dim}, train_docs={len(train_data.corpus)}, test_docs={len(test_data.corpus)}'
+        f'feature_dim={feature_dim}, train_docs={len(train_data.corpus)}, '
+        f'monitor_docs={len(monitor_data.corpus)}, monitor_split={curve_label}'
     )
-    if train_cfg.early_stopping_patience != 0:
-        raise ValueError('Final retraining may evaluate test curves only when early stopping is disabled')
+    if test_data is not None and train_cfg.early_stopping_patience != 0:
+        raise ValueError('Final retraining on test monitor split requires early stopping to be disabled')
 
     result = train_model(
         train_data=train_data,
-        dev_data=test_data,
+        dev_data=monitor_data,
         feature_dim=feature_dim,
         model_config=model_cfg,
         training_config=train_cfg,
         print_logs=print_logs,
-        validation_split_name='test',
+        validation_split_name=validation_split_name,
     )
 
-    report_test_curve(logger=clearml_logger, result=result)
+    report_test_curve(logger=clearml_logger, result=result, dev_series=curve_label)
     logger.info(
         f'Final model training complete: epochs={result.epochs_run}, '
         f'final_dev_loss={result.final_dev_loss:.6f}'
@@ -643,11 +582,10 @@ def train_best(
 )
 def eval_final(
     trained_model,
-    cv_dev_df,
     test_data,
     eval_cnf: Mapping[str, Any],
     emb_cnf: Mapping[str, Any],
-    objective_corpora: str,
+    objective_row: str,
     config_name: str,
     config_mapping: Mapping[str, Any],
     feature_dim: int,
@@ -655,7 +593,7 @@ def eval_final(
     threshold_report_df: Any = None,
     upload_artifacts: bool = False,
 ):
-    """Evaluate final model on test and persist CV dev summary with mean/std."""
+    """Evaluate final model on test; CV summaries are reported only in ``run_cv``."""
     import logging
     from dataclasses import asdict
     from pathlib import Path
@@ -666,7 +604,12 @@ def eval_final(
     from iptc_entity_pipeline.legacy_reuse import evaluateModel
     from iptc_entity_pipeline.model_io import export_eval_excel, save_outputs
     from iptc_entity_pipeline.pipeline import EvalResult
-    from iptc_entity_pipeline.reporting import conf_logging, report_eval_scalars, report_eval_tables
+    from iptc_entity_pipeline.reporting import (
+        build_test_scalar_metrics,
+        conf_logging,
+        report_test_eval_scalars,
+        report_test_eval_tables,
+    )
 
     def run_comparison():
         """Run optional baseline comparison and report results to ClearML."""
@@ -707,9 +650,8 @@ def eval_final(
         return result
 
     def upload_eval_artifacts():
-        """Upload all eval-step artifacts to ClearML."""
+        """Upload eval-step artifacts to ClearML (test outputs only; CV in ``run_cv``)."""
         objective_row_name = f'All-{eval_cfg.averaging_type}'
-        task.upload_artifact('dev_corpora_dataframe', artifact_object=cv_dev_df)
         task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
         task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
         task.upload_artifact('final_evaluation_tables_xlsx', artifact_object=str(excel_path))
@@ -719,7 +661,7 @@ def eval_final(
             artifact_object={
                 'threshold_predict': eval_cfg.threshold_predict,
                 'threshold_eval': eval_cfg.threshold_eval,
-                'objective_corpora': objective_corpora,
+                'objective_row': objective_row,
                 'objective_row_name': objective_row_name,
             },
         )
@@ -740,7 +682,7 @@ def eval_final(
     custom_thresholds = dict(tuned_thresholds) if tuned_thresholds else None
     logger.info(
         f'Evaluating final model on test: test_docs={len(test_data.corpus)}, '
-        f'objective={objective_corpora}, custom_thresholds='
+        f'objective={objective_row}, custom_thresholds='
         f'{len(custom_thresholds) if custom_thresholds else 0} class(es)'
     )
 
@@ -752,16 +694,19 @@ def eval_final(
         returnPredictions=True,
     )
 
-    report_eval_scalars(
-        clearml_logger=clearml_logger,
-        cv_dev_df=cv_dev_df,
+    scalar_metrics = build_test_scalar_metrics(
         df_corpora_test=df_corpora_test,
-        objective_corpora=objective_corpora,
-        averaging_type=eval_cfg.averaging_type,
+        df_classes_test=df_classes_test,
+        objective_row=objective_row,
     )
-    report_eval_tables(
+    report_test_eval_scalars(
         clearml_logger=clearml_logger,
-        cv_dev_df=cv_dev_df,
+        df_corpora_test=df_corpora_test,
+        df_classes_test=df_classes_test,
+        objective_row=objective_row,
+    )
+    report_test_eval_tables(
+        clearml_logger=clearml_logger,
         df_corpora_test=df_corpora_test,
         df_classes_test=df_classes_test,
     )
@@ -780,14 +725,6 @@ def eval_final(
         upload_artifacts=upload_artifacts,
     )
 
-    if threshold_report_df is not None:
-        clearml_logger.report_table(
-            title='Threshold Tuning',
-            series='Per-class thresholds (final eval)',
-            iteration=0,
-            table_plot=threshold_report_df,
-        )
-
     comparison_result = run_comparison()
 
     output_dir = Path(save_paths.output_dir)
@@ -795,7 +732,6 @@ def eval_final(
     excel_path = output_dir / f'final_evaluation_tables_{model_name}.xlsx'
     export_eval_excel(
         excel_path=excel_path,
-        cv_dev_df=cv_dev_df,
         df_corpora_test=df_corpora_test,
         df_classes_test=df_classes_test,
         comparison_result=comparison_result,
@@ -804,18 +740,16 @@ def eval_final(
     if upload_artifacts:
         upload_eval_artifacts()
 
-    objective_row_name = f'All-{eval_cfg.averaging_type}'
-    objective_metrics = (
-        df_corpora_test.loc[objective_corpora].to_dict()
-        if objective_corpora in df_corpora_test.index
-        else df_corpora_test.loc[objective_row_name].to_dict()
+    objective_metrics = df_corpora_test.loc[objective_row].to_dict()
+    logger.info(
+        f'Evaluation complete: F1={scalar_metrics["F1"]:.4f}, '
+        f'F1_macro_relevant={scalar_metrics["F1_macro_relevant"]:.4f}, config={config_name}'
     )
-    logger.info(f'Evaluation complete: F1={objective_metrics.get("F1", "N/A")}, config={config_name}')
     return EvalResult(
-        dev_corpora_df=cv_dev_df,
         test_corpora_df=df_corpora_test,
         test_classes_df=df_classes_test,
         objective_metrics=objective_metrics,
+        scalar_metrics=scalar_metrics,
     )
 
 
@@ -825,7 +759,7 @@ def _run_assembly_training_pipeline(
     assembly_cnf: Mapping[str, Any],
     eval_cnf: Mapping[str, Any],
     cv_cnf: Mapping[str, Any],
-    objective_corpora: str,
+    objective_row: str,
     downsample_corpora: Mapping[str, float],
     config_name: str,
     print_logs: bool,
@@ -994,7 +928,7 @@ def _run_assembly_training_pipeline(
             cv_cnf=cv_cnf,
             optuna_cnf=member_optuna_cnfs[idx],
             tuning_cnf=member_tuning_cnfs[idx],
-            objective_corpora=objective_corpora,
+            objective_row=objective_row,
             random_seed=member_random_seeds[idx],
             print_logs=print_logs,
             debug=debug,
@@ -1008,14 +942,13 @@ def _run_assembly_training_pipeline(
         message='Assembly stage 6: aggregate per-member CV into per-class assembly',
         print_logs=print_logs,
     )
-    # simplify this 
     assembly_result = run_assembly_step(
         member_cv_results=member_cv_results,
         member_labels=member_labels,
         cat_list=cat_list,
         member_loaded_thresholds=member_loaded_thresholds,
         eval_cnf=eval_cnf,
-        objective_corpora=objective_corpora,
+        objective_row=objective_row,
         print_logs=print_logs,
         upload_artifacts=upload_artifacts,
         mapping_artifact_name=str(assembly_cnf.get('mapping_artifact_name', 'assembly_class_to_model')),
@@ -1029,16 +962,13 @@ def _run_assembly_training_pipeline(
     )
     trained_members: list[Any] = []
     for idx in range(len(members_raw)):
-        cv_for_member = member_cv_results[idx]
-        best_train_cnf = dict(cv_for_member.best_training_config)
-        best_model_cnf = dict(cv_for_member.best_model_config)
-        best_train_cnf['early_stopping_patience'] = 0
+        member_cv = member_cv_results[idx]
         trained = train_best(
             train_data=member_train_data[idx],
             test_data=member_test_data[idx],
             feature_dim=member_feature_dims[idx],
-            best_model_cnf=best_model_cnf,
-            train_cnf=best_train_cnf,
+            best_model_cnf=asdict(member_cv.best_model_config),
+            train_cnf=asdict(member_cv.best_training_config),
             random_seed=member_random_seeds[idx],
             print_logs=print_logs,
         )
@@ -1064,11 +994,10 @@ def _run_assembly_training_pipeline(
     # row-aligned with every other member's by validate_member_catlists.
     eval_result = eval_final(
         trained_model=assembled_model,
-        cv_dev_df=assembly_result.cv_dev_df,
         test_data=member_test_data[0],
         eval_cnf=eval_cnf,
         emb_cnf=member_emb[0],
-        objective_corpora=objective_corpora,
+        objective_row=objective_row,
         config_name=config_name,
         config_mapping=cnf,
         feature_dim=member_feature_dims[0],
@@ -1076,34 +1005,19 @@ def _run_assembly_training_pipeline(
         threshold_report_df=assembly_result.threshold_report_df,
         upload_artifacts=upload_artifacts,
     )
+    from iptc_entity_pipeline.reporting import report_test_eval_scalars
 
-    logger = task.get_logger()
-    objective_row_name = f'All-{eval_cnf["averaging_type"]}'
-    if objective_row_name in eval_result.dev_corpora_df.index:
-        row_cv = eval_result.dev_corpora_df.loc[objective_row_name].to_dict()
-    else:
-        row_cv = eval_result.dev_corpora_df.iloc[0].to_dict()
-    report_eval(logger=logger, title='Cross Validation Results', row=row_cv, iteration=0)
-    if 'Precision_std' in row_cv:
-        report_cv_std(logger=logger, row=row_cv, title='Cross Validation Results', iteration=0)
-    report_eval(
-        logger=logger,
-        title='Test Evaluation Results',
-        row=eval_result.objective_metrics,
-        iteration=0,
+    report_test_eval_scalars(
+        clearml_logger=task.get_logger(),
+        df_corpora_test=eval_result.test_corpora_df,
+        df_classes_test=eval_result.test_classes_df,
+        objective_row=objective_row,
     )
-    if 'All-micro' in eval_result.test_corpora_df.index:
-        report_eval(
-            logger=logger,
-            title='Test Evaluation Results (micro)',
-            row=eval_result.test_corpora_df.loc['All-micro'].to_dict(),
-            iteration=0,
-        )
 
     if upload_artifacts:
         task.upload_artifact('pipeline_config', artifact_object=dict(cnf))
         task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
-        task.upload_artifact('dev_corpora_dataframe', artifact_object=eval_result.dev_corpora_df)
+        task.upload_artifact('test_scalar_metrics', artifact_object=dict(eval_result.scalar_metrics))
         task.upload_artifact('test_corpora_dataframe', artifact_object=eval_result.test_corpora_df)
         task.upload_artifact('test_classes_dataframe', artifact_object=eval_result.test_classes_df)
 
@@ -1129,7 +1043,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     task.add_tags([config_name])
 
     from iptc_entity_pipeline.seeding import set_global_seed
-
+    from iptc_entity_pipeline.reporting import report_cv_std, report_eval, report_test_eval_scalars
     paths_cnf = cnf['paths']
     emb_cnf = cnf['emb']
     model_cnf = cnf['model']
@@ -1140,7 +1054,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     tuning_cnf = cnf.get('tuning', {'enabled': False})
     assembly_cnf = cnf.get('assembly') or {'enabled': False}
     hparam_cnf = cnf['hparam']
-    obj_corpora = cnf['objective_corpora']
+    obj_row = cnf['objective_row']
     down_smpl = cnf.get('downsample_corpora', {})
     use_art_emb = bool(emb_cnf.get('use_article_embeddings', True))
     use_ent_emb = bool(emb_cnf.get('use_entity_embeddings', True))
@@ -1156,7 +1070,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
             assembly_cnf=assembly_cnf,
             eval_cnf=eval_cnf,
             cv_cnf=cv_cnf,
-            objective_corpora=obj_corpora,
+            objective_row=obj_row,
             downsample_corpora=down_smpl,
             config_name=config_name,
             print_logs=print_logs,
@@ -1220,7 +1134,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         message=f'Stage 4/6: Running mandatory {cv_cnf.get("folds", 5)}-fold cross-validation on train',
         print_logs=print_logs,
     )
-    cv_result = run_cv(
+    cv = run_cv(
         train_data=train_data,
         feature_dim=feature_dim,
         model_cnf=model_cnf,
@@ -1230,15 +1144,29 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         cv_cnf=cv_cnf,
         optuna_cnf=optuna_cnf,
         tuning_cnf=tuning_cnf,
-        objective_corpora=obj_corpora,
+        objective_row=obj_row,
         random_seed=random_seed,
         print_logs=print_logs,
         debug=debug,
         upload_artifacts=upload_artifacts,
     )
     if upload_artifacts:
-        task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv_result.objective_metrics))
-
+        task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv.best_trial_stats))
+    logger = task.get_logger()
+    # Report CV objective metrics on the pipeline task (keys match report_eval METRIC_SERIES).
+    report_eval(
+        logger=logger,
+        title='Cross Validation Results',
+        row=cv.best_trial_stats,
+        iteration=0,
+    )
+    report_cv_std(
+        logger=logger,
+        row=cv.best_trial_stats,
+        title='Cross Validation Results',
+        iteration=0,
+    )
+    
     log_stage(
         task=task,
         message='Stage 5/6: Training final model on full train with fixed CV-derived epochs',
@@ -1246,10 +1174,9 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     )
     trained_model = train_best(
         train_data=train_data,
-        test_data=test_data,
         feature_dim=feature_dim,
-        best_model_cnf=cv_result.best_model_config,
-        train_cnf=cv_result.best_training_config,
+        best_model_cnf=asdict(cv.best_model_config),
+        train_cnf=asdict(cv.best_training_config),
         random_seed=random_seed,
         print_logs=print_logs,
     )
@@ -1261,58 +1188,29 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     )
     eval_result = eval_final(
         trained_model=trained_model,
-        cv_dev_df=cv_result.cv_dev_df,
         test_data=test_data,
         eval_cnf=eval_cnf,
         emb_cnf=emb_cnf,
-        objective_corpora=obj_corpora,
+        objective_row=obj_row,
         config_name=config_name,
         config_mapping=cnf,
         feature_dim=feature_dim,
-        tuned_thresholds=cv_result.tuned_thresholds,
-        threshold_report_df=cv_result.threshold_report_df,
+        tuned_thresholds=cv.tuned_thresholds,
+        threshold_report_df=cv.threshold_report,
         upload_artifacts=upload_artifacts,
     )
-
-    logger = task.get_logger()
-    objective_row_name = f'All-{eval_cnf["averaging_type"]}'
-    if objective_row_name in eval_result.dev_corpora_df.index:
-        row_cv = eval_result.dev_corpora_df.loc[objective_row_name].to_dict()
-    else:
-        row_cv = eval_result.dev_corpora_df.iloc[0].to_dict()
-
-    report_eval(
-        logger=logger,
-        title='Cross Validation Results',
-        row=row_cv,
-        iteration=0,
+    # Log on the pipeline controller from scalar_metrics (pickle-safe; includes F1_macro_relevant).
+    report_test_eval_scalars(
+        clearml_logger=task.get_logger(),
+        df_corpora_test=eval_result.test_corpora_df,
+        df_classes_test=eval_result.test_classes_df,
+        objective_row=obj_row,
     )
-    if 'Precision_std' in row_cv:
-        report_cv_std(
-            logger=logger,
-            row=row_cv,
-            title='Cross Validation Results',
-            iteration=0,
-        )
-
-    report_eval(
-        logger=logger,
-        title='Test Evaluation Results',
-        row=eval_result.objective_metrics,
-        iteration=0,
-    )
-    if 'All-micro' in eval_result.test_corpora_df.index:
-        report_eval(
-            logger=logger,
-            title='Test Evaluation Results (micro)',
-            row=eval_result.test_corpora_df.loc['All-micro'].to_dict(),
-            iteration=0,
-        )
 
     if upload_artifacts:
         task.upload_artifact('pipeline_config', artifact_object=dict(cnf))
         task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
-        task.upload_artifact('dev_corpora_dataframe', artifact_object=eval_result.dev_corpora_df)
+        task.upload_artifact('test_scalar_metrics', artifact_object=dict(eval_result.scalar_metrics))
         task.upload_artifact('test_corpora_dataframe', artifact_object=eval_result.test_corpora_df)
         task.upload_artifact('test_classes_dataframe', artifact_object=eval_result.test_classes_df)
         finish_message = 'Pipeline finished: metrics, tables, and artifacts uploaded'

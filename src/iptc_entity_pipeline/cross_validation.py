@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
@@ -23,7 +24,7 @@ from iptc_entity_pipeline.dataset_builder import (
     slice_dataset,
     to_numpy_array,
 )
-from iptc_entity_pipeline.evaluate import aggregate_fold_dfs
+from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW, aggregate_fold_dfs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.seeding import fold_seed, set_global_seed
 from iptc_entity_pipeline.threshold_tuning import (
@@ -34,7 +35,6 @@ from iptc_entity_pipeline.threshold_tuning import (
 from iptc_entity_pipeline.training import (
     CvFoldCurves,
     combo_params_json,
-    get_obj_row,
     train_model,
 )
 
@@ -44,43 +44,52 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Data containers
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen=True)
-class CvResult:
-    """Outputs of the cross-validation pipeline step.
+class FoldMetrics:
+    """Per-fold scalar metrics for one CV fold.
 
-    Returned by ``run_cv`` as a typed replacement for the previously-used raw dict.
-    Config fields are serialized dicts because ClearML transports them across the
-    serialization boundary to downstream pipeline components.
-
-    :param tuned_thresholds: Per-class threshold map aggregated across CV folds
-        of the best Optuna trial when threshold tuning is enabled. When CV
-        was driven by ``eval_thresholds`` (assembly mode), the same
-        externally-loaded map is echoed here so downstream consumers have a
-        single threshold field to read from. Otherwise ``None``.
-    :param threshold_report_df: Per-class tuning report (mean / std / mode /
-        median / min / max + selected value), or ``None`` if tuning is disabled.
-    :param cv_per_class_df: Per-class P/R/F1 (mean + std) aggregated across
-        the best trial's folds. Same shape as ``eval_final``'s
-        ``df_classes_test`` plus ``_std`` columns; indexed by IPTC
-        category name.
-    :param cv_per_corpora_df: Per-corpus P/R/F1 (mean + std) aggregated
-        across the best trial's folds. Same shape as ``eval_final``'s
-        ``df_corpora_test`` plus ``_std`` columns; indexed by corpus name.
+    Typed replacement for the previously-used raw dict, so typos are caught
+    at definition time and IDE autocompletion works.
     """
 
-    cv_dev_df: pd.DataFrame
-    best_model_config: dict[str, Any]
-    best_training_config: dict[str, Any]
-    objective_metrics: dict[str, Any]
-    tuned_thresholds: dict[str, float] | None = None
-    threshold_report_df: pd.DataFrame | None = None
-    cv_per_class_df: pd.DataFrame | None = None
-    cv_per_corpora_df: pd.DataFrame | None = None
-    # Per-fold per-class evaluation tables from the best Optuna trial.
-    # Carried separately from ``cv_per_class_df`` (which is the mean+std
-    # aggregate) so the assembly step's sign-test selector can compare
-    # member F1 fold-by-fold rather than just on the aggregated mean.
-    cv_per_class_fold_dfs: tuple[pd.DataFrame, ...] | None = None
+    trial_id: int
+    fold_id: int
+    params: str
+    epochs: float
+    loss: float
+    precision_macro: float
+    recall_macro: float
+    f1_macro: float
+    precision_micro: float
+    recall_micro: float
+    f1_micro: float
+
+    def to_row(self) -> dict[str, Any]:
+        '''Serialize to the dict format used by trial/fold DataFrames.'''
+        return {
+            'trial_id': self.trial_id,
+            'fold_id': self.fold_id,
+            'params': self.params,
+            'epochs': self.epochs,
+            'Loss': self.loss,
+            'Precision': self.precision_macro,
+            'Recall': self.recall_macro,
+            'F1': self.f1_macro,
+            'Precision_micro': self.precision_micro,
+            'Recall_micro': self.recall_micro,
+            'F1_micro': self.f1_micro,
+        }
+
+
+@dataclass
+class ProgressCounter:
+    """Mutable training progress counter shared across Optuna trials."""
+
+    value: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,7 +97,7 @@ class CombinationResult:
     """Aggregated outputs for one hyperparameter combination across all folds."""
 
     trial_row: dict[str, Any]
-    fold_rows: list[dict[str, Any]]
+    fold_metrics: tuple[FoldMetrics, ...]
     fold_curves: tuple[CvFoldCurves, ...]
     fold_thresholds: tuple[dict[str, float], ...]
     fold_corpora_dfs: tuple[pd.DataFrame, ...]
@@ -99,96 +108,62 @@ class CombinationResult:
 
 
 @dataclass(frozen=True)
-class BestSelection:
-    """Best-trial selection across all hyperparameter combinations."""
+class SearchOutcome:
+    """Best-trial selection plus accumulated rows from all Optuna trials."""
 
-    best_trial: dict[str, Any]
-    best_model_config: ModelCnf
-    best_training_config: TrainingCnf
-    best_fold_curves: tuple[CvFoldCurves, ...]
-    best_fold_thresholds: tuple[dict[str, float], ...]
-    best_fold_corpora_dfs: tuple[pd.DataFrame, ...]
-    best_fold_classes_dfs: tuple[pd.DataFrame, ...]
+    best: CombinationResult
     trial_rows: list[dict[str, Any]]
     fold_rows: list[dict[str, Any]]
 
 
-def prepare_cv(*, train_data: EmbeddingDataset) -> tuple[np.ndarray, np.ndarray]:
-    """Extract X/Y NumPy arrays for stratified split planning."""
-    x_full = to_numpy_array(matrix_like=train_data.X)
-    y_full = (
-        to_numpy_array(matrix_like=train_data.Y)
-        if hasattr(train_data, 'Y')
-        else build_multilabel_targets(corpus=train_data.corpus)
-    )
-    return x_full, y_full
+@dataclass(frozen=True)
+class CvOutputs:
+    """Pickle-safe CV results for ClearML pipeline step return values.
+
+    Mirrors the public output attributes populated on :class:`CV` after
+    :meth:`CV.fit`, without training data or other non-serializable state.
+    """
+
+    best_params: dict[str, Any]
+    best_model_config: ModelCnf
+    best_training_config: TrainingCnf
+    tuned_thresholds: dict[str, float] | None
+    threshold_report: pd.DataFrame | None
+    trials: pd.DataFrame
+    folds: pd.DataFrame
+    best_trial_stats: dict[str, Any]
+    cv_dev_df: pd.DataFrame
+    per_class_df: pd.DataFrame | None
+    per_corpora_df: pd.DataFrame | None
+    per_class_fold_dfs: tuple[pd.DataFrame, ...] | None
+    fold_curves: tuple[CvFoldCurves, ...] | None
 
 
-def log_cv_plan(
-    *,
-    total_combinations: int,
-    folds_per_combo: int,
-    total_trainings: int,
-    clearml_logger: Any,
-) -> None:
-    """Emit the CV hyperparameter search plan to ClearML logger."""
-    cv_plan_message = (
-        'CV hyperparameter search plan: '
-        f'combinations={total_combinations} '
-        f'folds_per_combination={folds_per_combo} '
-        f'total_model_trains={total_trainings}'
-    )
-    clearml_logger.report_text(cv_plan_message, print_console=True)
+@dataclass(frozen=True)
+class CvReport:
+    """All data needed by reporting.py to render CV results to ClearML.
 
+    Field names on the threshold/per-class/per-corpora slots match the
+    attribute names expected by :func:`reporting.report_cv_result_tables`
+    so CvReport duck-types as a drop-in ``cv_result`` argument.
+    """
 
-def log_training_progress(
-    *,
-    completed_trainings: int,
-    total_trainings: int,
-    combo_idx: int,
-    total_combinations: int,
-    fold_idx: int,
-    folds_per_combo: int,
-    clearml_logger: Any,
-) -> None:
-    """Emit per-fold training progress to ClearML logger."""
-    training_progress_message = (
-        'CV training progress: '
-        f'trained_models={completed_trainings}/{total_trainings} '
-        f'combination={combo_idx}/{total_combinations} '
-        f'fold={fold_idx}/{folds_per_combo}'
-    )
-    clearml_logger.report_text(training_progress_message, print_console=True)
-
-
-def extract_metric_rows(
-    *,
-    df_corpora_fold: Any,
-    df_classes_fold: Any,
-    objective_corpora: str,
-    averaging_type: str,
-) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
-    """Pick per-fold micro/datapoint and relevant-macro metric rows."""
-    if 'All-micro' in df_corpora_fold.index:
-        micro_or_datapoint_row = df_corpora_fold.loc['All-micro'].to_dict()
-    else:
-        micro_or_datapoint_row = get_obj_row(
-            df_corpora=df_corpora_fold,
-            objective_corpora=objective_corpora,
-            averaging_type=averaging_type,
-        )
-    macro_row_name = 'All - macro avg'
-    if macro_row_name not in df_classes_fold.index:
-        raise ValueError(f'Missing required class aggregate row: {macro_row_name}')
-    macro_relevant_row = df_classes_fold.loc[macro_row_name].to_dict()
-    return micro_or_datapoint_row, macro_relevant_row
+    trials_df: pd.DataFrame
+    folds_df: pd.DataFrame
+    cv_dev_df: pd.DataFrame
+    fold_curves: tuple[CvFoldCurves, ...]
+    threshold_aggregation: str
+    tuned_thresholds: dict[str, float] | None = None
+    threshold_report_df: pd.DataFrame | None = None
+    cv_per_corpora_df: pd.DataFrame | None = None
+    cv_per_class_df: pd.DataFrame | None = None
 
 
 @dataclass(frozen=True)
 class FoldEvalOutput:
-    """Per-fold evaluation outputs collected by :func:`evaluate_fold`.
+    """Per-fold evaluation outputs collected by :meth:`CV._evaluate_fold`.
 
-    :param micro_or_datapoint_row: Single-row micro/datapoint metrics.
+    :param objective_row: Objective corpora metric row (micro, datapoint, or named corpus).
     :param macro_relevant_row: Relevant-class macro row from classes table.
     :param dev_loss: Final dev loss for the fold.
     :param epochs_run: Number of epochs the fold actually ran (early stop).
@@ -200,7 +175,7 @@ class FoldEvalOutput:
     :param df_classes: Per-class evaluation table at the same thresholds.
     """
 
-    micro_or_datapoint_row: Mapping[str, Any]
+    objective_row: Mapping[str, Any]
     macro_relevant_row: Mapping[str, Any]
     dev_loss: float
     epochs_run: int
@@ -210,100 +185,31 @@ class FoldEvalOutput:
     df_classes: pd.DataFrame
 
 
-def evaluate_fold(
+# ---------------------------------------------------------------------------
+# Pure helper functions (no config dependencies)
+# ---------------------------------------------------------------------------
+
+def extract_metric_rows(
     *,
-    fit_data: EmbeddingDataset,
-    val_data: EmbeddingDataset,
-    feature_dim: int,
-    model_config: ModelCnf,
-    training_config: TrainingCnf,
-    eval_cfg: EvaluationCnf,
-    tuning_cfg: ThresholdTuningCnf | None,
-    objective_corpora: str,
-    fold_idx: int,
-    print_logs: bool,
-    random_seed: int,
-    eval_thresholds: Mapping[str, float] | None = None,
-) -> FoldEvalOutput:
-    """Train and evaluate one CV fold.
-
-    Always returns the per-fold per-corpora and per-class evaluation tables
-    so callers can aggregate them across folds into mean+std summaries.
-
-    :param random_seed: Pipeline-wide seed. Re-applied here with a per-fold
-        offset so model initialization and DataLoader shuffling are
-        reproducible and decoupled from upstream RNG consumption.
-    :param eval_thresholds: Optional per-class thresholds to apply during
-        per-fold evaluation (forwarded to ``evaluateModel`` as
-        ``customThresholds``). Used by the assembly pipeline to score each
-        fold at the member's externally-loaded thresholds. When ``None``,
-        the global ``eval_cfg.threshold_eval`` is used. Independent of
-        ``tuning_cfg``.
-    """
-    set_global_seed(seed=fold_seed(base_seed=random_seed, fold_idx=fold_idx))
-    train_result = train_model(
-        train_data=fit_data,
-        dev_data=val_data,
-        feature_dim=feature_dim,
-        model_config=model_config,
-        training_config=training_config,
-        print_logs=print_logs,
-        connect_config=False,
-    )
-    custom_thresholds = dict(eval_thresholds) if eval_thresholds else None
-    df_corpora_fold, df_classes_fold, pred_scores = evaluateModel(
-        model=train_result.model,
-        evalData=val_data,
-        evaluation_config=eval_cfg,
-        customThresholds=custom_thresholds,
-        connect_config=False,
-        returnPredictions=True,
-    )
-    
-    if tuning_cfg is not None and tuning_cfg.enabled:
-        fold_thresholds = tune_thresholds(
-            pred_wgh_cats=pred_scores,
-            eval_corpus=val_data.corpus,
-            tuning_cfg=tuning_cfg,
-        )
-    else:
-        fold_thresholds = {}
-        
-    micro_or_datapoint_row, macro_relevant_row = extract_metric_rows(
-        df_corpora_fold=df_corpora_fold,
-        df_classes_fold=df_classes_fold,
-        objective_corpora=objective_corpora,
-        averaging_type=eval_cfg.averaging_type,
-    )
-    fold_curve = CvFoldCurves(
-        fold_id=fold_idx,
-        train_loss_per_epoch=train_result.train_loss_per_epoch,
-        dev_loss_per_epoch=train_result.dev_loss_per_epoch,
-        train_f1_per_epoch=train_result.train_f1_per_epoch,
-        dev_f1_per_epoch=train_result.dev_f1_per_epoch,
-        train_macro_relevant_f1_per_epoch=train_result.train_macro_relevant_f1_per_epoch,
-        dev_macro_relevant_f1_per_epoch=train_result.dev_macro_relevant_f1_per_epoch,
-    )
-    return FoldEvalOutput(
-        micro_or_datapoint_row=micro_or_datapoint_row,
-        macro_relevant_row=macro_relevant_row,
-        dev_loss=float(train_result.final_dev_loss),
-        epochs_run=int(train_result.epochs_run),
-        fold_curve=fold_curve,
-        fold_thresholds=fold_thresholds,
-        df_corpora=df_corpora_fold,
-        df_classes=df_classes_fold,
-    )
+    df_corpora_fold: Any,
+    df_classes_fold: Any,
+    objective_row: str,
+    averaging_type: str,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    """Pick per-fold objective and relevant-macro metric rows."""
+    row = df_corpora_fold.loc[objective_row].to_dict()
+    macro_relevant_row = df_classes_fold.loc[CLASS_RELEVANT_MACRO_ROW].to_dict()
+    return row, macro_relevant_row
 
 
 def summarize_combination(
     *,
     combo_idx: int,
     params_json: str,
-    fold_rows: Sequence[Mapping[str, Any]],
+    fold_metrics: Sequence[FoldMetrics],
 ) -> dict[str, Any]:
-    """Aggregate per-fold rows for one combination into a single trial row."""
-    df = pd.DataFrame(fold_rows)
+    """Aggregate per-fold metrics for one combination into a single trial row."""
+    df = pd.DataFrame([fm.to_row() for fm in fold_metrics])
     return {
         'trial_id': combo_idx,
         'params': params_json,
@@ -325,220 +231,475 @@ def summarize_combination(
     }
 
 
-def _build_configs_from_trial(
-    *,
-    trial: Any,
-    space: HyperparamSpace,
-    base_model: ModelCnf,
-    base_training: TrainingCnf,
-) -> tuple[ModelCnf, TrainingCnf]:
-    """Build model/training configs from one Optuna trial suggestion."""
-    model_config = replace(
-        base_model,
-        hidden_dim=trial.suggest_categorical('hidden_dim', list(space.hidden_dims)),
-        dropouts1=trial.suggest_categorical('dropouts1', list(space.dropouts1)),
-        dropouts2=trial.suggest_categorical('dropouts2', list(space.dropouts2)),
-        attention_hidden_dim=trial.suggest_categorical(
-            'attention_hidden_dim', list(space.attention_hidden_dims),
-        ),
-        attention_dropout=trial.suggest_categorical(
-            'attention_dropout', list(space.attention_dropouts),
-        ),
-    )
-    training_config = replace(
-        base_training,
-        batch_size=trial.suggest_categorical('batch_size', list(space.batch_sizes)),
-        learning_rate=trial.suggest_categorical('learning_rate', list(space.learning_rates)),
-    )
-    return model_config, training_config
+def _build_cv_dev_row(best_trial: Mapping[str, Any]) -> dict[str, Any]:
+    """Build CV summary metrics from a best-trial row.
 
-
-def _build_search_space(*, space: HyperparamSpace) -> dict[str, list[Any]]:
-    """Build Optuna GridSampler search space from HyperparamSpace."""
+    Keys match :data:`iptc_entity_pipeline.reporting.METRIC_SERIES` and
+    :data:`iptc_entity_pipeline.reporting.STD_METRIC_SERIES` so
+    :func:`~iptc_entity_pipeline.reporting.report_eval` can log scalars
+    without renaming (micro -> primary, macro -> macro_relevant).
+    """
     return {
-        'hidden_dim': list(space.hidden_dims),
-        'dropouts1': list(space.dropouts1),
-        'dropouts2': list(space.dropouts2),
-        'attention_hidden_dim': list(space.attention_hidden_dims),
-        'attention_dropout': list(space.attention_dropouts),
-        'batch_size': list(space.batch_sizes),
-        'learning_rate': list(space.learning_rates),
+        'params': best_trial['params'],
+        'epochs': float(best_trial['epochs']),
+        'Loss': float(best_trial['Loss_mean']),
+        'Loss_std': float(best_trial['Loss_std']),
+        'Precision': float(best_trial['Precision_micro_mean']),
+        'Precision_std': float(best_trial['Precision_micro_std']),
+        'Recall': float(best_trial['Recall_micro_mean']),
+        'Recall_std': float(best_trial['Recall_micro_std']),
+        'F1': float(best_trial['F1_micro_mean']),
+        'F1_std': float(best_trial['F1_micro_std']),
+        'Precision_macro_relevant': float(best_trial['Precision_mean']),
+        'Precision_macro_relevant_std': float(best_trial['Precision_std']),
+        'Recall_macro_relevant': float(best_trial['Recall_mean']),
+        'Recall_macro_relevant_std': float(best_trial['Recall_std']),
+        'F1_macro_relevant': float(best_trial['F1_mean']),
+        'F1_macro_relevant_std': float(best_trial['F1_std']),
     }
 
 
-def _count_total_combinations(*, space: HyperparamSpace) -> int:
-    """Return number of hyperparameter combinations in the Optuna grid."""
-    return (
-        len(space.hidden_dims)
-        * len(space.dropouts1)
-        * len(space.dropouts2)
-        * len(space.attention_hidden_dims)
-        * len(space.attention_dropouts)
-        * len(space.batch_sizes)
-        * len(space.learning_rates)
-    )
+# ---------------------------------------------------------------------------
+# CV orchestrator
+# ---------------------------------------------------------------------------
 
+class CV:
+    """Cross-validation orchestrator.
 
-def _resolve_n_trials(*, optuna_cfg: OptunaCnf, total_combinations: int) -> int:
-    """Resolve effective number of trials for Optuna study."""
-    sampler_name = optuna_cfg.sampler.strip().lower()
-    if optuna_cfg.n_trials > 0:
-        if sampler_name == 'grid':
-            return min(optuna_cfg.n_trials, total_combinations)
-        return optuna_cfg.n_trials
-    return total_combinations
-
-
-def _build_pruner(*, optuna_module: Any, optuna_cfg: OptunaCnf) -> Any:
-    """Create Optuna pruner based on configuration."""
-    pruner_name = optuna_cfg.pruner.strip().lower()
-    if pruner_name == 'none':
-        return optuna_module.pruners.NopPruner()
-    if pruner_name == 'median':
-        return optuna_module.pruners.MedianPruner(
-            n_startup_trials=max(0, int(optuna_cfg.startup_trials)),
-            n_warmup_steps=max(0, int(optuna_cfg.warmup_steps)),
-        )
-    if pruner_name in {'successive_halving', 'asha'}:
-        return optuna_module.pruners.SuccessiveHalvingPruner(
-            min_resource=max(1, int(optuna_cfg.warmup_steps) + 1),
-        )
-    raise ValueError(f'Unsupported Optuna pruner: {optuna_cfg.pruner}')
-
-
-def _build_sampler(
-    *,
-    optuna_module: Any,
-    optuna_cfg: OptunaCnf,
-    space: HyperparamSpace,
-    random_seed: int,
-) -> Any:
-    """Create Optuna sampler based on configuration."""
-    sampler_name = optuna_cfg.sampler.strip().lower()
-    if sampler_name == 'grid':
-        return optuna_module.samplers.GridSampler(search_space=_build_search_space(space=space))
-    if sampler_name == 'tpe':
-        return optuna_module.samplers.TPESampler(seed=int(random_seed))
-    if sampler_name == 'random':
-        return optuna_module.samplers.RandomSampler(seed=int(random_seed))
-    raise ValueError(f'Unsupported Optuna sampler: {optuna_cfg.sampler}')
-
-
-def run_combination(
-    *,
-    combo_idx: int,
-    total_combinations: int,
-    model_config: ModelCnf,
-    training_config: TrainingCnf,
-    train_data: EmbeddingDataset,
-    x_full: np.ndarray,
-    y_full: np.ndarray,
-    feature_dim: int,
-    eval_cfg: EvaluationCnf,
-    cv_cfg: CvCnf,
-    tuning_cfg: ThresholdTuningCnf | None,
-    folds_per_combo: int,
-    total_trainings: int,
-    completed_trainings: int,
-    objective_corpora: str,
-    debug: bool,
-    print_logs: bool,
-    clearml_logger: Any,
-    random_seed: int,
-    trial: Any = None,
-    eval_thresholds: Mapping[str, float] | None = None,
-) -> tuple[CombinationResult, int]:
-    """Run k-fold CV for one hyperparameter combination.
-
-    :param trial: Optuna trial for per-fold intermediate reporting and pruning.
-    :param tuning_cfg: When enabled, per-fold per-class thresholds are tuned
-        on the dev split and collected into the combination result.
-    :param eval_thresholds: Optional per-class thresholds applied during
-        per-fold evaluation (assembly mode). Forwarded to :func:`evaluate_fold`.
+    Encapsulates config, Optuna hyperparameter search, and k-fold CV
+    results.  Initialize with typed configs, call :meth:`fit` to run the
+    search, then access outputs via public attributes or build a
+    :class:`CvReport` for ClearML reporting via :meth:`prepare_report`.
     """
-    from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 
-    params_json = combo_params_json(
-        model_config=model_config,
-        training_config=training_config,
-    )
-    cv_splitter = MultilabelStratifiedKFold(
-        n_splits=cv_cfg.folds,
-        shuffle=True,
-        random_state=int(random_seed),
-    )
-    fold_curves: list[CvFoldCurves] = []
-    fold_rows: list[dict[str, Any]] = []
-    fold_thresholds: list[dict[str, float]] = []
-    fold_corpora_dfs: list[pd.DataFrame] = []
-    fold_classes_dfs: list[pd.DataFrame] = []
-    pruned = False
+    def __init__(
+        self,
+        *,
+        model_cnf: ModelCnf,
+        hparam_cnf: HyperparamSpace,
+        train_cnf: TrainingCnf,
+        eval_cnf: EvaluationCnf,
+        cv_cnf: CvCnf,
+        optuna_cnf: OptunaCnf,
+        tuning_cnf: ThresholdTuningCnf,
+        objective_row: str,
+        random_seed: int,
+        debug: bool = False,
+        eval_thresholds: Mapping[str, float] | None = None,
+    ) -> None:
+        self._model_cnf = model_cnf
+        self._hparam_cnf = hparam_cnf
+        self._train_cnf = train_cnf
+        self._eval_cnf = eval_cnf
+        self._cv_cnf = cv_cnf
+        self._optuna_cnf = optuna_cnf
+        self._objective_row = objective_row
+        self._random_seed = random_seed
+        self._debug = debug
+        self._eval_thresholds = eval_thresholds
 
-    for fold_idx, (fit_indices, val_indices) in enumerate(cv_splitter.split(x_full, y_full), start=1):
-        fit_data = slice_dataset(dataset=train_data, indices=fit_indices.tolist())
-        val_data = slice_dataset(dataset=train_data, indices=val_indices.tolist())
-        fold_out = evaluate_fold(
-            fit_data=fit_data,
-            val_data=val_data,
-            feature_dim=feature_dim,
+        if eval_thresholds is not None and tuning_cnf.enabled:
+            LOGGER.info(
+                'Assembly mode: external eval_thresholds provided, '
+                'forcing tuning_cnf.enabled=False'
+            )
+            self._tuning_cnf = replace(tuning_cnf, enabled=False)
+        else:
+            self._tuning_cnf = tuning_cnf
+
+        # Fit-time state (populated by fit(), used across private methods)
+        self._train_data: EmbeddingDataset | None = None
+        self._x_full: np.ndarray | None = None
+        self._y_full: np.ndarray | None = None
+        self._feature_dim: int = 0
+        self._print_logs: bool = True
+        self._clearml_logger: Any = None
+        self._progress: ProgressCounter = ProgressCounter()
+        self._n_trials: int = 0
+        self._folds_per_combo: int = 0
+        self._total_trainings: int = 0
+
+        # Output attributes (populated by _finalize())
+        self.best_params: dict[str, Any] | None = None
+        self.best_model_config: ModelCnf | None = None
+        self.best_training_config: TrainingCnf | None = None
+        self.tuned_thresholds: dict[str, float] | None = None
+        self.threshold_report: pd.DataFrame | None = None
+        self.trials: pd.DataFrame | None = None
+        self.folds: pd.DataFrame | None = None
+        self.best_trial_stats: dict[str, Any] | None = None
+        self.per_class_df: pd.DataFrame | None = None
+        self.per_corpora_df: pd.DataFrame | None = None
+        self.per_class_fold_dfs: tuple[pd.DataFrame, ...] | None = None
+        self.fold_curves: tuple[CvFoldCurves, ...] | None = None
+        self.cv_dev_df: pd.DataFrame | None = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def fit(
+        self,
+        *,
+        train_data: EmbeddingDataset,
+        feature_dim: int,
+        print_logs: bool = True,
+        clearml_logger: Any,
+    ) -> CV:
+        """Run cross-validation and populate output attributes.
+
+        :param train_data: full training dataset to split into folds
+        :param feature_dim: feature dimensionality
+        :param print_logs: forwarded to per-fold training
+        :param clearml_logger: ClearML logger for progress reporting
+        :return: self for chaining
+        """
+        self._train_data = train_data
+        self._feature_dim = feature_dim
+        self._print_logs = print_logs
+        self._clearml_logger = clearml_logger
+        self._x_full, self._y_full = self._prepare_data()
+        LOGGER.info(
+            f'CV data prepared: x_shape={self._x_full.shape}, '
+            f'y_shape={self._y_full.shape}, feature_dim={feature_dim}'
+        )
+
+        outcome = self._select_best()
+        LOGGER.info(f'CV complete: best_trial F1={outcome.best.trial_row["F1_mean"]:.4f}')
+
+        self._finalize(outcome=outcome)
+        return self
+
+    def export_outputs(self) -> CvOutputs:
+        """Return pickle-safe outputs for ClearML pipeline transport."""
+        if self.trials is None or self.best_params is None:
+            raise RuntimeError('CV not fitted yet; call fit() first')
+        if self.best_model_config is None or self.best_training_config is None:
+            raise RuntimeError('CV best configs missing after fit()')
+        if self.cv_dev_df is None or self.best_trial_stats is None:
+            raise RuntimeError('CV summary outputs missing after fit()')
+        return CvOutputs(
+            best_params=self.best_params,
+            best_model_config=self.best_model_config,
+            best_training_config=self.best_training_config,
+            tuned_thresholds=self.tuned_thresholds,
+            threshold_report=self.threshold_report,
+            trials=self.trials,
+            folds=self.folds,
+            best_trial_stats=self.best_trial_stats,
+            cv_dev_df=self.cv_dev_df,
+            per_class_df=self.per_class_df,
+            per_corpora_df=self.per_corpora_df,
+            per_class_fold_dfs=self.per_class_fold_dfs,
+            fold_curves=self.fold_curves,
+        )
+
+    def prepare_report(self) -> CvReport:
+        """Build a report object for ClearML reporting.
+
+        :return: CvReport with all data needed by reporting functions
+        """
+        if self.trials is None:
+            raise RuntimeError('CV not fitted yet; call fit() first')
+        return CvReport(
+            trials_df=self.trials,
+            folds_df=self.folds,
+            cv_dev_df=self.cv_dev_df,
+            fold_curves=self.fold_curves,
+            threshold_aggregation=self._tuning_cnf.aggregation,
+            tuned_thresholds=self.tuned_thresholds,
+            threshold_report_df=self.threshold_report,
+            cv_per_corpora_df=self.per_corpora_df,
+            cv_per_class_df=self.per_class_df,
+        )
+
+    # ------------------------------------------------------------------
+    # Data preparation
+    # ------------------------------------------------------------------
+
+    def _prepare_data(self) -> tuple[np.ndarray, np.ndarray]:
+        """Extract X/Y NumPy arrays for stratified split planning."""
+        x_full = to_numpy_array(matrix_like=self._train_data.X)
+        y_full = (
+            to_numpy_array(matrix_like=self._train_data.Y)
+            if hasattr(self._train_data, 'Y')
+            else build_multilabel_targets(corpus=self._train_data.corpus)
+        )
+        return x_full, y_full
+
+    # ------------------------------------------------------------------
+    # Optuna infrastructure
+    # ------------------------------------------------------------------
+
+    def _count_combinations(self) -> int:
+        """Return number of hyperparameter combinations in the grid."""
+        s = self._hparam_cnf
+        return (
+            len(s.hidden_dims)
+            * len(s.dropouts1)
+            * len(s.dropouts2)
+            * len(s.attention_hidden_dims)
+            * len(s.attention_dropouts)
+            * len(s.batch_sizes)
+            * len(s.learning_rates)
+        )
+
+    def _resolve_n_trials(self, *, total_combinations: int) -> int:
+        """Resolve effective number of trials for Optuna study."""
+        sampler_name = self._optuna_cnf.sampler.strip().lower()
+        if self._optuna_cnf.n_trials > 0:
+            if sampler_name == 'grid':
+                return min(self._optuna_cnf.n_trials, total_combinations)
+            return self._optuna_cnf.n_trials
+        return total_combinations
+
+    def _build_search_space(self) -> dict[str, list[Any]]:
+        """Build Optuna GridSampler search space from HyperparamSpace."""
+        s = self._hparam_cnf
+        return {
+            'hidden_dim': list(s.hidden_dims),
+            'dropouts1': list(s.dropouts1),
+            'dropouts2': list(s.dropouts2),
+            'attention_hidden_dim': list(s.attention_hidden_dims),
+            'attention_dropout': list(s.attention_dropouts),
+            'batch_size': list(s.batch_sizes),
+            'learning_rate': list(s.learning_rates),
+        }
+
+    def _build_sampler(self, *, optuna_module: Any) -> Any:
+        """Create Optuna sampler based on configuration."""
+        sampler_name = self._optuna_cnf.sampler.strip().lower()
+        if sampler_name == 'grid':
+            return optuna_module.samplers.GridSampler(search_space=self._build_search_space())
+        if sampler_name == 'tpe':
+            return optuna_module.samplers.TPESampler(seed=int(self._random_seed))
+        if sampler_name == 'random':
+            return optuna_module.samplers.RandomSampler(seed=int(self._random_seed))
+        raise ValueError(f'Unsupported Optuna sampler: {self._optuna_cnf.sampler}')
+
+    def _build_pruner(self, *, optuna_module: Any) -> Any:
+        """Create Optuna pruner based on configuration."""
+        pruner_name = self._optuna_cnf.pruner.strip().lower()
+        if pruner_name == 'none':
+            return optuna_module.pruners.NopPruner()
+        if pruner_name == 'median':
+            return optuna_module.pruners.MedianPruner(
+                n_startup_trials=max(0, int(self._optuna_cnf.startup_trials)),
+                n_warmup_steps=max(0, int(self._optuna_cnf.warmup_steps)),
+            )
+        if pruner_name in {'successive_halving', 'asha'}:
+            return optuna_module.pruners.SuccessiveHalvingPruner(
+                min_resource=max(1, int(self._optuna_cnf.warmup_steps) + 1),
+            )
+        raise ValueError(f'Unsupported Optuna pruner: {self._optuna_cnf.pruner}')
+
+    def _build_configs_from_trial(self, *, trial: Any) -> tuple[ModelCnf, TrainingCnf]:
+        """Build model/training configs from one Optuna trial suggestion."""
+        s = self._hparam_cnf
+        model_config = replace(
+            self._model_cnf,
+            hidden_dim=trial.suggest_categorical('hidden_dim', list(s.hidden_dims)),
+            dropouts1=trial.suggest_categorical('dropouts1', list(s.dropouts1)),
+            dropouts2=trial.suggest_categorical('dropouts2', list(s.dropouts2)),
+            attention_hidden_dim=trial.suggest_categorical(
+                'attention_hidden_dim', list(s.attention_hidden_dims),
+            ),
+            attention_dropout=trial.suggest_categorical(
+                'attention_dropout', list(s.attention_dropouts),
+            ),
+        )
+        training_config = replace(
+            self._train_cnf,
+            batch_size=trial.suggest_categorical('batch_size', list(s.batch_sizes)),
+            learning_rate=trial.suggest_categorical('learning_rate', list(s.learning_rates)),
+        )
+        return model_config, training_config
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+
+    def _log_cv_plan(self) -> None:
+        """Emit the CV hyperparameter search plan to ClearML logger."""
+        msg = (
+            'CV hyperparameter search plan: '
+            f'combinations={self._n_trials} '
+            f'folds_per_combination={self._folds_per_combo} '
+            f'total_model_trains={self._total_trainings}'
+        )
+        self._clearml_logger.report_text(msg, print_console=True)
+
+    def _log_progress(self, *, combo_idx: int, fold_idx: int) -> None:
+        """Emit per-fold training progress to ClearML logger."""
+        msg = (
+            'CV training progress: '
+            f'trained_models={self._progress.value}/{self._total_trainings} '
+            f'combination={combo_idx}/{self._n_trials} '
+            f'fold={fold_idx}/{self._folds_per_combo}'
+        )
+        self._clearml_logger.report_text(msg, print_console=True)
+
+    # ------------------------------------------------------------------
+    # Fold evaluation
+    # ------------------------------------------------------------------
+
+    def _evaluate_fold(
+        self,
+        *,
+        fit_data: EmbeddingDataset,
+        val_data: EmbeddingDataset,
+        model_config: ModelCnf,
+        training_config: TrainingCnf,
+        fold_idx: int,
+    ) -> FoldEvalOutput:
+        """Train and evaluate one CV fold.
+
+        Uses ``self._feature_dim``, ``self._print_logs``, ``self._eval_cnf``,
+        ``self._tuning_cnf``, ``self._objective_row``, ``self._random_seed``,
+        and ``self._eval_thresholds`` from the instance.
+        """
+        set_global_seed(seed=fold_seed(base_seed=self._random_seed, fold_idx=fold_idx))
+        train_result = train_model(
+            train_data=fit_data,
+            dev_data=val_data,
+            feature_dim=self._feature_dim,
             model_config=model_config,
             training_config=training_config,
-            eval_cfg=eval_cfg,
-            tuning_cfg=tuning_cfg,
-            objective_corpora=objective_corpora,
-            fold_idx=fold_idx,
-            print_logs=print_logs,
-            random_seed=random_seed,
-            eval_thresholds=eval_thresholds,
+            print_logs=self._print_logs,
+            connect_config=False,
         )
-        completed_trainings += 1
-        log_training_progress(
-            completed_trainings=completed_trainings,
-            total_trainings=total_trainings,
-            combo_idx=combo_idx,
-            total_combinations=total_combinations,
-            fold_idx=fold_idx,
-            folds_per_combo=folds_per_combo,
-            clearml_logger=clearml_logger,
+        custom_thresholds = dict(self._eval_thresholds) if self._eval_thresholds else None
+        df_corpora_fold, df_classes_fold, pred_scores = evaluateModel(
+            model=train_result.model,
+            evalData=val_data,
+            evaluation_config=self._eval_cnf,
+            customThresholds=custom_thresholds,
+            connect_config=False,
+            returnPredictions=True,
         )
-        fold_curves.append(fold_out.fold_curve)
-        fold_thresholds.append(fold_out.fold_thresholds)
-        fold_corpora_dfs.append(fold_out.df_corpora)
-        fold_classes_dfs.append(fold_out.df_classes)
-        fold_rows.append(
-            {
-                'trial_id': combo_idx,
-                'fold_id': fold_idx,
-                'params': params_json,
-                'epochs': float(fold_out.epochs_run),
-                'Loss': fold_out.dev_loss,
-                'Precision': float(fold_out.macro_relevant_row['Precision']),
-                'Recall': float(fold_out.macro_relevant_row['Recall']),
-                'F1': float(fold_out.macro_relevant_row['F1']),
-                'Precision_micro': float(fold_out.micro_or_datapoint_row['Precision']),
-                'Recall_micro': float(fold_out.micro_or_datapoint_row['Recall']),
-                'F1_micro': float(fold_out.micro_or_datapoint_row['F1']),
-            }
-        )
-        if trial is not None:
-            running_f1 = sum(r['F1'] for r in fold_rows) / len(fold_rows)
-            trial.report(running_f1, step=fold_idx)
-            if trial.should_prune():
-                LOGGER.info(f'Trial {combo_idx} pruned after fold {fold_idx}/{folds_per_combo}')
-                pruned = True
-                break
-        if debug:
-            break
 
-    trial_row = summarize_combination(
-        combo_idx=combo_idx,
-        params_json=params_json,
-        fold_rows=fold_rows,
-    )
-    return (
-        CombinationResult(
+        if self._tuning_cnf.enabled:
+            if custom_thresholds:
+                raise ValueError('custom tresholds would be overridden by threshold tuning, do not provide custom thresholds or disable threshold tuning')
+            fold_thresholds = tune_thresholds(
+                pred_wgh_cats=pred_scores,
+                eval_corpus=val_data.corpus,
+                tuning_cfg=self._tuning_cnf,
+            )
+            
+        else:
+            fold_thresholds = {}
+
+        objective_row, macro_relevant_row = extract_metric_rows(
+            df_corpora_fold=df_corpora_fold,
+            df_classes_fold=df_classes_fold,
+            objective_row=self._objective_row,
+            averaging_type=self._eval_cnf.averaging_type,
+        )
+        fold_curve = CvFoldCurves(
+            fold_id=fold_idx,
+            train_loss_per_epoch=train_result.train_loss_per_epoch,
+            dev_loss_per_epoch=train_result.dev_loss_per_epoch,
+            train_f1_per_epoch=train_result.train_f1_per_epoch,
+            dev_f1_per_epoch=train_result.dev_f1_per_epoch,
+            train_macro_relevant_f1_per_epoch=train_result.train_macro_relevant_f1_per_epoch,
+            dev_macro_relevant_f1_per_epoch=train_result.dev_macro_relevant_f1_per_epoch,
+        )
+        return FoldEvalOutput(
+            objective_row=objective_row,
+            macro_relevant_row=macro_relevant_row,
+            dev_loss=float(train_result.final_dev_loss),
+            epochs_run=int(train_result.epochs_run),
+            fold_curve=fold_curve,
+            fold_thresholds=fold_thresholds,
+            df_corpora=df_corpora_fold,
+            df_classes=df_classes_fold,
+        )
+
+    # ------------------------------------------------------------------
+    # Combination (k-fold for one param set)
+    # ------------------------------------------------------------------
+
+    def _run_combination(
+        self,
+        *,
+        combo_idx: int,
+        model_config: ModelCnf,
+        training_config: TrainingCnf,
+        trial: Any = None,
+    ) -> CombinationResult:
+        """Run k-fold CV for one hyperparameter combination.
+
+        :param trial: Optuna trial for per-fold intermediate reporting and pruning.
+        """
+        from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
+
+        params_json = combo_params_json(
+            model_config=model_config,
+            training_config=training_config,
+        )
+        cv_splitter = MultilabelStratifiedKFold(
+            n_splits=self._cv_cnf.folds,
+            shuffle=True,
+            random_state=int(self._random_seed),
+        )
+        fold_curves: list[CvFoldCurves] = []
+        fold_metrics_list: list[FoldMetrics] = []
+        fold_thresholds: list[dict[str, float]] = []
+        fold_corpora_dfs: list[pd.DataFrame] = []
+        fold_classes_dfs: list[pd.DataFrame] = []
+        pruned = False
+
+        for fold_idx, (fit_indices, val_indices) in enumerate(
+            cv_splitter.split(self._x_full, self._y_full), start=1,
+        ):
+            fit_data = slice_dataset(dataset=self._train_data, indices=fit_indices.tolist())
+            val_data = slice_dataset(dataset=self._train_data, indices=val_indices.tolist())
+            fold_out = self._evaluate_fold(
+                fit_data=fit_data,
+                val_data=val_data,
+                model_config=model_config,
+                training_config=training_config,
+                fold_idx=fold_idx,
+            )
+            self._progress.value += 1
+            self._log_progress(combo_idx=combo_idx, fold_idx=fold_idx)
+            fold_curves.append(fold_out.fold_curve)
+            fold_thresholds.append(fold_out.fold_thresholds)
+            fold_corpora_dfs.append(fold_out.df_corpora)
+            fold_classes_dfs.append(fold_out.df_classes)
+            fm = FoldMetrics(
+                trial_id=combo_idx,
+                fold_id=fold_idx,
+                params=params_json,
+                epochs=float(fold_out.epochs_run),
+                loss=fold_out.dev_loss,
+                precision_macro=float(fold_out.macro_relevant_row['Precision']),
+                recall_macro=float(fold_out.macro_relevant_row['Recall']),
+                f1_macro=float(fold_out.macro_relevant_row['F1']),
+                precision_micro=float(fold_out.objective_row['Precision']),
+                recall_micro=float(fold_out.objective_row['Recall']),
+                f1_micro=float(fold_out.objective_row['F1']),
+            )
+            fold_metrics_list.append(fm)
+            if trial is not None:
+                running_f1 = sum(m.f1_macro for m in fold_metrics_list) / len(fold_metrics_list)
+                trial.report(running_f1, step=fold_idx)
+                if trial.should_prune():
+                    LOGGER.info(f'Trial {combo_idx} pruned after fold {fold_idx}/{self._folds_per_combo}')
+                    pruned = True
+                    break
+            if self._debug:
+                break
+
+        trial_row = summarize_combination(
+            combo_idx=combo_idx,
+            params_json=params_json,
+            fold_metrics=fold_metrics_list,
+        )
+        return CombinationResult(
             trial_row=trial_row,
-            fold_rows=fold_rows,
+            fold_metrics=tuple(fold_metrics_list),
             fold_curves=tuple(fold_curves),
             fold_thresholds=tuple(fold_thresholds),
             fold_corpora_dfs=tuple(fold_corpora_dfs),
@@ -546,252 +707,132 @@ def run_combination(
             model_config=model_config,
             training_config=training_config,
             pruned=pruned,
-        ),
-        completed_trainings,
-    )
-
-
-def select_best(
-    *,
-    space: HyperparamSpace,
-    base_model: ModelCnf,
-    base_training: TrainingCnf,
-    train_data: EmbeddingDataset,
-    x_full: np.ndarray,
-    y_full: np.ndarray,
-    feature_dim: int,
-    eval_cfg: EvaluationCnf,
-    cv_cfg: CvCnf,
-    optuna_cfg: OptunaCnf,
-    tuning_cfg: ThresholdTuningCnf | None,
-    objective_corpora: str,
-    debug: bool,
-    print_logs: bool,
-    clearml_logger: Any,
-    random_seed: int,
-    eval_thresholds: Mapping[str, float] | None = None,
-) -> BestSelection:
-    """Run Optuna-managed search and select the best trial by mean F1."""
-    from importlib import import_module
-
-    optuna = import_module('optuna')
-
-    total_combinations = _count_total_combinations(space=space)
-    n_trials = _resolve_n_trials(optuna_cfg=optuna_cfg, total_combinations=total_combinations)
-    if debug:
-        n_trials = 2
-    folds_per_combo = 1 if debug else cv_cfg.folds
-    total_trainings = n_trials * folds_per_combo
-    log_cv_plan(
-        total_combinations=n_trials,
-        folds_per_combo=folds_per_combo,
-        total_trainings=total_trainings,
-        clearml_logger=clearml_logger,
-    )
-    clearml_logger.report_text(
-        (
-            'Optuna config: '
-            f'sampler={optuna_cfg.sampler} '
-            f'pruner={optuna_cfg.pruner} '
-            f'direction={optuna_cfg.direction} '
-            f'n_trials={n_trials} '
-            f'grid_size={total_combinations}'
-        ),
-        print_console=True,
-    )
-
-    completed_trainings = 0
-    trial_rows: list[dict[str, Any]] = []
-    fold_rows: list[dict[str, Any]] = []
-    trial_results: dict[int, CombinationResult] = {}
-
-    study = optuna.create_study(
-        direction=optuna_cfg.direction,
-        sampler=_build_sampler(
-            optuna_module=optuna,
-            optuna_cfg=optuna_cfg,
-            space=space,
-            random_seed=random_seed,
-        ),
-        pruner=_build_pruner(optuna_module=optuna, optuna_cfg=optuna_cfg),
-    )
-
-    def objective(trial: Any) -> float:
-        nonlocal completed_trainings
-        combo_model_cfg, combo_train_cfg = _build_configs_from_trial(
-            trial=trial,
-            space=space,
-            base_model=base_model,
-            base_training=base_training,
         )
-        combo_result, completed_after_trial = run_combination(
-            combo_idx=trial.number + 1,
-            total_combinations=n_trials,
-            model_config=combo_model_cfg,
-            training_config=combo_train_cfg,
-            train_data=train_data,
-            x_full=x_full,
-            y_full=y_full,
-            feature_dim=feature_dim,
-            eval_cfg=eval_cfg,
-            cv_cfg=cv_cfg,
-            tuning_cfg=tuning_cfg,
-            folds_per_combo=folds_per_combo,
-            total_trainings=total_trainings,
-            completed_trainings=completed_trainings,
-            objective_corpora=objective_corpora,
-            debug=debug,
-            print_logs=print_logs,
-            clearml_logger=clearml_logger,
-            random_seed=random_seed,
-            trial=trial,
-            eval_thresholds=eval_thresholds,
+
+    # ------------------------------------------------------------------
+    # Optuna search
+    # ------------------------------------------------------------------
+
+    def _select_best(self) -> SearchOutcome:
+        """Run Optuna-managed search and select the best trial by mean F1."""
+        from importlib import import_module
+        optuna = import_module('optuna')
+
+        total_combinations = self._count_combinations()
+        self._n_trials = self._resolve_n_trials(total_combinations=total_combinations)
+        if self._debug:
+            self._n_trials = 2
+        self._folds_per_combo = 1 if self._debug else self._cv_cnf.folds
+        self._total_trainings = self._n_trials * self._folds_per_combo
+        self._log_cv_plan()
+        self._clearml_logger.report_text(
+            (
+                'Optuna config: '
+                f'sampler={self._optuna_cnf.sampler} '
+                f'pruner={self._optuna_cnf.pruner} '
+                f'direction={self._optuna_cnf.direction} '
+                f'n_trials={self._n_trials} '
+                f'grid_size={total_combinations}'
+            ),
+            print_console=True,
         )
-        completed_trainings = completed_after_trial
-        trial_rows.append(combo_result.trial_row)
-        fold_rows.extend(combo_result.fold_rows)
-        trial_results[trial.number] = combo_result
-        if combo_result.pruned:
-            raise optuna.TrialPruned()
-        return float(combo_result.trial_row['F1_mean'])
 
-    study.optimize(func=objective, n_trials=n_trials)
+        self._progress = ProgressCounter()
+        trial_rows: list[dict[str, Any]] = []
+        fold_rows: list[dict[str, Any]] = []
+        trial_results: dict[int, CombinationResult] = {}
 
-    if study.best_trial.number not in trial_results:
-        raise ValueError('No CV trial results were produced.')
-    best_result = trial_results[study.best_trial.number]
-
-    return BestSelection(
-        best_trial=best_result.trial_row,
-        best_model_config=best_result.model_config,
-        best_training_config=best_result.training_config,
-        best_fold_curves=best_result.fold_curves,
-        best_fold_thresholds=best_result.fold_thresholds,
-        best_fold_corpora_dfs=best_result.fold_corpora_dfs,
-        best_fold_classes_dfs=best_result.fold_classes_dfs,
-        trial_rows=trial_rows,
-        fold_rows=fold_rows,
-    )
-
-
-_CV_DEV_RENAME: Mapping[str, str] = {
-    'Precision_micro_mean': 'Precision',
-    'Recall_micro_mean': 'Recall',
-    'F1_micro_mean': 'F1',
-    'Loss_mean': 'Loss',
-    'Precision_mean': 'Precision_macro_relevant',
-    'Recall_mean': 'Recall_macro_relevant',
-    'F1_mean': 'F1_macro_relevant',
-}
-
-_CV_DEV_STD_RENAME: Mapping[str, str] = {
-    'Precision_micro_std': 'Precision_std',
-    'Recall_micro_std': 'Recall_std',
-    'F1_micro_std': 'F1_std',
-    'Precision_std': 'Precision_macro_relevant_std',
-    'Recall_std': 'Recall_macro_relevant_std',
-    'F1_std': 'F1_macro_relevant_std',
-}
-
-_CV_DEV_PASSTHROUGH: tuple[str, ...] = ('params', 'epochs', 'Loss_std')
-
-
-def build_cv_df(
-    *,
-    trial_rows: Sequence[Mapping[str, Any]],
-    fold_rows: Sequence[Mapping[str, Any]],
-    best_trial: Mapping[str, Any],
-    objective_corpora: str,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Assemble trials, folds, and best-trial summary dataframes.
-
-    :param objective_corpora: Used as the cv_dev_df index label so downstream
-        consumers (``eval_final``) can look it up by the same key they use for
-        the test evaluation table.
-    """
-    trials_df = pd.DataFrame(trial_rows).sort_values(by='F1_mean', ascending=False).reset_index(drop=True)
-    folds_df = pd.DataFrame(fold_rows)
-    row: dict[str, Any] = {k: best_trial[k] for k in _CV_DEV_PASSTHROUGH}
-    row.update({new: best_trial[old] for old, new in _CV_DEV_RENAME.items()})
-    row.update({new: best_trial[old] for old, new in _CV_DEV_STD_RENAME.items()})
-    cv_dev_df = pd.DataFrame([row], index=pd.Index([objective_corpora], name='Corpus Name'))
-    return trials_df, folds_df, cv_dev_df
-
-
-_METRIC_KEYS: tuple[str, ...] = (
-    'Loss_mean', 'Loss_std',
-    'Precision_mean', 'Precision_std',
-    'Recall_mean', 'Recall_std',
-    'F1_mean', 'F1_std',
-    'epochs',
-)
-
-
-def build_cv_result(
-    *,
-    cv_dev_df: pd.DataFrame,
-    selection: BestSelection,
-    patience: int,
-    tuning_cfg: ThresholdTuningCnf | None = None,
-    cat_list: Sequence[str] | None = None,
-    default_threshold: float = 0.5,
-    eval_thresholds: Mapping[str, float] | None = None,
-) -> CvResult:
-    """Assemble the typed CV result from the best-trial selection.
-
-    :param tuning_cfg: When enabled, aggregate per-fold per-class thresholds.
-    :param cat_list: Full corpus category list, used to fill missing classes
-        with ``default_threshold`` in the aggregated map.
-    :param default_threshold: Fallback per-class threshold for classes never
-        seen across the best-trial's CV folds.
-    :param eval_thresholds: When provided (assembly mode), stored directly as
-        ``tuned_thresholds`` in the result so downstream consumers see a
-        single threshold field. Tuning aggregation is skipped in that case
-        because the loaded thresholds are the source of truth.
-    """
-    fixed_epochs = max(1, int(round(float(selection.best_trial['epochs']))) - patience)
-    fixed_training = replace(
-        selection.best_training_config,
-        epochs=fixed_epochs,
-        early_stopping_patience=0,
-    )
-    objective_metrics = {k: float(selection.best_trial[k]) for k in _METRIC_KEYS}
-
-    tuned_thresholds: dict[str, float] | None = None
-    threshold_report_df: pd.DataFrame | None = None
-    if eval_thresholds is not None:
-        tuned_thresholds = {str(k): float(v) for k, v in eval_thresholds.items()}
-    elif tuning_cfg is not None and tuning_cfg.enabled and selection.best_fold_thresholds:
-        if cat_list is None:
-            raise ValueError('cat_list is required when threshold tuning is enabled')
-        tuning_result: ThresholdTuningResult = aggregate_fold_thresholds(
-            fold_thresholds=selection.best_fold_thresholds,
-            cat_list=cat_list,
-            default_threshold=default_threshold,
-            aggregation=tuning_cfg.aggregation,
-            min_folds_for_tuning=tuning_cfg.min_folds_for_tuning,
+        study = optuna.create_study(
+            direction=self._optuna_cnf.direction,
+            sampler=self._build_sampler(optuna_module=optuna),
+            pruner=self._build_pruner(optuna_module=optuna),
         )
-        tuned_thresholds = tuning_result.cat_to_threshold
-        threshold_report_df = tuning_result.report_df
 
-    cv_per_corpora_df = aggregate_fold_dfs(
-        fold_dfs=selection.best_fold_corpora_dfs,
-    ) if selection.best_fold_corpora_dfs else None
-    cv_per_class_df = aggregate_fold_dfs(
-        fold_dfs=selection.best_fold_classes_dfs,
-    ) if selection.best_fold_classes_dfs else None
+        def objective(trial: Any) -> float:
+            combo_model_cfg, combo_train_cfg = self._build_configs_from_trial(trial=trial)
+            combo_result = self._run_combination(
+                combo_idx=trial.number + 1,
+                model_config=combo_model_cfg,
+                training_config=combo_train_cfg,
+                trial=trial,
+            )
+            trial_rows.append(combo_result.trial_row)
+            fold_rows.extend(fm.to_row() for fm in combo_result.fold_metrics)
+            trial_results[trial.number] = combo_result
+            if combo_result.pruned:
+                raise optuna.TrialPruned()
+            return float(combo_result.trial_row['F1_mean'])
 
-    return CvResult(
-        cv_dev_df=cv_dev_df,
-        best_model_config=asdict(selection.best_model_config),
-        best_training_config=asdict(fixed_training),
-        objective_metrics=objective_metrics,
-        tuned_thresholds=tuned_thresholds,
-        threshold_report_df=threshold_report_df,
-        cv_per_class_df=cv_per_class_df,
-        cv_per_corpora_df=cv_per_corpora_df,
-        cv_per_class_fold_dfs=(
-            tuple(selection.best_fold_classes_dfs)
-            if selection.best_fold_classes_dfs else None
-        ),
-    )
+        study.optimize(func=objective, n_trials=self._n_trials)
+
+        if study.best_trial.number not in trial_results:
+            raise ValueError('No CV trial results were produced.')
+
+        return SearchOutcome(
+            best=trial_results[study.best_trial.number],
+            trial_rows=trial_rows,
+            fold_rows=fold_rows,
+        )
+
+    # ------------------------------------------------------------------
+    # Finalization
+    # ------------------------------------------------------------------
+
+    def _finalize(self, *, outcome: SearchOutcome) -> None:
+        """Populate output attributes from completed search."""
+        best = outcome.best
+        best_trial = best.trial_row
+
+        self.trials = (
+            pd.DataFrame(outcome.trial_rows)
+            .sort_values(by='F1_mean', ascending=False)
+            .reset_index(drop=True)
+        )
+        self.folds = pd.DataFrame(outcome.fold_rows)
+
+        self.best_params = json.loads(best_trial['params'])
+        self.best_model_config = best.model_config
+
+        fixed_epochs = max(
+            1,
+            int(round(float(best_trial['epochs']))) - self._train_cnf.early_stopping_patience,
+        )
+        self.best_training_config = replace(
+            best.training_config,
+            epochs=fixed_epochs,
+            early_stopping_patience=0,
+        )
+
+        cv_dev_row = _build_cv_dev_row(best_trial)
+        self.best_trial_stats = cv_dev_row
+        self.cv_dev_df = pd.DataFrame(
+            [cv_dev_row],
+            index=pd.Index([self._objective_row], name='objective_row'),
+        )
+
+        if self._eval_thresholds is not None:
+            self.tuned_thresholds = {str(k): float(v) for k, v in self._eval_thresholds.items()}
+        elif self._tuning_cnf.enabled and best.fold_thresholds:
+            cat_list = list(self._train_data.corpus.catList)
+            tuning_result: ThresholdTuningResult = aggregate_fold_thresholds(
+                fold_thresholds=best.fold_thresholds,
+                cat_list=cat_list,
+                default_threshold=self._eval_cnf.threshold_eval,
+                aggregation=self._tuning_cnf.aggregation,
+                min_folds_for_tuning=self._tuning_cnf.min_folds_for_tuning,
+            )
+            self.tuned_thresholds = tuning_result.cat_to_threshold
+            self.threshold_report = tuning_result.report_df
+
+        self.per_corpora_df = (
+            aggregate_fold_dfs(fold_dfs=best.fold_corpora_dfs)
+            if best.fold_corpora_dfs else None
+        )
+        self.per_class_df = (
+            aggregate_fold_dfs(fold_dfs=best.fold_classes_dfs)
+            if best.fold_classes_dfs else None
+        )
+        self.per_class_fold_dfs = (
+            tuple(best.fold_classes_dfs) if best.fold_classes_dfs else None
+        )
+        self.fold_curves = best.fold_curves
