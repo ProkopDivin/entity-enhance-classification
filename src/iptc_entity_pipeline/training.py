@@ -182,9 +182,9 @@ def train_model(
     )
 
 
-def get_obj_row(*, df_corpora: Any, objective_corpora: str, averaging_type: str) -> Mapping[str, Any]:
+def get_obj_row(*, df_corpora: Any, objective_row: str, averaging_type: str) -> Mapping[str, Any]:
     """Return objective corpus row, fallback to all-corpora row for given averaging."""
     objective_row_name = f'All-{averaging_type}'
-    if objective_corpora in df_corpora.index:
-        return df_corpora.loc[objective_corpora].to_dict()
+    if objective_row in df_corpora.index:
+        return df_corpora.loc[objective_row].to_dict()
     return df_corpora.loc[objective_row_name].to_dict()

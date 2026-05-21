@@ -26,9 +26,11 @@ from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
+from dataclasses import asdict
+
 from iptc_entity_pipeline.assembly_model import ClassToModelMap
 from iptc_entity_pipeline.config import EvaluationCnf
-from iptc_entity_pipeline.cross_validation import CvResult
+from iptc_entity_pipeline.cross_validation import CvOutputs
 from iptc_entity_pipeline.evaluate import get_cat_name
 
 LOGGER = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ LOGGER = logging.getLogger(__name__)
 class AssemblyCvResult:
     """Outputs of the assembly aggregation step.
 
-    Field names overlap with :class:`cross_validation.CvResult` so
+    Field names overlap with :class:`cross_validation.CV` attributes so
     ``eval_final`` consumes either typed result.
 
     :param cv_dev_df: One row per member (no fused row), indexed by member
@@ -297,7 +299,7 @@ def build_threshold_report(
 
 def build_member_cv_dev_df(
     *,
-    member_cv_results: Sequence[CvResult],
+    member_cv_results: Sequence[CvOutputs],
     member_labels: Sequence[str],
 ) -> pd.DataFrame:
     """
@@ -311,11 +313,13 @@ def build_member_cv_dev_df(
         if cv.cv_dev_df is None or cv.cv_dev_df.empty:
             continue
         row = cv.cv_dev_df.iloc[0].to_dict()
+        model_dict = asdict(cv.best_model_config)
+        train_dict = asdict(cv.best_training_config)
         row['params'] = json.dumps(
             {
-                **cv.best_model_config,
+                **model_dict,
                 **{
-                    k: v for k, v in cv.best_training_config.items()
+                    k: v for k, v in train_dict.items()
                     if k in {'batch_size', 'learning_rate'}
                 },
                 'member_label': label,
@@ -331,7 +335,7 @@ def build_member_cv_dev_df(
 
 def build_per_corpora_df(
     *,
-    member_cv_results: Sequence[CvResult],
+    member_cv_results: Sequence[CvOutputs],
     member_labels: Sequence[str],
 ) -> pd.DataFrame:
     """
@@ -342,7 +346,7 @@ def build_per_corpora_df(
     """
     blocks: list[pd.DataFrame] = []
     for member_idx, label in enumerate(member_labels):
-        cv_corp = member_cv_results[member_idx].cv_per_corpora_df
+        cv_corp = member_cv_results[member_idx].per_corpora_df
         if cv_corp is None:
             continue
         block = cv_corp.copy().reset_index()
@@ -355,7 +359,7 @@ def build_per_corpora_df(
 
 def _resolve_member_thresholds(
     *,
-    member_cv_results: Sequence[CvResult],
+    member_cv_results: Sequence[CvOutputs],
     extra_thresholds: Sequence[Mapping[str, float] | None] | None,
     cat_list: Sequence[str],
     default_threshold: float,
@@ -386,27 +390,26 @@ def _resolve_member_thresholds(
 
 def build_assembly_from_cv(
     *,
-    member_cv_results: Sequence[CvResult],
+    member_cv_results: Sequence[CvOutputs],
     member_labels: Sequence[str],
     cat_list: Sequence[str],
     eval_cfg: EvaluationCnf,
-    objective_corpora: str,
+    objective_row: str,
     primary_idx: int = 0,
     member_loaded_thresholds: Sequence[Mapping[str, float] | None] | None = None,
     sign_test: bool = False,
 ) -> AssemblyCvResult:
     """
-    Build the assembly result from each member's :class:`CvResult`.
+    Build the assembly result from each member's fitted :class:`CV`.
 
-    :param member_cv_results: One :class:`CvResult` per member, in member
-        index order. Each must have ``cv_per_class_df`` populated.
+    :param member_cv_results: One :class:`CvOutputs` per member, in member
+        index order. Each must have ``per_class_df`` populated.
     :param member_labels: Display labels indexed by member index. Index 0
         is the primary member; ties on mean F1 resolve to it.
     :param cat_list: Shared train ``catList`` (validated upstream).
     :param eval_cfg: Evaluation config; ``threshold_eval`` is the fallback
         for classes missing from a member's threshold map.
-    :param objective_corpora: Objective corpus key (passed through into
-        the result for downstream consumers).
+    :param objective_row: Evaluation table row for objective metrics.
     :param primary_idx: Index of the primary member (default 0).
     :param member_loaded_thresholds: Per-member externally-loaded
         threshold maps (one per member). These are the source of truth
@@ -428,13 +431,13 @@ def build_assembly_from_cv(
     )
 
     per_class_f1_df = build_per_class_f1_df(
-        member_cv_per_class_dfs=[cv.cv_per_class_df for cv in member_cv_results],
+        member_cv_per_class_dfs=[cv.per_class_df for cv in member_cv_results],
         cat_list=cat_list,
         member_labels=member_labels,
     )
     if sign_test:
         class_to_model = select_class_to_model_sign_test(
-            member_fold_class_dfs=[cv.cv_per_class_fold_dfs for cv in member_cv_results],
+            member_fold_class_dfs=[cv.per_class_fold_dfs for cv in member_cv_results],
             cat_list=cat_list,
             member_labels=member_labels,
             primary_idx=primary_idx,
@@ -469,7 +472,7 @@ def build_assembly_from_cv(
     )
 
     objective_metrics: dict[str, Any] = {
-        'objective_corpora': objective_corpora,
+        'objective_row': objective_row,
         'n_classes': len(cat_list),
         'n_classes_selected_per_member': {
             label: int(sum(1 for v in class_to_model.assignments.values() if v == idx))
@@ -478,11 +481,12 @@ def build_assembly_from_cv(
     }
     for member_idx, label in enumerate(member_labels):
         cv = member_cv_results[member_idx]
+        stats = cv.best_trial_stats or {}
         objective_metrics[f'F1_mean_{label}'] = float(
-            cv.objective_metrics.get('F1_mean', float('nan'))
+            stats.get('F1_macro_relevant', float('nan'))
         )
         objective_metrics[f'F1_std_{label}'] = float(
-            cv.objective_metrics.get('F1_std', float('nan'))
+            stats.get('F1_macro_relevant_std', float('nan'))
         )
 
     LOGGER.info(

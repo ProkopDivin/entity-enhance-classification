@@ -14,6 +14,7 @@ from iptc_entity_pipeline.config import EvaluationCnf
 LOGGER = logging.getLogger(__name__)
 
 REMOVED_CAT_IDS = frozenset({'20000419'})
+CLASS_RELEVANT_MACRO_ROW = 'All-relevant-macro'
 
 
 class PreparedStats(NamedTuple):
@@ -312,6 +313,8 @@ def evaluate_classes(
     :param eval_corpus: Corpus with gold labels and ``catList``.
     :param per_class: Whether to include per-class rows.
     :return: DataFrame indexed by category name with Precision/Recall/F1 and false positive counts.
+        Aggregate rows: ``All - micro avg`` (micro over labels), ``All-relevant-macro``
+        (unweighted macro over ``relevant_cats.yaml``), ``All - datapoint avg``.
     """
     from geneea.evaluation import utils as evalutil
     from geneea.evaluation.utils import AvgData
@@ -338,28 +341,30 @@ def evaluate_classes(
     micro_fp = int(micro_stats.predCnt - micro_stats.correctCnt)
     relevant_ids = load_relevant_cat_ids()
     available_ids = {str(cat) for cat in class_stats}
-    macro_cat_ids = [cat_id for cat_id in relevant_ids if cat_id in available_ids]
-    if not macro_cat_ids:
-        LOGGER.warning('No relevant classes found in eval catList; falling back to all classes for macro metrics')
-        macro_cat_ids = [str(cat) for cat in class_stats]
-    macro_mean_fp = (
-        sum(fp_by_cat[cat_id] for cat_id in macro_cat_ids if cat_id in fp_by_cat) / len(macro_cat_ids)
-        if macro_cat_ids
+    relevant_cat_ids = [cat_id for cat_id in relevant_ids if cat_id in available_ids]
+    if not relevant_cat_ids:
+        LOGGER.warning(
+            'No relevant classes found in eval catList; falling back to all classes for relevant-macro metrics'
+        )
+        relevant_cat_ids = [str(cat) for cat in class_stats]
+    relevant_mean_fp = (
+        sum(fp_by_cat[cat_id] for cat_id in relevant_cat_ids if cat_id in fp_by_cat) / len(relevant_cat_ids)
+        if relevant_cat_ids
         else float('nan')
     )
 
     accumulator.append_metrics(data_count=avg_stats.cnt, stats=micro_stats)
     category_names.append('All - micro avg')
 
-    macro_avg = AvgData.empty()
-    for cat in macro_cat_ids:
-        macro_avg.update(prec=class_stats[cat].precision, recall=class_stats[cat].recall)
+    relevant_macro_avg = AvgData.empty()
+    for cat in relevant_cat_ids:
+        relevant_macro_avg.update(prec=class_stats[cat].precision, recall=class_stats[cat].recall)
     accumulator.append_metrics(
         data_count=avg_stats.cnt,
-        stats=macro_avg,
-        false_positive_count=macro_mean_fp,
+        stats=relevant_macro_avg,
+        false_positive_count=relevant_mean_fp,
     )
-    category_names.append('All - macro avg')
+    category_names.append(CLASS_RELEVANT_MACRO_ROW)
 
     accumulator.append_metrics(
         data_count=avg_stats.cnt,
