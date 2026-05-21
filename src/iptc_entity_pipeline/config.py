@@ -62,6 +62,7 @@ class ModelCnf:
     entity_dim: int = 0
     attention_hidden_dim: int = 128
     attention_dropout: float = 0.0
+    bias_from_prior: bool = True
 
 
 @dataclass(frozen=True)
@@ -150,7 +151,7 @@ class ThresholdTuningCnf:
     by the final-model evaluation as ``customThresholds``.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     thresholds: tuple[float, ...] = field(
         # používám jen pro toto
         default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(5, 16))

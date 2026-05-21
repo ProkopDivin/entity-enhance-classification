@@ -316,7 +316,7 @@ def _report_stats_scalars(
 def createClassificationModel(
     embDim: int,
     outDim: int,
-    modelConfig: dict[str, int | str | float],
+    modelConfig: dict[str, Any],
     textVectorizer: Vectorizer[str] | Literal['not None'],
     logConfig: dict[str, Any],
     connect_config: bool = True,
@@ -348,6 +348,7 @@ def createClassificationModel(
             'attentionHiddenDim': int(modelConfig['attentionHiddenDim']),
             'attentionDropout': float(modelConfig.get('attentionDropout', 0.0)),
         })
+    bias_from_prior_logits = modelConfig.get('biasFromPriorLogits')
 
     return NeuralCategModel.create(
         embDim=embDim,
@@ -357,6 +358,7 @@ def createClassificationModel(
         nnType=nn_type,
         textVectorizer=textVectorizer,
         nnKwargs=nn_kwargs,
+        biasFromPriorLogits=bias_from_prior_logits,
     )
 
 

@@ -7,6 +7,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+import numpy as np
+
 from iptc_entity_pipeline.config import ModelCnf, TrainingCnf
 from iptc_entity_pipeline.dataset_builder import RaggedEmbeddingDataset, to_numpy_array
 from iptc_entity_pipeline.legacy_reuse import LegacyTrainResult, createClassificationModel, trainClassificationModel
@@ -71,6 +73,7 @@ def model_payload(*, model_config: ModelCnf, nn_type: str = 'mlp') -> dict[str, 
         'entityDim': model_config.entity_dim,
         'attentionHiddenDim': model_config.attention_hidden_dim,
         'attentionDropout': model_config.attention_dropout,
+        'biasFromPrior': model_config.bias_from_prior,
     }
 
 
@@ -100,6 +103,18 @@ def train_payload(*, training_config: TrainingCnf, validation_split_name: str = 
             'focalLossConfig': {'alpha': 0.25, 'gamma': 2.0},
         },
     }
+
+
+def _class_prior_logits(*, train_data: Any, eps: float = 1e-6) -> list[float]:
+    """Compute class-prior logits from train labels."""
+    if not hasattr(train_data, 'Y'):
+        raise ValueError('Cannot initialize output bias from priors: train_data has no Y labels.')
+    labels = np.asarray(to_numpy_array(matrix_like=train_data.Y), dtype=np.float64)
+    if labels.ndim != 2:
+        raise ValueError(f'Expected 2D labels matrix, got ndim={labels.ndim}.')
+    priors = labels.mean(axis=0)
+    priors = np.clip(priors, eps, 1.0 - eps)
+    return np.log(priors / (1.0 - priors)).astype(np.float64).tolist()
 
 
 def train_model(
@@ -148,11 +163,18 @@ def train_model(
     entity_dim = int(getattr(model_config, 'entity_dim', 0))
     if entity_dim <= 0 and is_ragged and len(train_data.entity_X) > 0 and train_data.entity_X[0].ndim == 2:
         entity_dim = int(train_data.entity_X[0].shape[1])
+    bias_from_prior_logits: list[float] | None = None
+    if model_config.bias_from_prior:
+        bias_from_prior_logits = _class_prior_logits(train_data=train_data)
 
     model = createClassificationModel(
         embDim=int(feature_dim),
         outDim=out_dim,
-        modelConfig=model_payload(model_config=model_config, nn_type=nn_type) | {'entityDim': entity_dim},
+        modelConfig=(
+            model_payload(model_config=model_config, nn_type=nn_type)
+            | {'entityDim': entity_dim}
+            | ({'biasFromPriorLogits': bias_from_prior_logits} if bias_from_prior_logits is not None else {})
+        ),
         textVectorizer='not None',
         logConfig=log_config,
         connect_config=connect_config,
