@@ -248,9 +248,9 @@ class BaseCnfWithHPO(BaseCnf):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
-            hidden_dims=(384, 1024, 2048, 4096, 8192,),
-            dropouts1=(0.0,),
-            dropouts2=(0.0, 0.3, 0.5,),
+            hidden_dims=(1024, 2048, 4096, 8192,),
+            dropouts1=(0.0, 0.1,),
+            dropouts2=(0.1, 0.3, 0.5,),
             learning_rates=(0.00037,),
         )
     ) 
@@ -294,10 +294,6 @@ class BaseCnfWithHPO3(BaseCnf):
 class WpEntitiesCnf(BaseCnfWithHPO2):
     """Default entity-enhanced configuration."""
     
-@dataclass(frozen=True)
-class WpEntitiesCnf(BaseCnfWithHPO2):
-    """Default entity-enhanced configuration."""
-    train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), learning_rate=0.00037))
 
 @dataclass(frozen=True)
 class WpEntitiesCnf2(BaseCnfWithHPO2):
@@ -411,7 +407,9 @@ class ArticleOnlyCnf5(ArticleOnlyCnf):
 @dataclass(frozen=True)
 class DebugCnf(BaseCnf):
     """Debug configuration for quick local runs."""
-
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='mlp_gelu')
+    )
     paths: PathsCnf = field(
         default_factory=lambda: PathsCnf(
             train_csv=f'{DATA_ROOT}/debug/all-corpora-train-entities.csv',
@@ -999,6 +997,15 @@ class BestArticleOnlyCnf(BaseCnfWithHPO):
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), use_entity_embeddings=False)
     )
+
+
+@dataclass(frozen=True)
+class ArticleOnlyGeluCnf(BaseCnfWithHPO):
+    """Article-only config using an MLP with GELU activation."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='mlp_gelu')
+    )
+
 ########################################################
 # Best configurations for different relevance thresholds
 ########################################################
@@ -1126,7 +1133,15 @@ class BestArticleOnlyTunedCnf5(BestArticleOnlyCnf):
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
     random_seed: int = 8689129
-    
+
+
+@dataclass(frozen=True)
+class WpEntitiesGeluCnf(BaseCnfWithHPO):
+    """Entity-enhanced config using an MLP with GELU activation."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='mlp_gelu')
+    )
+
 @dataclass(frozen=True)
 class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration using Wikidata description embeddings."""
@@ -1336,6 +1351,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_all_langs': WPEntitiesAllLangsCnf(),
         
         'best_wpentities': BestWpEntitiesCnf(),
+        'wpentities_gelu': WpEntitiesGeluCnf(),
         #'best_wpentities_f1': BestWpEntitiesF1Cnf(),
         'best_wpentities_tuned': BestWpEntitiesTunedCnf(),
         'best_wpentities_tuned_2': BestWpEntitiesTunedCnf2(),
@@ -1343,6 +1359,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities_tuned_4': BestWpEntitiesTunedCnf4(),
         'best_wpentities_tuned_5': BestWpEntitiesTunedCnf5(),
         'best_article_only': BestArticleOnlyCnf(),
+        'article_only_gelu': ArticleOnlyGeluCnf(),
         'best_article_only_tuned': BestArticleOnlyTunedCnf(),
         'best_article_only_tuned_2': BestArticleOnlyTunedCnf2(),
         'best_article_only_tuned_3': BestArticleOnlyTunedCnf3(),
