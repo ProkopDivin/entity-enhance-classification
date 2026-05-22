@@ -62,7 +62,7 @@ class ModelCnf:
     entity_dim: int = 0
     attention_hidden_dim: int = 128
     attention_dropout: float = 0.0
-    bias_from_prior: bool = True
+    bias_from_prior: bool = False
 
 
 @dataclass(frozen=True)
@@ -342,7 +342,7 @@ class WPEntitiesWeightedMeanCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class ArticleOnlyCnf(BaseCnfWithHPO2):
+class ArticleOnlyCnf(BaseCnfWithHPO):
     """Article-only configuration without entity embeddings."""
 
     emb: EmbeddingCnf = field(
@@ -1000,11 +1000,20 @@ class BestArticleOnlyCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class ArticleOnlyGeluCnf(BaseCnfWithHPO):
+class ArticleOnlyGeluCnf(ArticleOnlyCnf):
     """Article-only config using an MLP with GELU activation."""
     model: ModelCnf = field(
         default_factory=lambda: replace(ModelCnf(), nn_type='mlp_gelu')
     )
+
+
+@dataclass(frozen=True)
+class ArticleOnlyPriorCnf(ArticleOnlyCnf):
+    """Article-only GELU with per-class output bias initialized from train priors."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), bias_from_prior=True)
+    )
+
 
 ########################################################
 # Best configurations for different relevance thresholds
@@ -1141,6 +1150,15 @@ class WpEntitiesGeluCnf(BaseCnfWithHPO):
     model: ModelCnf = field(
         default_factory=lambda: replace(ModelCnf(), nn_type='mlp_gelu')
     )
+
+
+@dataclass(frozen=True)
+class WpEntitiesPriorCnf(BaseCnfWithHPO):
+    """Entity-enhanced GELU with per-class output bias initialized from train priors."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), bias_from_prior=True)
+    )
+
 
 @dataclass(frozen=True)
 class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
@@ -1332,6 +1350,11 @@ class TunningLearningRateF1Cnf(BaseCnfWithHPO3):
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
     return {
+        'article_only_gelu': ArticleOnlyGeluCnf(),
+        'article_only_prior': ArticleOnlyPriorCnf(),
+        'wpentities_gelu': WpEntitiesGeluCnf(),
+        'wpentities_prior': WpEntitiesPriorCnf(),
+        'article_only': ArticleOnlyCnf(),
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),
         'entity_only': EntityOnlyCnf(),
@@ -1351,7 +1374,6 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_all_langs': WPEntitiesAllLangsCnf(),
         
         'best_wpentities': BestWpEntitiesCnf(),
-        'wpentities_gelu': WpEntitiesGeluCnf(),
         #'best_wpentities_f1': BestWpEntitiesF1Cnf(),
         'best_wpentities_tuned': BestWpEntitiesTunedCnf(),
         'best_wpentities_tuned_2': BestWpEntitiesTunedCnf2(),
@@ -1359,7 +1381,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities_tuned_4': BestWpEntitiesTunedCnf4(),
         'best_wpentities_tuned_5': BestWpEntitiesTunedCnf5(),
         'best_article_only': BestArticleOnlyCnf(),
-        'article_only_gelu': ArticleOnlyGeluCnf(),
+        
         'best_article_only_tuned': BestArticleOnlyTunedCnf(),
         'best_article_only_tuned_2': BestArticleOnlyTunedCnf2(),
         'best_article_only_tuned_3': BestArticleOnlyTunedCnf3(),
