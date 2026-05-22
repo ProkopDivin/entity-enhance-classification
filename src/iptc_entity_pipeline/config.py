@@ -348,6 +348,7 @@ class ArticleOnlyCnf(BaseCnfWithHPO):
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), use_entity_embeddings=False)
     )
+    
 
 
 @dataclass(frozen=True)
@@ -833,7 +834,7 @@ class BestWpEntitiesF1Cnf(BestWpEntitiesCnf):
 
 
 @dataclass(frozen=True)
-class BestWpEntitiesTunedCnf(BestWpEntitiesCnf):
+class WpEntitiesTunedCnf(BaseCnfWithHPO):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
     The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
@@ -907,7 +908,7 @@ class BestWpEntitiesTunedCnf5(BestWpEntitiesCnf):
   
     
 @dataclass(frozen=True)
-class BestWpEntitiesAttentionCnf(BestWpEntitiesTunedCnf):
+class BestWpEntitiesAttentionCnf(WpEntitiesTunedCnf):
     """Best entity-enhanced config with explicit attention over entities."""
 
     emb: EmbeddingCnf = field(
@@ -926,7 +927,7 @@ class BestWpEntitiesAttentionCnf(BestWpEntitiesTunedCnf):
 
 
 @dataclass(frozen=True)
-class WPEntitiesAttentionHPOCnf(BestWpEntitiesTunedCnf):
+class WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
     """Entity-enhanced configuration with explicit attention over entities."""
 
     emb: EmbeddingCnf = field(
@@ -955,7 +956,7 @@ class WPEntitiesAttentionHPOCnf(BestWpEntitiesTunedCnf):
     )
     
 @dataclass(frozen=True)
-class WPEntitiesAttentionHPOCnf2(BestWpEntitiesTunedCnf):
+class WPEntitiesAttentionHPOCnf2(WpEntitiesTunedCnf):
     """Entity-enhanced configuration with explicit attention over entities."""
 
     emb: EmbeddingCnf = field(
@@ -1110,7 +1111,7 @@ class BestWikipedia2VecEntitiesCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class BestArticleOnlyTunedCnf(BestArticleOnlyCnf):
+class ArticleOnlyTunedCnf(ArticleOnlyCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
@@ -1215,12 +1216,12 @@ class Assembly1Cnf(BaseCnf):
             enabled=True,
             members=(
                 AssemblyMemberCnf(
-                    config=BestArticleOnlyTunedCnf(),
+                    config=ArticleOnlyTunedCnf(),
                     thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_article_only_tuned_20260507_102132/thresholds.json',
                     label='article_only_tuned',
                 ),
                 AssemblyMemberCnf(
-                    config=BestWpEntitiesTunedCnf(),
+                    config=WpEntitiesTunedCnf(),
                     thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_wpentities_tuned_20260507_102033/thresholds.json',
                     label='wpentities_tuned',
                 ),
@@ -1244,12 +1245,12 @@ class Assembly2Cnf(BaseCnf):
             sign_test=True,
             members=(
                 AssemblyMemberCnf(
-                    config=BestWpEntitiesTunedCnf(),
+                    config=WpEntitiesTunedCnf(),
                     thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_wpentities_tuned_20260507_102033/thresholds.json',
                     label='wpentities_tuned',
                 ),
                 AssemblyMemberCnf(
-                    config=BestArticleOnlyTunedCnf(),
+                    config=ArticleOnlyTunedCnf(),
                     thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_article_only_tuned_20260507_102132/thresholds.json',
                     label='article_only_tuned',
                 ),
@@ -1271,7 +1272,7 @@ class Assembly3Cnf(BaseCnf):
                     label='wpentities_tuned+attention',
                 ),
                 AssemblyMemberCnf(
-                    config=BestArticleOnlyTunedCnf(),
+                    config=ArticleOnlyTunedCnf(),
                     thresholds_path='/home/prokop/Git/entity-enhance-classification/results/saved_models/best_article_only_tuned_20260513_230745/custom_thresholds.json',
                     label='article_only_tuned+attention',
                 ),
@@ -1355,6 +1356,9 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_gelu': WpEntitiesGeluCnf(),
         'wpentities_prior': WpEntitiesPriorCnf(),
         'article_only': ArticleOnlyCnf(),
+        'wpentities': WpEntitiesCnf(),
+        'wpentities_tuned': WpEntitiesTunedCnf(),
+        'article_only_tuned': ArticleOnlyTunedCnf(),
         # rozběhnout ještě hpo na tunning a normal article_only a wpentities
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),
@@ -1376,14 +1380,14 @@ def _config_map() -> dict[str, BaseCnf]:
         
         'best_wpentities': BestWpEntitiesCnf(),
         #'best_wpentities_f1': BestWpEntitiesF1Cnf(),
-        'best_wpentities_tuned': BestWpEntitiesTunedCnf(),
+        'best_wpentities_tuned': WpEntitiesTunedCnf(),
         'best_wpentities_tuned_2': BestWpEntitiesTunedCnf2(),
         'best_wpentities_tuned_3': BestWpEntitiesTunedCnf3(),
         'best_wpentities_tuned_4': BestWpEntitiesTunedCnf4(),
         'best_wpentities_tuned_5': BestWpEntitiesTunedCnf5(),
         'best_article_only': BestArticleOnlyCnf(),
         
-        'best_article_only_tuned': BestArticleOnlyTunedCnf(),
+        'best_article_only_tuned': ArticleOnlyTunedCnf(),
         'best_article_only_tuned_2': BestArticleOnlyTunedCnf2(),
         'best_article_only_tuned_3': BestArticleOnlyTunedCnf3(),
         'best_article_only_tuned_4': BestArticleOnlyTunedCnf4(),

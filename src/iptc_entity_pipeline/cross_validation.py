@@ -232,18 +232,20 @@ def summarize_combination(
 
 
 def _mean_eval_tables(*, first_df: pd.DataFrame, second_df: pd.DataFrame) -> pd.DataFrame:
-    """Average two eval tables while preserving non-numeric columns."""
-    if not first_df.index.equals(second_df.index):
-        raise ValueError('Eval tables must have identical indexes for averaging')
+    """Average two eval tables and align rows/columns when subsets differ."""
+    row_index = first_df.index.union(second_df.index, sort=False)
+    col_index = first_df.columns.union(second_df.columns, sort=False)
+    first_aligned = first_df.reindex(index=row_index, columns=col_index)
+    second_aligned = second_df.reindex(index=row_index, columns=col_index)
 
-    if not first_df.columns.equals(second_df.columns):
-        raise ValueError('Eval tables must have identical columns for averaging')
-
-    out_df = first_df.copy(deep=True)
-    numeric_cols = first_df.select_dtypes(include='number').columns
-    out_df.loc[:, numeric_cols] = (
-        first_df.loc[:, numeric_cols].astype(float) + second_df.loc[:, numeric_cols].astype(float)
-    ) / 2.0
+    out_df = first_aligned.combine_first(second_aligned)
+    numeric_cols_first = set(first_df.select_dtypes(include='number').columns)
+    numeric_cols_second = set(second_df.select_dtypes(include='number').columns)
+    numeric_cols = [col for col in col_index if col in numeric_cols_first or col in numeric_cols_second]
+    for col in numeric_cols:
+        first_num = pd.to_numeric(first_aligned[col], errors='coerce')
+        second_num = pd.to_numeric(second_aligned[col], errors='coerce')
+        out_df[col] = pd.concat([first_num, second_num], axis=1).mean(axis=1, skipna=True)
     return out_df
 
 
