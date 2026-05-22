@@ -231,6 +231,27 @@ def summarize_combination(
     }
 
 
+def _mean_eval_tables(*, first_df: pd.DataFrame, second_df: pd.DataFrame) -> pd.DataFrame:
+    """Average two eval tables while preserving non-numeric columns."""
+    if not first_df.index.equals(second_df.index):
+        raise ValueError('Eval tables must have identical indexes for averaging')
+
+    if not first_df.columns.equals(second_df.columns):
+        raise ValueError('Eval tables must have identical columns for averaging')
+
+    out_df = first_df.copy(deep=True)
+    numeric_cols = first_df.select_dtypes(include='number').columns
+    out_df.loc[:, numeric_cols] = (
+        first_df.loc[:, numeric_cols].astype(float) + second_df.loc[:, numeric_cols].astype(float)
+    ) / 2.0
+    return out_df
+
+
+def _subset_predictions(*, pred_scores: Sequence[Any], indices: Sequence[int]) -> list[Any]:
+    """Select prediction-score rows by positional indices."""
+    return [pred_scores[int(idx)] for idx in indices]
+
+
 def _build_cv_dev_row(best_trial: Mapping[str, Any]) -> dict[str, Any]:
     """Build CV summary metrics from a best-trial row.
 
@@ -543,6 +564,30 @@ class CV:
     # Fold evaluation
     # ------------------------------------------------------------------
 
+    def _split_oof_indices(
+        self,
+        *,
+        val_data: EmbeddingDataset,
+        fold_idx: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Split one fold's OOF validation rows into two stratified halves."""
+        from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
+
+        y_val = (
+            to_numpy_array(matrix_like=val_data.Y)
+            if hasattr(val_data, 'Y')
+            else build_multilabel_targets(corpus=val_data.corpus)
+        )
+        splitter = MultilabelStratifiedKFold(
+            n_splits=2,
+            shuffle=True,
+            random_state=fold_seed(base_seed=self._random_seed, fold_idx=fold_idx + 1000),
+        )
+        x_dummy = np.zeros((int(y_val.shape[0]), 1), dtype=np.float32)
+        idx_a, idx_b = next(splitter.split(x_dummy, y_val))
+        return np.asarray(idx_a, dtype=np.int64), np.asarray(idx_b, dtype=np.int64)
+
+
     def _evaluate_fold(
         self,
         *,
@@ -568,6 +613,7 @@ class CV:
             print_logs=self._print_logs,
             connect_config=False,
         )
+
         custom_thresholds = dict(self._eval_thresholds) if self._eval_thresholds else None
         df_corpora_fold, df_classes_fold, pred_scores = evaluateModel(
             model=train_result.model,
@@ -581,12 +627,48 @@ class CV:
         if self._tuning_cnf.enabled:
             if custom_thresholds:
                 raise ValueError('custom tresholds would be overridden by threshold tuning, do not provide custom thresholds or disable threshold tuning')
+            idx_a, idx_b = self._split_oof_indices(val_data=val_data, fold_idx=fold_idx)
+            val_data_a = slice_dataset(dataset=val_data, indices=idx_a.tolist())
+            val_data_b = slice_dataset(dataset=val_data, indices=idx_b.tolist())
+
+            pred_scores_a = _subset_predictions(pred_scores=pred_scores, indices=idx_a.tolist())
+            pred_scores_b = _subset_predictions(pred_scores=pred_scores, indices=idx_b.tolist())
+
+            thresholds_a = tune_thresholds(
+                pred_wgh_cats=pred_scores_a,
+                eval_corpus=val_data_a.corpus,
+                tuning_cfg=self._tuning_cnf,
+            )
+            thresholds_b = tune_thresholds(
+                pred_wgh_cats=pred_scores_b,
+                eval_corpus=val_data_b.corpus,
+                tuning_cfg=self._tuning_cnf,
+            )
+
+            df_corpora_b, df_classes_b = evaluateModel(
+                model=train_result.model,
+                evalData=val_data_b,
+                evaluation_config=self._eval_cnf,
+                customThresholds=thresholds_a,
+                connect_config=False,
+                returnPredictions=False,
+            )
+            df_corpora_a, df_classes_a = evaluateModel(
+                model=train_result.model,
+                evalData=val_data_a,
+                evaluation_config=self._eval_cnf,
+                customThresholds=thresholds_b,
+                connect_config=False,
+                returnPredictions=False,
+            )
+            df_corpora_fold = _mean_eval_tables(first_df=df_corpora_a, second_df=df_corpora_b)
+            df_classes_fold = _mean_eval_tables(first_df=df_classes_a, second_df=df_classes_b)
+
             fold_thresholds = tune_thresholds(
                 pred_wgh_cats=pred_scores,
                 eval_corpus=val_data.corpus,
                 tuning_cfg=self._tuning_cnf,
             )
-            
         else:
             fold_thresholds = {}
 
