@@ -625,6 +625,7 @@ class CV:
         )
 
         if self._tuning_cnf.enabled:
+            # it is this complicated to avoid data leakege - do not want to tune on the same data as we evaluate on
             if custom_thresholds:
                 raise ValueError('custom tresholds would be overridden by threshold tuning, do not provide custom thresholds or disable threshold tuning')
             idx_a, idx_b = self._split_oof_indices(val_data=val_data, fold_idx=fold_idx)
@@ -663,7 +664,8 @@ class CV:
             )
             df_corpora_fold = _mean_eval_tables(first_df=df_corpora_a, second_df=df_corpora_b)
             df_classes_fold = _mean_eval_tables(first_df=df_classes_a, second_df=df_classes_b)
-
+            
+            # retune the tresholds - more data for tuning = more stability 
             fold_thresholds = tune_thresholds(
                 pred_wgh_cats=pred_scores,
                 eval_corpus=val_data.corpus,
