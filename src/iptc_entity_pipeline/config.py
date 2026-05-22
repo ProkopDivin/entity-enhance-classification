@@ -1355,6 +1355,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_gelu': WpEntitiesGeluCnf(),
         'wpentities_prior': WpEntitiesPriorCnf(),
         'article_only': ArticleOnlyCnf(),
+        # rozběhnout ještě hpo na tunning a normal article_only a wpentities
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),
         'entity_only': EntityOnlyCnf(),
