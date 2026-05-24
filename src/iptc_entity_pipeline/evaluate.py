@@ -14,7 +14,13 @@ from iptc_entity_pipeline.config import EvaluationCnf
 LOGGER = logging.getLogger(__name__)
 
 REMOVED_CAT_IDS = frozenset({'20000419'})
-CLASS_RELEVANT_MACRO_ROW = 'All-relevant-macro'
+
+CORPORA_MICRO_ROW = 'All_micro'
+CORPORA_DATAPOINT_ROW = 'All_datapoint'
+CORPORA_MACRO_ROW = 'All_macro_corpora'
+CLASS_MICRO_ROW = 'All_micro'
+CLASS_DATAPOINT_ROW = 'All_datapoint'
+CLASS_RELEVANT_MACRO_ROW = 'All_macro_relevant'
 
 
 class PreparedStats(NamedTuple):
@@ -105,7 +111,7 @@ class CorporaMetricAccumulator(CoreMetricAccumulator):
         self.false_positive_rate.append(false_positive_rate)
 
     def append_column_means(self) -> None:
-        """Append per-column means as a summary row (All-macro)."""
+        """Append per-column means as a summary row (``All_macro_corpora``)."""
         for col in (
             self.data_count,
             self.precision,
@@ -264,7 +270,7 @@ def evaluate_corpora(
             )
 
     accumulator.append_column_means()
-    corpora_names.append('All-macro')
+    corpora_names.append(CORPORA_MACRO_ROW)
 
     gold_vals = [d.cats for d in eval_corpus]
     avg_stats, micro_stats, indiv_stats = evalutil.multiStats(goldVals=gold_vals, predVals=pred_cats)
@@ -283,7 +289,7 @@ def evaluate_corpora(
         decent_labels=decent_labels,
         false_positive_rate=fpr_all,
     )
-    corpora_names.append('All-micro')
+    corpora_names.append(CORPORA_MICRO_ROW)
 
     accumulator.append_metrics(data_count=avg_stats.cnt, stats=avg_stats)
     accumulator.append_label_metrics(
@@ -292,7 +298,7 @@ def evaluate_corpora(
         decent_labels=decent_labels,
         false_positive_rate=fpr_all,
     )
-    corpora_names.append('All-datapoint')
+    corpora_names.append(CORPORA_DATAPOINT_ROW)
 
     df = pd.DataFrame(data=accumulator.to_dataframe_dict())
     df.index = corpora_names
@@ -313,8 +319,8 @@ def evaluate_classes(
     :param eval_corpus: Corpus with gold labels and ``catList``.
     :param per_class: Whether to include per-class rows.
     :return: DataFrame indexed by category name with Precision/Recall/F1 and false positive counts.
-        Aggregate rows: ``All - micro avg`` (micro over labels), ``All-relevant-macro``
-        (unweighted macro over ``relevant_cats.yaml``), ``All - datapoint avg``.
+        Aggregate rows: ``All_micro`` (micro over labels), ``All_macro_relevant``
+        (unweighted macro over ``relevant_cats.yaml``), ``All_datapoint``.
     """
     from geneea.evaluation import utils as evalutil
     from geneea.evaluation.utils import AvgData
@@ -354,7 +360,7 @@ def evaluate_classes(
     )
 
     accumulator.append_metrics(data_count=avg_stats.cnt, stats=micro_stats)
-    category_names.append('All - micro avg')
+    category_names.append(CLASS_MICRO_ROW)
 
     relevant_macro_avg = AvgData.empty()
     for cat in relevant_cat_ids:
@@ -371,7 +377,7 @@ def evaluate_classes(
         stats=avg_stats,
         false_positive_count=micro_fp,
     )
-    category_names.append('All - datapoint avg')
+    category_names.append(CLASS_DATAPOINT_ROW)
 
     df = pd.DataFrame(data=accumulator.to_dataframe_dict())
     df.index = category_names

@@ -159,6 +159,10 @@ class ThresholdTuningCnf:
     f_beta: float = 1.0
     aggregation: Literal['mean', 'median', 'mode'] = 'mean' # remove other not usefull 
     min_folds_for_tuning: int = 3
+    # Controls which CV metric selects hyperparameters in Optuna.
+    # `F1_micro` uses the objective corpora row F1 (typically `All_micro`).
+    # `F1_macro_relevant` uses macro F1 averaged over relevant classes.
+    selection_metric: Literal['F1_micro', 'F1_macro_relevant'] = 'F1_micro'
 
 
 @dataclass(frozen=True)
@@ -174,7 +178,7 @@ class BaseCnf:
     optuna: OptunaCnf = field(default_factory=OptunaCnf)
     hparam: HyperparamSpace = field(default_factory=HyperparamSpace)
     tuning: ThresholdTuningCnf = field(default_factory=ThresholdTuningCnf)
-    objective_row: str = 'All-micro'
+    objective_row: str = 'All_micro'
     downsample_corpora: dict[str, float] = field(default_factory=dict)
     # Single random seed that drives every randomness source in the pipeline:
     # global RNGs (python random / numpy / torch CPU+CUDA, cudnn deterministic),
@@ -184,7 +188,7 @@ class BaseCnf:
     print_logs: bool = True
     upload_artifacts: bool = True
     debug: bool = True
-    
+
 
     def to_clearml_mapping(self) -> dict[str, Any]:
         """Convert dataclasses to serializable mapping."""
@@ -1351,14 +1355,16 @@ class TunningLearningRateF1Cnf(BaseCnfWithHPO3):
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
     return {
+        'article_only': ArticleOnlyCnf(),
         'article_only_gelu': ArticleOnlyGeluCnf(),
         'article_only_prior': ArticleOnlyPriorCnf(),
+        'article_only_tuned': ArticleOnlyTunedCnf(),
+        
+        'wpentities': WpEntitiesCnf(),
         'wpentities_gelu': WpEntitiesGeluCnf(),
         'wpentities_prior': WpEntitiesPriorCnf(),
-        'article_only': ArticleOnlyCnf(),
-        'wpentities': WpEntitiesCnf(),
         'wpentities_tuned': WpEntitiesTunedCnf(),
-        'article_only_tuned': ArticleOnlyTunedCnf(),
+
         # rozběhnout ještě hpo na tunning a normal article_only a wpentities
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),

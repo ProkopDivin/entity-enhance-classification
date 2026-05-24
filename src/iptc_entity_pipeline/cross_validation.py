@@ -61,9 +61,9 @@ class FoldMetrics:
     params: str
     epochs: float
     loss: float
-    precision_macro: float
-    recall_macro: float
-    f1_macro: float
+    precision_macro_relevant: float
+    recall_macro_relevant: float
+    f1_macro_relevant: float
     precision_micro: float
     recall_micro: float
     f1_micro: float
@@ -76,9 +76,9 @@ class FoldMetrics:
             'params': self.params,
             'epochs': self.epochs,
             'Loss': self.loss,
-            'Precision': self.precision_macro,
-            'Recall': self.recall_macro,
-            'F1': self.f1_macro,
+            'Precision_macro_relevant': self.precision_macro_relevant,
+            'Recall_macro_relevant': self.recall_macro_relevant,
+            'F1_macro_relevant': self.f1_macro_relevant,
             'Precision_micro': self.precision_micro,
             'Recall_micro': self.recall_micro,
             'F1_micro': self.f1_micro,
@@ -216,12 +216,12 @@ def summarize_combination(
         'epochs': float(df['epochs'].mean()),
         'Loss_mean': float(df['Loss'].mean()),
         'Loss_std': float(df['Loss'].std(ddof=0)),
-        'F1_mean': float(df['F1'].mean()),
-        'F1_std': float(df['F1'].std(ddof=0)),
-        'Precision_mean': float(df['Precision'].mean()),
-        'Precision_std': float(df['Precision'].std(ddof=0)),
-        'Recall_mean': float(df['Recall'].mean()),
-        'Recall_std': float(df['Recall'].std(ddof=0)),
+        'F1_macro_relevant_mean': float(df['F1_macro_relevant'].mean()),
+        'F1_macro_relevant_std': float(df['F1_macro_relevant'].std(ddof=0)),
+        'Precision_macro_relevant_mean': float(df['Precision_macro_relevant'].mean()),
+        'Precision_macro_relevant_std': float(df['Precision_macro_relevant'].std(ddof=0)),
+        'Recall_macro_relevant_mean': float(df['Recall_macro_relevant'].mean()),
+        'Recall_macro_relevant_std': float(df['Recall_macro_relevant'].std(ddof=0)),
         'F1_micro_mean': float(df['F1_micro'].mean()),
         'F1_micro_std': float(df['F1_micro'].std(ddof=0)),
         'Precision_micro_mean': float(df['Precision_micro'].mean()),
@@ -260,25 +260,25 @@ def _build_cv_dev_row(best_trial: Mapping[str, Any]) -> dict[str, Any]:
     Keys match :data:`iptc_entity_pipeline.reporting.METRIC_SERIES` and
     :data:`iptc_entity_pipeline.reporting.STD_METRIC_SERIES` so
     :func:`~iptc_entity_pipeline.reporting.report_eval` can log scalars
-    without renaming (micro -> primary, macro -> macro_relevant).
+    without renaming.
     """
     return {
         'params': best_trial['params'],
         'epochs': float(best_trial['epochs']),
         'Loss': float(best_trial['Loss_mean']),
         'Loss_std': float(best_trial['Loss_std']),
-        'Precision': float(best_trial['Precision_micro_mean']),
-        'Precision_std': float(best_trial['Precision_micro_std']),
-        'Recall': float(best_trial['Recall_micro_mean']),
-        'Recall_std': float(best_trial['Recall_micro_std']),
-        'F1': float(best_trial['F1_micro_mean']),
-        'F1_std': float(best_trial['F1_micro_std']),
-        'Precision_macro_relevant': float(best_trial['Precision_mean']),
-        'Precision_macro_relevant_std': float(best_trial['Precision_std']),
-        'Recall_macro_relevant': float(best_trial['Recall_mean']),
-        'Recall_macro_relevant_std': float(best_trial['Recall_std']),
-        'F1_macro_relevant': float(best_trial['F1_mean']),
-        'F1_macro_relevant_std': float(best_trial['F1_std']),
+        'Precision_micro': float(best_trial['Precision_micro_mean']),
+        'Precision_micro_std': float(best_trial['Precision_micro_std']),
+        'Recall_micro': float(best_trial['Recall_micro_mean']),
+        'Recall_micro_std': float(best_trial['Recall_micro_std']),
+        'F1_micro': float(best_trial['F1_micro_mean']),
+        'F1_micro_std': float(best_trial['F1_micro_std']),
+        'Precision_macro_relevant': float(best_trial['Precision_macro_relevant_mean']),
+        'Precision_macro_relevant_std': float(best_trial['Precision_macro_relevant_std']),
+        'Recall_macro_relevant': float(best_trial['Recall_macro_relevant_mean']),
+        'Recall_macro_relevant_std': float(best_trial['Recall_macro_relevant_std']),
+        'F1_macro_relevant': float(best_trial['F1_macro_relevant_mean']),
+        'F1_macro_relevant_std': float(best_trial['F1_macro_relevant_std']),
     }
 
 
@@ -329,6 +329,12 @@ class CV:
             self._tuning_cnf = replace(tuning_cnf, enabled=False)
         else:
             self._tuning_cnf = tuning_cnf
+        self._selection_metric = str(self._tuning_cnf.selection_metric)
+        if self._selection_metric not in {'F1_micro', 'F1_macro_relevant'}:
+            raise ValueError(
+                'Unsupported cv_hparam_selection_metric: '
+                f'{self._selection_metric}'
+            )
 
         # Fit-time state (populated by fit(), used across private methods)
         self._train_data: EmbeddingDataset | None = None
@@ -388,7 +394,15 @@ class CV:
         )
 
         outcome = self._select_best()
-        LOGGER.info(f'CV complete: best_trial F1={outcome.best.trial_row["F1_mean"]:.4f}')
+        selected_metric_col = f'{self._selection_metric}_mean'
+        selected_score = float(outcome.best.trial_row[selected_metric_col])
+        LOGGER.info(
+            'CV complete: '
+            f'selected_metric={self._selection_metric}, '
+            f'selected_score={selected_score:.4f}, '
+            f'F1_micro_mean={outcome.best.trial_row["F1_micro_mean"]:.4f}, '
+            f'F1_macro_relevant_mean={outcome.best.trial_row["F1_macro_relevant_mean"]:.4f}'
+        )
 
         self._finalize(outcome=outcome)
         return self
@@ -562,6 +576,15 @@ class CV:
         )
         self._clearml_logger.report_text(msg, print_console=True)
 
+
+    def _fold_metric_for_selection(self, *, fold_metric: FoldMetrics) -> float:
+        """Return per-fold metric value used for running Optuna pruning reports."""
+        if self._selection_metric == 'F1_micro':
+            return float(fold_metric.f1_micro)
+        if self._selection_metric == 'F1_macro_relevant':
+            return float(fold_metric.f1_macro_relevant)
+        raise ValueError(f'Unsupported selection_metric: {self._selection_metric}')
+
     # ------------------------------------------------------------------
     # Fold evaluation
     # ------------------------------------------------------------------
@@ -686,10 +709,10 @@ class CV:
             fold_id=fold_idx,
             train_loss_per_epoch=train_result.train_loss_per_epoch,
             dev_loss_per_epoch=train_result.dev_loss_per_epoch,
-            train_f1_per_epoch=train_result.train_f1_per_epoch,
-            dev_f1_per_epoch=train_result.dev_f1_per_epoch,
-            train_macro_relevant_f1_per_epoch=train_result.train_macro_relevant_f1_per_epoch,
-            dev_macro_relevant_f1_per_epoch=train_result.dev_macro_relevant_f1_per_epoch,
+            train_f1_micro_per_epoch=train_result.train_f1_micro_per_epoch,
+            dev_f1_micro_per_epoch=train_result.dev_f1_micro_per_epoch,
+            train_f1_macro_relevant_per_epoch=train_result.train_f1_macro_relevant_per_epoch,
+            dev_f1_macro_relevant_per_epoch=train_result.dev_f1_macro_relevant_per_epoch,
         )
         return FoldEvalOutput(
             objective_row=objective_row,
@@ -760,17 +783,22 @@ class CV:
                 params=params_json,
                 epochs=float(fold_out.epochs_run),
                 loss=fold_out.dev_loss,
-                precision_macro=float(fold_out.macro_relevant_row['Precision']),
-                recall_macro=float(fold_out.macro_relevant_row['Recall']),
-                f1_macro=float(fold_out.macro_relevant_row['F1']),
+                precision_macro_relevant=float(fold_out.macro_relevant_row['Precision']),
+                recall_macro_relevant=float(fold_out.macro_relevant_row['Recall']),
+                f1_macro_relevant=float(fold_out.macro_relevant_row['F1']),
                 precision_micro=float(fold_out.objective_row['Precision']),
                 recall_micro=float(fold_out.objective_row['Recall']),
                 f1_micro=float(fold_out.objective_row['F1']),
             )
             fold_metrics_list.append(fm)
             if trial is not None:
-                running_f1 = sum(m.f1_macro for m in fold_metrics_list) / len(fold_metrics_list)
-                trial.report(running_f1, step=fold_idx)
+                running_score = (
+                    sum(
+                        self._fold_metric_for_selection(fold_metric=m)
+                        for m in fold_metrics_list
+                    ) / len(fold_metrics_list)
+                )
+                trial.report(running_score, step=fold_idx)
                 if trial.should_prune():
                     LOGGER.info(f'Trial {combo_idx} pruned after fold {fold_idx}/{self._folds_per_combo}')
                     pruned = True
@@ -800,7 +828,7 @@ class CV:
     # ------------------------------------------------------------------
 
     def _select_best(self) -> SearchOutcome:
-        """Run Optuna-managed search and select the best trial by mean F1."""
+        """Run Optuna-managed search and select the best trial by configured CV metric."""
         from importlib import import_module
         optuna = import_module('optuna')
 
@@ -817,6 +845,7 @@ class CV:
                 f'sampler={self._optuna_cnf.sampler} '
                 f'pruner={self._optuna_cnf.pruner} '
                 f'direction={self._optuna_cnf.direction} '
+                f'selection_metric={self._selection_metric} '
                 f'n_trials={self._n_trials} '
                 f'grid_size={total_combinations}'
             ),
@@ -847,7 +876,7 @@ class CV:
             trial_results[trial.number] = combo_result
             if combo_result.pruned:
                 raise optuna.TrialPruned()
-            return float(combo_result.trial_row['F1_mean'])
+            return float(combo_result.trial_row[f'{self._selection_metric}_mean'])
 
         study.optimize(func=objective, n_trials=self._n_trials)
 
@@ -871,7 +900,7 @@ class CV:
 
         self.trials = (
             pd.DataFrame(outcome.trial_rows)
-            .sort_values(by='F1_mean', ascending=False)
+            .sort_values(by=f'{self._selection_metric}_mean', ascending=False)
             .reset_index(drop=True)
         )
         self.folds = pd.DataFrame(outcome.fold_rows)

@@ -16,12 +16,24 @@ from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.model_io import save_outputs
 from iptc_entity_pipeline.reporting import (
     log_stage,
+    objective_suffix,
     report_cv,
     report_test_curve,
 )
 
 from iptc_entity_pipeline.training import train_model
 from iptc_entity_pipeline.reporting import conf_logging
+
+RV_LOAD_DATA = ['corpora']
+RV_PREPARE_ARTICLE_EMBEDDINGS = ['articleEmbeddingStats']
+RV_BUILD_DATASET = ['trainData', 'testData', 'featureDim']
+RV_RUN_CV = ['cvResult']
+RV_RUN_ASSEMBLY = ['assemblyResult']
+RV_EVAL_FINAL = ['evalResult']
+RV_RUN_COMPARISON = ['comparisonResult']
+RV_VALIDATE_MEMBER_CATLISTS = ['catList']
+RV_TRAIN_BEST = ['trainedModel']
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -37,7 +49,7 @@ class EvalResult:
 
 
 @PipelineDecorator.component(
-    return_values=['corpora'],
+    return_values=RV_LOAD_DATA,
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
@@ -76,7 +88,7 @@ def load_data(
 
 
 @PipelineDecorator.component(
-    return_values=['articleEmbeddingStats'],
+    return_values=RV_PREPARE_ARTICLE_EMBEDDINGS,
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
@@ -132,7 +144,7 @@ def prepare_article_embeddings(
     return result
 
 @PipelineDecorator.component(
-    return_values=['trainData', 'testData', 'featureDim'],
+    return_values=RV_BUILD_DATASET,
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
@@ -250,7 +262,7 @@ def build_dataset(
 
 
 @PipelineDecorator.component(
-    return_values=['catList'],
+    return_values=RV_VALIDATE_MEMBER_CATLISTS,
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.data_processing,
 )
@@ -320,7 +332,7 @@ def validate_member_catlists(corpora_primary, corpora_secondary):
 
 
 @PipelineDecorator.component(
-    return_values=['cvResult'],
+    return_values=RV_RUN_CV,
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.training,
 )
@@ -417,7 +429,7 @@ def run_cv(
     return cv.export_outputs()
 
 @PipelineDecorator.component(
-    return_values=['assemblyResult'],
+    return_values=RV_RUN_ASSEMBLY,
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.training,
 )
@@ -511,7 +523,7 @@ def run_assembly_step(
 
 
 @PipelineDecorator.component(
-    return_values=['trainedModel'],
+    return_values=RV_TRAIN_BEST,
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.training,
 )
@@ -576,7 +588,7 @@ def train_best(
     return result.model
 
 @PipelineDecorator.component(
-    return_values=['evalResult'],
+    return_values=RV_EVAL_FINAL,
     execution_queue='iptc_entity_tasks',
     task_type=TaskTypes.testing,
 )
@@ -741,8 +753,9 @@ def eval_final(
         upload_eval_artifacts()
 
     objective_metrics = df_corpora_test.loc[objective_row].to_dict()
+    obj_suffix = objective_suffix(objective_row)
     logger.info(
-        f'Evaluation complete: F1={scalar_metrics["F1"]:.4f}, '
+        f'Evaluation complete: F1_{obj_suffix}={scalar_metrics[f"F1_{obj_suffix}"]:.4f}, '
         f'F1_macro_relevant={scalar_metrics["F1_macro_relevant"]:.4f}, config={config_name}'
     )
     return EvalResult(
@@ -1082,7 +1095,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
 
     if not use_art_emb and not use_ent_emb:
         raise ValueError('Invalid embedding config: both use_article_embeddings and use_entity_embeddings are False')
-    
+
     log_stage(
         task=task,
         message='Stage 1/6: Loading corpora and article-to-entity mapping',
@@ -1166,7 +1179,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         title='Cross Validation Results',
         iteration=0,
     )
-    
+
     log_stage(
         task=task,
         message='Stage 5/6: Training final model on full train with fixed CV-derived epochs',
