@@ -223,7 +223,7 @@ def find_saved_model_dir(*, saved_models_dir: Path, config_name: str) -> Path | 
 
 
 def read_cv_metrics(*, model_dir: Path) -> tuple[float, float] | None:
-    """Read F1 / F1_std from the ``dev_cv_summary`` sheet of the model dir."""
+    """Read ``F1_micro`` / ``F1_micro_std`` from the ``dev_cv_summary`` sheet of the model dir."""
     xlsx_files = sorted(model_dir.glob('final_evaluation_tables_*.xlsx'))
     if not xlsx_files:
         LOG.warning(f'No final_evaluation_tables_*.xlsx in {model_dir}')
@@ -233,7 +233,7 @@ def read_cv_metrics(*, model_dir: Path) -> tuple[float, float] | None:
         LOG.warning(f'Empty {DEV_CV_SHEET} sheet in {xlsx_files[0]}')
         return None
     row = df.iloc[0]
-    return float(row['F1']), float(row['F1_std'])
+    return float(row['F1_micro']), float(row['F1_micro_std'])
 
 
 def fetch_cv_metrics(

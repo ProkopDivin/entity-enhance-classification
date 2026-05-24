@@ -49,12 +49,12 @@ LOG = logging.getLogger(__name__)
 THRESHOLD_FILENAMES: tuple[str, ...] = ('custom_thresholds.json', 'thresholds.json')
 
 CLASS_MACRO_ROW = CLASS_RELEVANT_MACRO_ROW
-CLASS_TAIL_ROW = 'All - tail avg'
-AGG_CLASS_ROWS = frozenset({'All - micro avg', CLASS_RELEVANT_MACRO_ROW, CLASS_TAIL_ROW, 'All - datapoint avg'})
-AGG_CORPUS_ROWS = frozenset({'All-macro', 'All-micro', 'All-datapoint'})
+CLASS_TAIL_ROW = 'All_tail'
+AGG_CLASS_ROWS = frozenset({'All_micro', CLASS_RELEVANT_MACRO_ROW, CLASS_TAIL_ROW, 'All_datapoint'})
+AGG_CORPUS_ROWS = frozenset({'All_macro_corpora', 'All_micro', 'All_datapoint'})
 SUMMARY_ROWS = {
     'macro_over_classes_all': ('classes', CLASS_RELEVANT_MACRO_ROW),
-    'micro_over_labels': ('classes', 'All - micro avg'),
+    'micro_over_labels': ('classes', 'All_micro'),
 }
 SUPPORT_BUCKETS: tuple[tuple[int, int, str], ...] = (
     (0, 10, '0-10'),
@@ -1372,8 +1372,8 @@ def build_summary_df(
         )
     )
 
-    macro_corpora_current = current_run.corpora_df.loc['All-macro']
-    macro_corpora_base = base_run.corpora_df.loc['All-macro']
+    macro_corpora_current = current_run.corpora_df.loc['All_macro_corpora']
+    macro_corpora_base = base_run.corpora_df.loc['All_macro_corpora']
     rows.append(
         _metric_row(
             summary_key='macro_over_corpora',

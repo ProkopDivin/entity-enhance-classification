@@ -23,16 +23,16 @@ class TrainingResult:
     model: Any
     final_dev_loss: float
     epochs_run: int
-    train_precision_per_epoch: tuple[float, ...]
-    dev_precision_per_epoch: tuple[float, ...]
-    train_recall_per_epoch: tuple[float, ...]
-    dev_recall_per_epoch: tuple[float, ...]
+    train_precision_micro_per_epoch: tuple[float, ...]
+    dev_precision_micro_per_epoch: tuple[float, ...]
+    train_recall_micro_per_epoch: tuple[float, ...]
+    dev_recall_micro_per_epoch: tuple[float, ...]
     train_loss_per_epoch: tuple[float, ...]
     dev_loss_per_epoch: tuple[float, ...]
-    train_f1_per_epoch: tuple[float, ...]
-    dev_f1_per_epoch: tuple[float, ...]
-    train_macro_relevant_f1_per_epoch: tuple[float, ...]
-    dev_macro_relevant_f1_per_epoch: tuple[float, ...]
+    train_f1_micro_per_epoch: tuple[float, ...]
+    dev_f1_micro_per_epoch: tuple[float, ...]
+    train_f1_macro_relevant_per_epoch: tuple[float, ...]
+    dev_f1_macro_relevant_per_epoch: tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -42,10 +42,10 @@ class CvFoldCurves:
     fold_id: int
     train_loss_per_epoch: tuple[float, ...]
     dev_loss_per_epoch: tuple[float, ...]
-    train_f1_per_epoch: tuple[float, ...]
-    dev_f1_per_epoch: tuple[float, ...]
-    train_macro_relevant_f1_per_epoch: tuple[float, ...]
-    dev_macro_relevant_f1_per_epoch: tuple[float, ...]
+    train_f1_micro_per_epoch: tuple[float, ...]
+    dev_f1_micro_per_epoch: tuple[float, ...]
+    train_f1_macro_relevant_per_epoch: tuple[float, ...]
+    dev_f1_macro_relevant_per_epoch: tuple[float, ...]
 
 
 def combo_params_json(*, model_config: ModelCnf, training_config: TrainingCnf) -> str:
@@ -191,22 +191,34 @@ def train_model(
         model=result.model,
         final_dev_loss=result.final_dev_loss,
         epochs_run=result.epochs_run,
-        train_precision_per_epoch=tuple(result.train_precisions),
-        dev_precision_per_epoch=tuple(result.dev_precisions),
-        train_recall_per_epoch=tuple(result.train_recalls),
-        dev_recall_per_epoch=tuple(result.dev_recalls),
+        train_precision_micro_per_epoch=tuple(result.train_precisions),
+        dev_precision_micro_per_epoch=tuple(result.dev_precisions),
+        train_recall_micro_per_epoch=tuple(result.train_recalls),
+        dev_recall_micro_per_epoch=tuple(result.dev_recalls),
         train_loss_per_epoch=tuple(result.train_losses),
         dev_loss_per_epoch=tuple(result.dev_losses),
-        train_f1_per_epoch=calc_f1_curve(precision_curve=result.train_precisions, recall_curve=result.train_recalls),
-        dev_f1_per_epoch=calc_f1_curve(precision_curve=result.dev_precisions, recall_curve=result.dev_recalls),
-        train_macro_relevant_f1_per_epoch=tuple(result.train_macro_relevant_f1s),
-        dev_macro_relevant_f1_per_epoch=tuple(result.dev_macro_relevant_f1s),
+        train_f1_micro_per_epoch=calc_f1_curve(
+            precision_curve=result.train_precisions, recall_curve=result.train_recalls,
+        ),
+        dev_f1_micro_per_epoch=calc_f1_curve(
+            precision_curve=result.dev_precisions, recall_curve=result.dev_recalls,
+        ),
+        train_f1_macro_relevant_per_epoch=tuple(result.train_macro_relevant_f1s),
+        dev_f1_macro_relevant_per_epoch=tuple(result.dev_macro_relevant_f1s),
     )
+
+
+_AVERAGING_TO_CORPORA_ROW: Mapping[str, str] = {
+    'micro': 'All_micro',
+    'datapoint': 'All_datapoint',
+    'macro': 'All_macro_corpora',
+}
 
 
 def get_obj_row(*, df_corpora: Any, objective_row: str, averaging_type: str) -> Mapping[str, Any]:
     """Return objective corpus row, fallback to all-corpora row for given averaging."""
-    objective_row_name = f'All-{averaging_type}'
     if objective_row in df_corpora.index:
         return df_corpora.loc[objective_row].to_dict()
-    return df_corpora.loc[objective_row_name].to_dict()
+    if averaging_type not in _AVERAGING_TO_CORPORA_ROW:
+        raise ValueError(f'Unsupported averaging_type: {averaging_type}')
+    return df_corpora.loc[_AVERAGING_TO_CORPORA_ROW[averaging_type]].to_dict()

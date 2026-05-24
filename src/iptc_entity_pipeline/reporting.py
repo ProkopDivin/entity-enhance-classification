@@ -21,28 +21,51 @@ class ChartSpec(NamedTuple):
 
 LOGGER = logging.getLogger(__name__)
 STD_METRIC_SERIES = (
-    'Precision_std',
-    'Recall_std',
-    'F1_std',
+    'Precision_micro_std',
+    'Recall_micro_std',
+    'F1_micro_std',
     'Precision_macro_relevant_std',
     'Recall_macro_relevant_std',
     'F1_macro_relevant_std',
 )
 METRIC_SERIES = (
-    'Precision',
-    'Recall',
-    'F1',
+    'Precision_micro',
+    'Recall_micro',
+    'F1_micro',
     'Precision_macro_relevant',
     'Recall_macro_relevant',
     'F1_macro_relevant',
 )
 
+
+def objective_suffix(objective_row: str) -> str:
+    """Return the metric-type suffix derived from an ``All_*`` objective row.
+
+    Maps ``All_micro`` -> ``micro``, ``All_datapoint`` -> ``datapoint``,
+    ``All_macro_corpora`` -> ``macro_corpora``.
+    """
+    prefix = 'All_'
+    if not objective_row.startswith(prefix):
+        raise ValueError(f'Unsupported objective_row format: {objective_row}')
+    return objective_row[len(prefix):]
+
+
 def _relevant_macro_scalar_row(macro_row: Any) -> dict[str, float]:
-    """Map classes ``All-relevant-macro`` row to :data:`METRIC_SERIES` macro-relevant keys."""
+    """Map classes ``All_macro_relevant`` row to :data:`METRIC_SERIES` macro-relevant keys."""
     return {
         'Precision_macro_relevant': float(macro_row['Precision']),
         'Recall_macro_relevant': float(macro_row['Recall']),
         'F1_macro_relevant': float(macro_row['F1']),
+    }
+
+
+def _objective_scalar_row(*, corpora_row: Any, objective_row: str) -> dict[str, float]:
+    """Map a corpora-table objective row to qualified scalar keys (suffix from row name)."""
+    suffix = objective_suffix(objective_row)
+    return {
+        f'Precision_{suffix}': float(corpora_row['Precision']),
+        f'Recall_{suffix}': float(corpora_row['Recall']),
+        f'F1_{suffix}': float(corpora_row['F1']),
     }
 
 
@@ -52,45 +75,51 @@ def build_test_scalar_metrics(
     df_classes_test: Any,
     objective_row: str,
 ) -> dict[str, float]:
-    """Build combined test scalar dict (objective corpora row + ``All-relevant-macro``).
+    """Build combined test scalar dict (objective corpora row + ``All_macro_relevant``).
 
-    Corpora ``All-macro`` / ``All-micro`` and classes ``All-relevant-macro`` are different
-    metrics and must not share one row label.
+    Corpora ``All_macro_corpora`` / ``All_micro`` and classes ``All_macro_relevant`` are
+    different metrics and must not share one row label.
 
     :param df_corpora_test: Corpora evaluation table.
     :param df_classes_test: Classes evaluation table.
-    :param objective_row: Corpora row for objective metrics (e.g. ``All-micro``).
-    :return: Keys aligned with :data:`METRIC_SERIES` for artifacts and pipeline transport.
+    :param objective_row: Corpora row for objective metrics (e.g. ``All_micro``).
+    :return: Keys are qualified metric names (e.g. ``F1_micro``, ``F1_macro_relevant``).
     """
     from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW
 
     corpora_row = df_corpora_test.loc[objective_row]
     macro_row = df_classes_test.loc[CLASS_RELEVANT_MACRO_ROW]
-    objective_metrics = {
-        'Precision': float(corpora_row['Precision']),
-        'Recall': float(corpora_row['Recall']),
-        'F1': float(corpora_row['F1']),
-    }
+    objective_metrics = _objective_scalar_row(corpora_row=corpora_row, objective_row=objective_row)
     relevant_macro_metrics = _relevant_macro_scalar_row(macro_row)
     metrics = {**objective_metrics, **relevant_macro_metrics}
+    suffix = objective_suffix(objective_row)
     LOGGER.info(
         f'Test scalar metrics: objective_row={objective_row}, '
-        f'F1={objective_metrics["F1"]:.4f}, '
+        f'F1_{suffix}={objective_metrics[f"F1_{suffix}"]:.4f}, '
         f'F1_macro_relevant={relevant_macro_metrics["F1_macro_relevant"]:.4f}'
     )
     return metrics
 
 
+_METRIC_PREFIXES = ('Precision_', 'Recall_', 'F1_')
+
+
 def report_eval(*, logger: Any, title: str, row: Mapping[str, Any], iteration: int = 0) -> None:
     """Report shared eval metrics to ClearML scalar charts.
 
-    Expects ``row`` keys from evaluation tables or :func:`cross_validation._build_cv_dev_row`
-    (``METRIC_SERIES`` names: micro as ``Precision``/``Recall``/``F1``, macro-relevant
-    as ``*_macro_relevant``).
+    Reports every key in ``row`` that starts with ``Precision_``, ``Recall_``, or ``F1_``
+    and does not end with ``_std`` (the latter handled by :func:`report_cv_std`).
+    Accepts any metric-type suffix (e.g. ``_micro``, ``_macro_relevant``, ``_datapoint``,
+    ``_macro_corpora``).
     """
-    for series in METRIC_SERIES:
-        if series in row:
-            logger.report_scalar(title=title, series=series, value=float(row[series]), iteration=iteration)
+    for series, value in row.items():
+        if not isinstance(series, str):
+            continue
+        if not any(series.startswith(p) for p in _METRIC_PREFIXES):
+            continue
+        if series.endswith('_std'):
+            continue
+        logger.report_scalar(title=title, series=series, value=float(value), iteration=iteration)
 
 
 
@@ -262,37 +291,37 @@ def report_cv_fold(
             mode='lines+markers',
         )
         logger.report_scatter2d(
-            title='Cross Validation Fold F1',
+            title='Cross Validation Fold F1_micro',
             series=f'train fold {fold_curve.fold_id}',
             iteration=iteration,
-            scatter=_scatter_xy(fold_curve.train_f1_per_epoch),
+            scatter=_scatter_xy(fold_curve.train_f1_micro_per_epoch),
             xaxis='epoch',
             yaxis='f1',
             mode='lines+markers',
         )
         logger.report_scatter2d(
-            title='Cross Validation Fold F1',
+            title='Cross Validation Fold F1_micro',
             series=f'dev fold {fold_curve.fold_id}',
             iteration=iteration,
-            scatter=_scatter_xy(fold_curve.dev_f1_per_epoch),
+            scatter=_scatter_xy(fold_curve.dev_f1_micro_per_epoch),
             xaxis='epoch',
             yaxis='f1',
             mode='lines+markers',
         )
         logger.report_scatter2d(
-            title='Cross Validation Fold F1 Macro Relevant',
+            title='Cross Validation Fold F1_macro_relevant',
             series=f'train fold {fold_curve.fold_id}',
             iteration=iteration,
-            scatter=_scatter_xy(fold_curve.train_macro_relevant_f1_per_epoch),
+            scatter=_scatter_xy(fold_curve.train_f1_macro_relevant_per_epoch),
             xaxis='epoch',
             yaxis='f1',
             mode='lines+markers',
         )
         logger.report_scatter2d(
-            title='Cross Validation Fold F1 Macro Relevant',
+            title='Cross Validation Fold F1_macro_relevant',
             series=f'dev fold {fold_curve.fold_id}',
             iteration=iteration,
-            scatter=_scatter_xy(fold_curve.dev_macro_relevant_f1_per_epoch),
+            scatter=_scatter_xy(fold_curve.dev_f1_macro_relevant_per_epoch),
             xaxis='epoch',
             yaxis='f1',
             mode='lines+markers',
@@ -303,15 +332,22 @@ def report_test_curve(*, logger: Any, result: TrainingResult, dev_series: str = 
     """Report final-model train vs validation-like curves across epochs."""
     charts = (
         ChartSpec('Final Model Loss', 'loss', result.train_loss_per_epoch, result.dev_loss_per_epoch),
-        ChartSpec('Final Model F1', 'f1', result.train_f1_per_epoch, result.dev_f1_per_epoch),
         ChartSpec(
-            'Final Model F1 Macro Relevant',
-            'f1',
-            result.train_macro_relevant_f1_per_epoch,
-            result.dev_macro_relevant_f1_per_epoch,
+            'Final Model F1_micro', 'f1',
+            result.train_f1_micro_per_epoch, result.dev_f1_micro_per_epoch,
         ),
-        ChartSpec('Final Model Precision', 'precision', result.train_precision_per_epoch, result.dev_precision_per_epoch),
-        ChartSpec('Final Model Recall', 'recall', result.train_recall_per_epoch, result.dev_recall_per_epoch),
+        ChartSpec(
+            'Final Model F1_macro_relevant', 'f1',
+            result.train_f1_macro_relevant_per_epoch, result.dev_f1_macro_relevant_per_epoch,
+        ),
+        ChartSpec(
+            'Final Model Precision_micro', 'precision',
+            result.train_precision_micro_per_epoch, result.dev_precision_micro_per_epoch,
+        ),
+        ChartSpec(
+            'Final Model Recall_micro', 'recall',
+            result.train_recall_micro_per_epoch, result.dev_recall_micro_per_epoch,
+        ),
     )
     for chart in charts:
         if not chart.train_curve and not chart.dev_curve:
@@ -347,33 +383,42 @@ def report_test_eval_scalars(
 
     Logs in order:
 
-    1. Objective metrics from the corpora table row (``objective_row``, e.g. ``All-micro``).
-    2. Relevant-class macro from the classes table row ``All-relevant-macro`` (not corpora ``All-macro``).
-    3. Optional extra corpora ``All-micro`` row at iteration 1 when ``objective_row`` is not ``All-micro``.
+    1. Objective metrics from the corpora table row (``objective_row``, e.g. ``All_micro``).
+    2. Relevant-class macro from the classes table row ``All_macro_relevant`` (not corpora
+       ``All_macro_corpora``).
+    3. Optional extra corpora ``All_micro`` row at iteration 1 when ``objective_row`` is not
+       ``All_micro``.
 
     :param clearml_logger: ClearML logger instance.
     :param df_corpora_test: Test corpora evaluation DataFrame.
     :param df_classes_test: Test classes evaluation DataFrame.
-    :param objective_row: Corpora row used as the pipeline objective (e.g. ``All-micro``).
+    :param objective_row: Corpora row used as the pipeline objective (e.g. ``All_micro``).
     """
-    from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW
+    from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW, CORPORA_MICRO_ROW
 
     title = 'Test Evaluation Results'
-    objective_metrics = df_corpora_test.loc[objective_row].to_dict()
+    objective_metrics = _objective_scalar_row(
+        corpora_row=df_corpora_test.loc[objective_row],
+        objective_row=objective_row,
+    )
     report_eval(logger=clearml_logger, title=title, row=objective_metrics, iteration=0)
 
     relevant_macro_metrics = _relevant_macro_scalar_row(df_classes_test.loc[CLASS_RELEVANT_MACRO_ROW])
     report_eval(logger=clearml_logger, title=title, row=relevant_macro_metrics, iteration=0)
 
+    suffix = objective_suffix(objective_row)
     LOGGER.info(
         f'Test Evaluation Results reported: objective_row={objective_row}, '
-        f'F1={float(objective_metrics["F1"]):.4f}, '
+        f'F1_{suffix}={float(objective_metrics[f"F1_{suffix}"]):.4f}, '
         f'F1_macro_relevant={relevant_macro_metrics["F1_macro_relevant"]:.4f}'
     )
 
-    if objective_row != 'All-micro':
-        row_micro = df_corpora_test.loc['All-micro'].to_dict()
-        report_eval(logger=clearml_logger, title=title, row=row_micro, iteration=1)
+    if objective_row != CORPORA_MICRO_ROW:
+        micro_metrics = _objective_scalar_row(
+            corpora_row=df_corpora_test.loc[CORPORA_MICRO_ROW],
+            objective_row=CORPORA_MICRO_ROW,
+        )
+        report_eval(logger=clearml_logger, title=title, row=micro_metrics, iteration=1)
 
 
 def report_test_eval_tables(

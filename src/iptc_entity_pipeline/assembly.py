@@ -482,10 +482,10 @@ def build_assembly_from_cv(
     for member_idx, label in enumerate(member_labels):
         cv = member_cv_results[member_idx]
         stats = cv.best_trial_stats or {}
-        objective_metrics[f'F1_mean_{label}'] = float(
+        objective_metrics[f'F1_macro_relevant_mean_{label}'] = float(
             stats.get('F1_macro_relevant', float('nan'))
         )
-        objective_metrics[f'F1_std_{label}'] = float(
+        objective_metrics[f'F1_macro_relevant_std_{label}'] = float(
             stats.get('F1_macro_relevant_std', float('nan'))
         )
 
