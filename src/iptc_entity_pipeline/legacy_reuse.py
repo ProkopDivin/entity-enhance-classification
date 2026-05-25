@@ -21,7 +21,16 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from clearml import Task
-from geneea.catlib.model.nnet import EntityAttentionMLP, EntityNoPoolingMLP, MLP, MLPGELU, MLPNN, NeuralCategModel
+from geneea.catlib.model.nnet import (
+    EntityAttentionMLP,
+    EntityNoPoolingMLP,
+    LeakyMLP,
+    MLP,
+    MLPGELU,
+    MLPNN,
+    NeuralCategModel,
+    SkipMLP,
+)
 from geneea.catlib.vec.dataset import EmbeddingDataset
 from geneea.catlib.vec.vectorizer import Vectorizer
 
@@ -52,6 +61,10 @@ def _resolve_nn_type(model_config: Mapping[str, Any]) -> Type[MLPNN]:
         return MLP
     if nn_name in {'mlp_gelu', 'gelu_mlp'}:
         return MLPGELU
+    if nn_name in {'skip_mlp', 'mlp_skip'}:
+        return SkipMLP
+    if nn_name in {'leaky_mlp', 'mlp_leaky'}:
+        return LeakyMLP
     if nn_name == 'entity_no_pooling':
         return EntityNoPoolingMLP
     if nn_name == 'entity_attention_mlp':
