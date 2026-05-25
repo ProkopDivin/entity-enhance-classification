@@ -246,7 +246,7 @@ class AssemblyCnf:
 
 
 @dataclass(frozen=True)
-class BaseCnfWithHPO(BaseCnf):
+class PreBaseCnfWithHPO(BaseCnf):
     """Base configuration with hyperparameter space."""
     debug: bool = field(default_factory=lambda: False)
     hparam: HyperparamSpace = field(
@@ -261,6 +261,16 @@ class BaseCnfWithHPO(BaseCnf):
     optuna: OptunaCnf = field(
         default_factory=lambda: replace(OptunaCnf(), sampler='grid')
     )
+    
+    
+@dataclass(frozen=True)
+class BaseCnfWithHPO(PreBaseCnfWithHPO):
+    """Base configuration with hyperparameter space."""
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    
+
 
 @dataclass(frozen=True)
 class BaseCnfWithHPO2(BaseCnf):
@@ -330,7 +340,7 @@ class WPEntitiesMeanCnf(BaseCnf):
 
 
 @dataclass(frozen=True)
-class WPEntitiesWeightedMeanCnf(BaseCnfWithHPO):
+class WPEntitiesWeightedMeanCnf(PreBaseCnfWithHPO):
     """Entity-enhanced config with relevance-weighted mean pooling enabled."""
 
     emb: EmbeddingCnf = field(
@@ -346,7 +356,7 @@ class WPEntitiesWeightedMeanCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class ArticleOnlyCnf(BaseCnfWithHPO):
+class ArticleOnlyCnf(PreBaseCnfWithHPO):
     """Article-only configuration without entity embeddings."""
 
     emb: EmbeddingCnf = field(
@@ -462,7 +472,7 @@ class WPEntitiesEnEsCnf(BaseCnf):
 
 
 @dataclass(frozen=True)
-class WPEntitiesEnNlCnf(BaseCnfWithHPO):
+class WPEntitiesEnNlCnf(PreBaseCnfWithHPO):
     """Entity-enhanced configuration with English and Dutch entity embeddings."""
     emb: EmbeddingCnf = field(default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'nl')))
 
@@ -480,7 +490,7 @@ class WPEntitiesEnCsCnf(BaseCnf):
 
 
 @dataclass(frozen=True)
-class WPEntitiesAllLangsCnf(BaseCnfWithHPO):
+class WPEntitiesAllLangsCnf(PreBaseCnfWithHPO):
     """Entity-enhanced configuration with all supported entity embedding languages."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS)
@@ -551,7 +561,7 @@ class WPEntitiesRelTH3(BaseCnf):
     )   
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH5(BaseCnfWithHPO):
+class WPEntitiesRelTH5(PreBaseCnfWithHPO):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
@@ -655,7 +665,7 @@ class WPEntitiesRelTH13(BaseCnf):
     
 
 @dataclass(frozen=True)
-class WPEntitiesNlCnf(BaseCnfWithHPO):
+class WPEntitiesNlCnf(PreBaseCnfWithHPO):
     """Entity-enhanced configuration with English and Dutch entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
@@ -730,7 +740,7 @@ class WPEntitiesRelTH999(BaseCnf):
     
 
 @dataclass(frozen=True)
-class WPEntitiesMentionWeightedSumCnf(BaseCnfWithHPO):
+class WPEntitiesMentionWeightedSumCnf(PreBaseCnfWithHPO):
     """Entity-enhanced configuration with mention-weighted sum pooling enabled."""
 
     emb: EmbeddingCnf = field(
@@ -745,7 +755,7 @@ class WPEntitiesMentionWeightedSumCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class WPEntitiesRelevanceWeightedSumCnf(BaseCnfWithHPO):
+class WPEntitiesRelevanceWeightedSumCnf(PreBaseCnfWithHPO):
     """Entity-enhanced configuration with relevance-weighted sum pooling enabled."""
 
     emb: EmbeddingCnf = field(
@@ -808,7 +818,7 @@ def _resolve_assembly(*, assembly: AssemblyCnf, root_path: Path) -> AssemblyCnf:
 
 
 @dataclass(frozen=True)
-class BestWpEntitiesCnf(BaseCnfWithHPO):
+class BestWpEntitiesCnf(PreBaseCnfWithHPO):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -838,7 +848,7 @@ class BestWpEntitiesF1Cnf(BestWpEntitiesCnf):
 
 
 @dataclass(frozen=True)
-class WpEntitiesTunedCnf(BaseCnfWithHPO):
+class WpEntitiesTunedCnf(PreBaseCnfWithHPO):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
     The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
@@ -989,7 +999,7 @@ class WPEntitiesAttentionHPOCnf2(WpEntitiesTunedCnf):
     )
 
 @dataclass(frozen=True)
-class BestArticleOnlyCnf(BaseCnfWithHPO):
+class BestArticleOnlyCnf(PreBaseCnfWithHPO):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -1013,6 +1023,22 @@ class ArticleOnlyGeluCnf(ArticleOnlyCnf):
 
 
 @dataclass(frozen=True)
+class ArticleOnlySkipCnf(ArticleOnlyCnf):
+    """Article-only config using an MLP with skip connection (concat input + hidden)."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='skip_mlp')
+    )
+
+
+@dataclass(frozen=True)
+class ArticleOnlyLeakyCnf(ArticleOnlyCnf):
+    """Article-only config using an MLP with Leaky ReLU activation."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='leaky_mlp')
+    )
+
+
+@dataclass(frozen=True)
 class ArticleOnlyPriorCnf(ArticleOnlyCnf):
     """Article-only GELU with per-class output bias initialized from train priors."""
     model: ModelCnf = field(
@@ -1026,7 +1052,7 @@ class ArticleOnlyPriorCnf(ArticleOnlyCnf):
 
 
 @dataclass(frozen=True)
-class BestWpentitiesAllLangsCnf(BaseCnfWithHPO):
+class BestWpentitiesAllLangsCnf(PreBaseCnfWithHPO):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -1042,7 +1068,7 @@ class BestWpentitiesAllLangsCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class BestWpentitiesNlCnf(BaseCnfWithHPO):
+class BestWpentitiesNlCnf(PreBaseCnfWithHPO):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -1057,7 +1083,7 @@ class BestWpentitiesNlCnf(BaseCnfWithHPO):
     )
 
 @dataclass(frozen=True)
-class BestWPEntitiesENNLCnf(BaseCnfWithHPO):
+class BestWPEntitiesENNLCnf(PreBaseCnfWithHPO):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -1073,7 +1099,7 @@ class BestWPEntitiesENNLCnf(BaseCnfWithHPO):
     
     
 @dataclass(frozen=True)
-class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO2):
+class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
@@ -1083,7 +1109,7 @@ class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO2):
 
 
 @dataclass(frozen=True)
-class Wikipedia2VecEntitiesAllLangsCnf(BaseCnfWithHPO):
+class Wikipedia2VecEntitiesAllLangsCnf(PreBaseCnfWithHPO):
     """Wikipedia2Vec entity embedding config with all supported languages."""
     paths: PathsCnf = field(
         default_factory=lambda: replace(
@@ -1097,7 +1123,7 @@ class Wikipedia2VecEntitiesAllLangsCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class BestWikipedia2VecEntitiesCnf(BaseCnfWithHPO):
+class BestWikipedia2VecEntitiesCnf(PreBaseCnfWithHPO):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
@@ -1150,7 +1176,7 @@ class BestArticleOnlyTunedCnf5(BestArticleOnlyCnf):
 
 
 @dataclass(frozen=True)
-class WpEntitiesGeluCnf(BaseCnfWithHPO):
+class WpEntitiesGeluCnf(PreBaseCnfWithHPO):
     """Entity-enhanced config using an MLP with GELU activation."""
     model: ModelCnf = field(
         default_factory=lambda: replace(ModelCnf(), nn_type='mlp_gelu')
@@ -1158,7 +1184,23 @@ class WpEntitiesGeluCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class WpEntitiesPriorCnf(BaseCnfWithHPO):
+class WpEntitiesSkipCnf(PreBaseCnfWithHPO):
+    """Entity-enhanced config using an MLP with skip connection (concat input + hidden)."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='skip_mlp')
+    )
+
+
+@dataclass(frozen=True)
+class WpEntitiesLeakyCnf(PreBaseCnfWithHPO):
+    """Entity-enhanced config using an MLP with Leaky ReLU activation."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='leaky_mlp')
+    )
+
+
+@dataclass(frozen=True)
+class WpEntitiesPriorCnf(PreBaseCnfWithHPO):
     """Entity-enhanced GELU with per-class output bias initialized from train priors."""
     model: ModelCnf = field(
         default_factory=lambda: replace(ModelCnf(), bias_from_prior=True)
@@ -1178,7 +1220,7 @@ class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
 
 
 @dataclass(frozen=True)
-class WikipediaIntroEntitiesCnf(BestWpEntitiesCnf):
+class WikipediaIntroEntitiesCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration using Wikidata description embeddings."""
 
     paths: PathsCnf = field(
@@ -1189,7 +1231,7 @@ class WikipediaIntroEntitiesCnf(BestWpEntitiesCnf):
     )
     
 @dataclass(frozen=True)
-class WikipediaArticleEntitiesCnf(BestWpEntitiesCnf):
+class WikipediaArticleEntitiesCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration using Wikidata description embeddings."""
 
     paths: PathsCnf = field(
@@ -1198,7 +1240,43 @@ class WikipediaArticleEntitiesCnf(BestWpEntitiesCnf):
             entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/selected-article-embeddings',
         )
     )
-    
+
+
+@dataclass(frozen=True)
+class Wikipedia2VecEntityOnlyCnf(Wikipedia2VecEntitiesCnf):
+    """Wikipedia2Vec entity embeddings without article embeddings."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False)
+    )
+
+
+@dataclass(frozen=True)
+class WikidataDescriptionEntityOnlyCnf(WikidataDescriptionEntitiesCnf):
+    """Wikidata description entity embeddings without article embeddings."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False)
+    )
+
+
+@dataclass(frozen=True)
+class WikipediaIntroEntityOnlyCnf(WikipediaIntroEntitiesCnf):
+    """Cuted-article entity embeddings without article embeddings."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False)
+    )
+
+
+@dataclass(frozen=True)
+class WikipediaArticleEntityOnlyCnf(WikipediaArticleEntitiesCnf):
+    """Selected-article entity embeddings without article embeddings."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False)
+    )
+
 
 @dataclass(frozen=True)
 class Assembly1Cnf(BaseCnf):
@@ -1357,20 +1435,36 @@ def _config_map() -> dict[str, BaseCnf]:
     return {
         'article_only': ArticleOnlyCnf(),
         'article_only_gelu': ArticleOnlyGeluCnf(),
+        'article_only_skip': ArticleOnlySkipCnf(),
+        'article_only_leaky': ArticleOnlyLeakyCnf(),
         'article_only_prior': ArticleOnlyPriorCnf(),
         'article_only_tuned': ArticleOnlyTunedCnf(),
         
         'wpentities': WpEntitiesCnf(),
         'wpentities_gelu': WpEntitiesGeluCnf(),
+        'wpentities_skip': WpEntitiesSkipCnf(),
+        'wpentities_leaky': WpEntitiesLeakyCnf(),
         'wpentities_prior': WpEntitiesPriorCnf(),
         'wpentities_tuned': WpEntitiesTunedCnf(),
+        
+        
+        'wp_entity_only': EntityOnlyCnf(),
+        'wv_entity_only': W2VEntityOnlyCnf(),
+        'wikipedia2vec_entity_only': Wikipedia2VecEntityOnlyCnf(),
+        'wikidata_description_entity_only': WikidataDescriptionEntityOnlyCnf(),
+        'wikipedia_intro_entity_only': WikipediaIntroEntityOnlyCnf(),
+        'wikipedia_article_entity_only': WikipediaArticleEntityOnlyCnf(),
+        
+        'wikipedia2vec_entities': Wikipedia2VecEntitiesCnf(),
+        'wikidata_description_entities': WikidataDescriptionEntitiesCnf(),
+        'wikipedia_intro_entities': WikipediaIntroEntitiesCnf(),
+        'wikipedia_article_entities': WikipediaArticleEntitiesCnf(),
+
 
         # rozběhnout ještě hpo na tunning a normal article_only a wpentities
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),
         'entity_only': EntityOnlyCnf(),
-        'wp_entity_only': EntityOnlyCnf(),
-        'wv_entity_only': W2VEntityOnlyCnf(),
         'no_embeddings': NoEmbeddingsCnf(),
         'wpentities': WpEntitiesCnf(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
@@ -1401,12 +1495,11 @@ def _config_map() -> dict[str, BaseCnf]:
         'best_wpentities_all_langs': BestWpentitiesAllLangsCnf(),
         'best_wpentities_nl': BestWpentitiesNlCnf(),
         'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
-        'wikipedia2vec_entities': Wikipedia2VecEntitiesCnf(),
+        
         'wikipedia2vec_entities_all_langs': Wikipedia2VecEntitiesAllLangsCnf(),
         'best_wikipedia2vec_entities': BestWikipedia2VecEntitiesCnf(),
-        'wikidata_description_entities': WikidataDescriptionEntitiesCnf(),
-        'wikipedia_intro_entities': WikipediaIntroEntitiesCnf(),
-        'wikipedia_article_entities': WikipediaArticleEntitiesCnf(),
+        
+        
         #'wpentities_2': WpEntitiesCnf2(),
         #'wpentities_3': WpEntitiesCnf3(),
         #'wpentities_4': WpEntitiesCnf4(),
