@@ -97,11 +97,14 @@ class EntityPoolingStrategy(ABC):
             entity_embeddings.append(entity_embedding)
             entity_weights.append(weight)
 
-        pooled_embedding = self._pool_embeddings(
-            entity_embeddings=entity_embeddings,
-            embedding_dim=embedding_dim,
-            weights=entity_weights,
-        )
+        if not entity_embeddings:
+            pooled_embedding = entity_embedding_store.get_train_mean_embedding()
+        else:
+            pooled_embedding = self._pool_embeddings(
+                entity_embeddings=entity_embeddings,
+                embedding_dim=embedding_dim,
+                weights=entity_weights,
+            )
         return EntityPoolingResult(
             pooled_embedding=pooled_embedding,
             requested_wdids=requested_wdids,

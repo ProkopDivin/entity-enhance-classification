@@ -216,10 +216,9 @@ class FeatureBuilder:
             article_embedding = self._article_embedding_provider.get_embedding(article_id=doc.id)
             article_rows.append(np.asarray(article_embedding, dtype=np.float32))
             if pooling_result.pooled_embedding.ndim == 1:
-                if pooling_result.found_embeddings == 0:
-                    entity_rows.append(np.zeros((0, entity_dim), dtype=np.float32))
-                else:
-                    entity_rows.append(np.asarray(pooling_result.pooled_embedding, dtype=np.float32).reshape(1, -1))
+                entity_rows.append(
+                    np.asarray(pooling_result.pooled_embedding, dtype=np.float32).reshape(1, -1)
+                )
             else:
                 entity_rows.append(np.asarray(pooling_result.pooled_embedding, dtype=np.float32))
 

@@ -205,6 +205,7 @@ def build_dataset(
         root_dir=paths.entity_embeddings_dir,
         langs=selected_langs,
     )
+    entity_store.compute_train_mean_from_corpus(corpus=corpora.train)
     pooling = get_pooling(emb_cfg=emb, logger=logger)
     builder = FeatureBuilder(
         article_embedding_provider=article_provider,
