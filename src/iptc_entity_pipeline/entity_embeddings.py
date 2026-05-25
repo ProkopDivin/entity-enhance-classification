@@ -5,8 +5,11 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+
+from iptc_entity_pipeline.data_loading import get_doc_wdids
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +36,7 @@ class EntityEmbeddingStore:
         self._sample_path: Path | None = None
         self._indexed_file_count = 0
         self._index_built = False
+        self._train_mean: np.ndarray | None = None
 
     def _chunk_paths(self, *, wdid: str, lang: str) -> list[Path]:
         self._ensure_index()
@@ -139,4 +143,52 @@ class EntityEmbeddingStore:
         sample = np.asarray(np.load(self._sample_path), dtype=np.float32)
         LOGGER.info('Entity embedding dimension inferred as %s from %s', sample.shape[0], self._sample_path.name)
         return int(sample.shape[0])
+
+    def compute_train_mean_from_corpus(self, *, corpus: Any) -> None:
+        """
+        Compute mean entity embedding over unique train-corpus wdIds with available vectors.
+
+        :param corpus: Train corpus with entities attached to each document.
+        :raises ValueError: when no resolvable entity embeddings exist in the train corpus.
+        """
+        unique_wdids: set[str] = set()
+        for doc in corpus:
+            unique_wdids.update(get_doc_wdids(doc))
+
+        vectors: list[np.ndarray] = []
+        resolved_wdids = 0
+        for wdid in unique_wdids:
+            embedding = self.get_entity_embedding(wdid=wdid)
+            if embedding is None:
+                continue
+            resolved_wdids += 1
+            vectors.append(embedding)
+
+        if not vectors:
+            raise ValueError(
+                'No resolvable entity embeddings in train corpus: '
+                f'unique_wdids={len(unique_wdids)} resolved_wdids=0 '
+                f'root_dir={self._root_dir} langs={self._langs}'
+            )
+
+        self._train_mean = np.mean(np.vstack(vectors), axis=0, dtype=np.float32)
+        LOGGER.info(
+            'Train corpus entity mean computed: unique_wdids=%s resolved_wdids=%s dim=%s',
+            len(unique_wdids),
+            resolved_wdids,
+            self._train_mean.shape[0],
+        )
+
+    def get_train_mean_embedding(self) -> np.ndarray:
+        """
+        Return train-corpus mean entity embedding used when an article has no entity hits.
+
+        :return: Copy of cached train mean vector.
+        :raises RuntimeError: when :meth:`compute_train_mean_from_corpus` was not called.
+        """
+        if self._train_mean is None:
+            raise RuntimeError(
+                'Train corpus entity mean is not computed; call compute_train_mean_from_corpus first.'
+            )
+        return np.asarray(self._train_mean, dtype=np.float32)
 
