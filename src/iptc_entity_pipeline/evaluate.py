@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Mapping, NamedTuple, Sequence
 
+import numpy as np
 import pandas as pd
 
 from iptc_entity_pipeline.category_sets import load_relevant_cat_ids
@@ -167,6 +168,59 @@ def filter_and_normalize(
 
     pred_cats = [filterLabels(dc, thr=thr, thrByLabel=cat_to_thr, keepWgh=False) for dc in pred_wgh_cats]
     return normalize_pred_cats(pred_cats=pred_cats)
+
+
+def _thresholds_vector(
+    *,
+    cat_list: Sequence[str],
+    threshold: float,
+    cat_to_thr: Mapping[str, float] | None,
+) -> np.ndarray:
+    """Build a per-column threshold vector aligned with ``cat_list``."""
+    thr_vec = np.full(len(cat_list), float(threshold), dtype=np.float32)
+    if cat_to_thr:
+        for col_idx, cat_id in enumerate(cat_list):
+            override = cat_to_thr.get(cat_id)
+            if override is not None:
+                thr_vec[col_idx] = float(override)
+    return thr_vec
+
+
+def pred_cats_from_matrix(
+    *,
+    score_matrix: np.ndarray,
+    cat_list: Sequence[str],
+    threshold: float,
+    cat_to_thr: Mapping[str, float] | None = None,
+) -> list[list[str]]:
+    """Build normalized predicted-category lists from a dense score matrix.
+
+    Drop-in replacement for :func:`filter_and_normalize` that consumes a
+    ``(n_docs, n_classes)`` ``float32`` matrix instead of the legacy
+    ``list[list[tuple[cat, score]]]`` representation. Selection semantics
+    match ``filterLabels``: a category is kept for a doc when its score
+    is ``>=`` the per-class threshold (or the scalar ``threshold`` when
+    no override is provided). The resulting per-doc category lists go
+    through the same IPTC :func:`normalize_pred_cats` pipeline as the
+    legacy path so downstream tables stay byte-identical.
+
+    :param score_matrix: Dense ``(n_docs, n_classes)`` score matrix.
+    :param cat_list: Category ids matching the matrix columns.
+    :param threshold: Fallback threshold for unmapped classes.
+    :param cat_to_thr: Optional per-category threshold override map.
+    :return: Per-document list of normalized predicted category ids.
+    """
+    if score_matrix.ndim != 2:
+        raise ValueError(f'score_matrix must be 2D, got shape={score_matrix.shape}')
+    if score_matrix.shape[1] != len(cat_list):
+        raise ValueError(
+            f'score_matrix columns ({score_matrix.shape[1]}) do not match cat_list ({len(cat_list)})'
+        )
+    thr_vec = _thresholds_vector(cat_list=cat_list, threshold=threshold, cat_to_thr=cat_to_thr)
+    keep = score_matrix >= thr_vec[np.newaxis, :]
+    cats = list(cat_list)
+    raw_cats = [[cats[int(k)] for k in np.where(keep[i])[0]] for i in range(score_matrix.shape[0])]
+    return normalize_pred_cats(pred_cats=raw_cats)
 
 
 def _is_decent_label(stats: Any) -> bool:

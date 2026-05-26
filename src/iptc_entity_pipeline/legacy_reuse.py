@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, Type
+from typing import Any, Iterator, Literal, Mapping, Sequence, Type
 
 import numpy as np
 import pandas as pd
@@ -584,6 +584,102 @@ def trainClassificationModel(
     )
 
 
+def predict_score_matrix(
+    *,
+    model: NeuralCategModel,
+    eval_data: Any,
+    batch_size: int | None = None,
+) -> np.ndarray:
+    """Return a dense ``(n_docs, n_classes)`` sigmoid score matrix.
+
+    Iterates over ``eval_data`` with the same ``DataLoader`` behavior as
+    :meth:`NeuralCategModel.classifyDataset`, applies ``Sigmoid`` to the
+    raw logits, and concatenates batches into a single ``float32`` array.
+    The column order is the model's ``catList``.
+
+    Used by :func:`evaluateModel` and by ``cross_validation`` so the
+    threshold-tuning path can slice and re-evaluate predictions without
+    materializing the ~3 GB Python list of ``(cat_id, score)`` tuples
+    that ``classifyDataset(returnScores=True)`` would otherwise produce
+    for a 20k-doc dev fold over ~1k classes.
+
+    :param model: Trained classification model.
+    :param eval_data: Dataset compatible with :class:`torch.utils.data.DataLoader`.
+    :param batch_size: Optional batch size override.
+    :return: Sigmoid probability matrix with shape ``(len(eval_data), len(model.catList))``.
+    """
+    from torch.utils.data import DataLoader
+
+    cat_count = len(model.catList) if model.catList is not None else 0
+    bs = int(batch_size) if batch_size is not None else int(model.DEFAULT_BATCH_SIZE)
+    collate_fn = getattr(eval_data, 'collate_fn', None)
+    sigmoid = nn.Sigmoid()
+    batches: list[np.ndarray] = []
+    model._nn.eval()
+    with torch.no_grad():
+        for batch in DataLoader(eval_data, batch_size=bs, collate_fn=collate_fn):
+            features = batch[0] if isinstance(batch, (tuple, list)) else batch
+            logits = model._nn(_batch_to_device(features, device=model._device))
+            probs = sigmoid(logits)
+            batches.append(probs.detach().cpu().numpy().astype(np.float32, copy=False))
+    if not batches:
+        return np.zeros((0, cat_count), dtype=np.float32)
+    return np.vstack(batches)
+
+
+def _iter_wgh_labels_rows(
+    score_matrix: np.ndarray,
+    cats: list[str],
+    thr: float,
+) -> Iterator[list[tuple[str, float]]]:
+    """Inner generator for :func:`wgh_labels_from_score_matrix`."""
+    for row in score_matrix:
+        idxs = np.where(row > thr)[0]
+        scored = [(cats[int(k)], float(row[int(k)])) for k in idxs]
+        scored.sort(key=lambda kv: kv[1], reverse=True)
+        yield scored
+
+
+def wgh_labels_from_score_matrix(
+    *,
+    score_matrix: np.ndarray,
+    cat_list: Sequence[str],
+    thr: float = -np.inf,
+) -> Iterator[list[tuple[str, float]]]:
+    """Yield the legacy ``list[tuple[cat, score]]`` view row-by-row.
+
+    Mirrors the per-row output of
+    :func:`geneea.catlib.vec.util.vecToScoredCats` (``score > thr`` strict
+    inequality, sorted by score descending) so callers that persist the
+    legacy format on disk (e.g. :func:`model_io.save_outputs`) keep
+    producing byte-compatible artifacts. The default ``thr=-inf`` matches
+    the historical ``EvaluationCnf.threshold_predict = -9999`` setting,
+    i.e. retain every ``(cat, score)`` tuple. This is a one-shot
+    conversion used only at the end of ``eval_final``; it is *not* used
+    inside the CV loop.
+
+    Implemented as a generator so callers that only need rows
+    sequentially (e.g. row-by-row serialization) never have to hold the
+    full ``list[list[tuple[cat, score]]]`` in memory. Callers that need
+    a concrete list should wrap with ``list(...)``. Shape validation is
+    eager (a wrapper around the inner generator).
+
+    :param score_matrix: Dense ``(n_docs, n_classes)`` score matrix
+        aligned with ``cat_list``.
+    :param cat_list: Category ids matching the matrix columns.
+    :param thr: Score threshold (strict ``>``), matching legacy behavior.
+    :return: Iterator of per-document WghLabels rows, sorted by score
+        descending.
+    """
+    if score_matrix.ndim != 2:
+        raise ValueError(f'score_matrix must be 2D, got shape={score_matrix.shape}')
+    if score_matrix.shape[1] != len(cat_list):
+        raise ValueError(
+            f'score_matrix columns ({score_matrix.shape[1]}) do not match cat_list ({len(cat_list)})'
+        )
+    return _iter_wgh_labels_rows(score_matrix, list(cat_list), float(thr))
+
+
 def evaluateModel(
     model: NeuralCategModel,
     evalData: EmbeddingDataset,
@@ -592,36 +688,58 @@ def evaluateModel(
     *,
     returnPredictions: bool = False,
     connect_config: bool = True,
-) -> tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, Any]:
+) -> tuple[pd.DataFrame, pd.DataFrame] | tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
     """
     Legacy evaluation entry point.
 
-    Delegates to :func:`evaluate.evaluate_predictions` for the actual metric
-    computation while preserving the original function signature.
+    Internally predicts a dense ``(n_docs, n_classes)`` sigmoid score
+    matrix once, then derives normalized per-doc category lists via
+    :func:`evaluate.pred_cats_from_matrix` and produces the per-corpus /
+    per-class metric tables. When ``returnPredictions=True`` the dense
+    matrix (columns aligned with ``model.catList``) is returned instead
+    of the previous Python ``list[list[tuple[cat, score]]]`` so callers
+    (notably CV threshold tuning) can slice and re-evaluate without
+    paying the ~30x Python-object overhead.
 
     :param model: Trained model.
     :param evalData: Evaluation dataset.
     :param evaluation_config: Typed evaluation settings.
     :param customThresholds: Optional per-label thresholds.
-    :param returnPredictions: Whether to also return raw prediction scores.
+    :param returnPredictions: Whether to also return the dense score matrix.
     :param connect_config: Register config with ClearML task (disable during CV).
-    :return: Corpora/class tables, optionally with raw prediction scores.
+    :return: Corpora/class tables, optionally with the dense score matrix.
     """
     from dataclasses import asdict
 
-    from iptc_entity_pipeline.evaluate import evaluate_predictions
+    from iptc_entity_pipeline.evaluate import (
+        evaluate_classes,
+        evaluate_corpora,
+        pred_cats_from_matrix,
+    )
 
     task = Task.current_task()
     if task is not None and connect_config:
         task.connect(asdict(evaluation_config), name='evaluationConfig')
 
-    predictions = model.classifyDataset(evalData, thr=evaluation_config.threshold_predict, returnScores=True)
-    df_corpora, df_classes = evaluate_predictions(
-        pred_wgh_cats=predictions,
-        eval_corpus=evalData.corpus,
-        evaluation_config=evaluation_config,
+    cat_list = list(model.catList) if model.catList is not None else list(evalData.corpus.catList)
+    score_matrix = predict_score_matrix(model=model, eval_data=evalData)
+    pred_cats = pred_cats_from_matrix(
+        score_matrix=score_matrix,
+        cat_list=cat_list,
+        threshold=evaluation_config.threshold_eval,
         cat_to_thr=customThresholds,
     )
+    df_corpora = evaluate_corpora(
+        pred_cats=pred_cats,
+        eval_corpus=evalData.corpus,
+        per_corpus=evaluation_config.per_corpus,
+        averaging_type=evaluation_config.averaging_type,
+    )
+    df_classes = evaluate_classes(
+        pred_cats=pred_cats,
+        eval_corpus=evalData.corpus,
+        per_class=evaluation_config.per_class,
+    )
     if returnPredictions:
-        return df_corpora, df_classes, predictions
+        return df_corpora, df_classes, score_matrix
     return df_corpora, df_classes
