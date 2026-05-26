@@ -184,18 +184,103 @@ def merge_datasets(*, left_data: Any, right_data: Any) -> Any:
     return build_emb_data(corpus=merged_corpus, x_matrix=merged_x)
 
 
+class EmbeddingSubset(Dataset):
+    """Lightweight view of an :class:`EmbeddingDataset` by positional indices.
+
+    Stores a reference to the base ``X``/``Y`` tensors and an ``int64``
+    index tensor, so per-fold CV splits don't pay the full ``X``/``Y``
+    copy cost of the previous numpy round-trip implementation.
+
+    Attributes ``X`` and ``Y`` are exposed as lazy cached properties: the
+    materialized slice is only built on first attribute access (e.g. for
+    a stratified OOF split), and never built at all when the dataset is
+    only consumed via ``__getitem__``/``DataLoader`` and ``.corpus``.
+
+    Re-slicing an :class:`EmbeddingSubset` composes indices against the
+    original base tensors instead of chaining views.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_x: torch.Tensor,
+        base_y: torch.Tensor,
+        base_corpus: Any,
+        indices: torch.Tensor,
+        corpus: Any,
+    ) -> None:
+        self._base_x = base_x
+        self._base_y = base_y
+        self._base_corpus = base_corpus
+        self._indices = indices
+        self.corpus = corpus
+        self._x_cache: torch.Tensor | None = None
+        self._y_cache: torch.Tensor | None = None
+
+    def __len__(self) -> int:
+        return int(self._indices.shape[0])
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        base_idx = int(self._indices[idx])
+        return self._base_x[base_idx], self._base_y[base_idx]
+
+    @property
+    def X(self) -> torch.Tensor:
+        if self._x_cache is None:
+            self._x_cache = self._base_x.index_select(0, self._indices)
+        return self._x_cache
+
+    @property
+    def Y(self) -> torch.Tensor:
+        if self._y_cache is None:
+            self._y_cache = self._base_y.index_select(0, self._indices)
+        return self._y_cache
+
+    @property
+    def catList(self) -> list[str]:
+        return self.corpus.catList
+
+    @property
+    def catCnt(self) -> int:
+        return self.corpus.catCnt
+
+
+def _subset_corpus(*, base_corpus: Any, indices: Sequence[int]) -> Corpus:
+    """Build a sub-corpus that preserves the parent ``catList``/``catToIdx``.
+
+    The new ``Corpus`` instance only references the selected ``Doc``
+    objects (no document copy); the category mapping is forced to the
+    parent's so that ``catCnt`` matches the unchanged ``Y`` column count.
+    """
+    docs = list(base_corpus)
+    selected_docs = [docs[int(idx)] for idx in indices]
+    new_corpus = Corpus(doc for doc in selected_docs)
+    if hasattr(base_corpus, 'catList'):
+        new_corpus.catList = list(base_corpus.catList)
+        new_corpus.catToIdx = {c: i for i, c in enumerate(new_corpus.catList)}
+    return new_corpus
+
+
 def slice_dataset(*, dataset: Any, indices: Sequence[int]) -> Any:
-    """Return dataset subset by explicit positional indices."""
+    """Return a dataset view selecting only rows at ``indices``.
+
+    The ``X``/``Y`` tensors are shared with the base dataset; only a
+    sub-corpus (referencing the same ``Doc`` objects) and an index
+    tensor are allocated. ``index_select`` is invoked lazily and only
+    when callers explicitly access ``.X`` or ``.Y``.
+
+    :param dataset: Source dataset, either an :class:`EmbeddingDataset`,
+        a :class:`RaggedEmbeddingDataset`, or an :class:`EmbeddingSubset`.
+    :param indices: Positional row indices to select.
+    :return: View dataset preserving the source's catList ordering.
+    """
+    idx_tensor = torch.as_tensor(indices, dtype=torch.long)
+
     if isinstance(dataset, RaggedEmbeddingDataset):
-        docs = list(dataset.corpus)
-        selected_docs = [docs[idx] for idx in indices]
-        selected_corpus = Corpus(doc for doc in selected_docs)
-        if hasattr(dataset.corpus, 'catList'):
-            setattr(selected_corpus, 'catList', list(dataset.corpus.catList))
-        idx_tensor = torch.as_tensor(indices, dtype=torch.long)
+        selected_corpus = _subset_corpus(base_corpus=dataset.corpus, indices=indices)
         selected_article = dataset.X.index_select(0, idx_tensor)
         selected_labels = dataset.Y.index_select(0, idx_tensor)
-        selected_entities = tuple(dataset.entity_X[idx] for idx in indices)
+        selected_entities = tuple(dataset.entity_X[int(i)] for i in indices)
         return RaggedEmbeddingDataset(
             corpus=selected_corpus,
             article_x=selected_article,
@@ -203,20 +288,28 @@ def slice_dataset(*, dataset: Any, indices: Sequence[int]) -> Any:
             y=selected_labels,
         )
 
-    docs = list(dataset.corpus)
-    x_matrix = to_numpy_array(matrix_like=dataset.X)
-    selected_docs = [docs[idx] for idx in indices]
-    selected_x = x_matrix[np.asarray(indices, dtype=np.int64)]
-    selected_corpus = Corpus(doc for doc in selected_docs)
-    if hasattr(dataset, 'Y'):
-        y_matrix = to_numpy_array(matrix_like=dataset.Y)
-        selected_y = y_matrix[np.asarray(indices, dtype=np.int64)]
-        cat_list = list(dataset.corpus.catList) if hasattr(dataset.corpus, 'catList') else None
-        return _build_dataset_with_targets(
+    if isinstance(dataset, EmbeddingSubset):
+        composed = dataset._indices.index_select(0, idx_tensor)
+        selected_corpus = _subset_corpus(base_corpus=dataset._base_corpus, indices=composed.tolist())
+        return EmbeddingSubset(
+            base_x=dataset._base_x,
+            base_y=dataset._base_y,
+            base_corpus=dataset._base_corpus,
+            indices=composed,
             corpus=selected_corpus,
-            x_matrix=selected_x,
-            y_matrix=selected_y,
-            cat_list=cat_list,
         )
-    return build_emb_data(corpus=selected_corpus, x_matrix=selected_x)
+
+    base_x = dataset.X if isinstance(dataset.X, torch.Tensor) else torch.as_tensor(dataset.X, dtype=torch.float32)
+    if hasattr(dataset, 'Y'):
+        base_y = dataset.Y if isinstance(dataset.Y, torch.Tensor) else torch.as_tensor(dataset.Y, dtype=torch.float32)
+    else:
+        raise ValueError('slice_dataset requires the source dataset to expose a Y tensor')
+    selected_corpus = _subset_corpus(base_corpus=dataset.corpus, indices=indices)
+    return EmbeddingSubset(
+        base_x=base_x,
+        base_y=base_y,
+        base_corpus=dataset.corpus,
+        indices=idx_tensor,
+        corpus=selected_corpus,
+    )
 

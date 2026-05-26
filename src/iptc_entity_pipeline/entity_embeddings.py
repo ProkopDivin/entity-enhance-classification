@@ -192,3 +192,29 @@ class EntityEmbeddingStore:
             )
         return np.asarray(self._train_mean, dtype=np.float32)
 
+    def clear_cache(self) -> None:
+        """
+        Drop per-entity vector cache and path index to free memory.
+
+        Once the dense feature matrices have been built, the in-memory
+        caches accumulated by :meth:`get_entity_embedding` and
+        :meth:`_ensure_index` are dead weight for any downstream step
+        running in the same process (e.g. ``run_cv`` under
+        ``PipelineDecorator.run_locally()``). The store can still be
+        re-used afterwards; the next request will rebuild the index.
+
+        :return: ``None``. ``_train_mean`` is preserved.
+        """
+        cached_vectors = len(self._cache)
+        indexed_entities = len(self._wdid_lang_to_paths)
+        self._cache = {}
+        self._wdid_lang_to_paths = {}
+        self._sample_path = None
+        self._indexed_file_count = 0
+        self._index_built = False
+        LOGGER.info(
+            'Cleared EntityEmbeddingStore cache: dropped_vectors=%s indexed_entities=%s',
+            cached_vectors,
+            indexed_entities,
+        )
+
