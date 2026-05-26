@@ -84,7 +84,11 @@ class TrainingCnf:
     early_stopping_min_delta: float = 0.000000001 # because of small classes the improvement can be very small
     # because the validation set is different than test set - not splited chronologically 
     # we do not want to overfit it - not expecting all the articles be the same
-    early_stopping_metric: Literal['loss', 'f1'] = 'loss'  
+    early_stopping_metric: Literal['loss', 'f1'] = 'loss'
+    # If False, skip the extra forward pass over the full training set each epoch (dev
+    # validation unchanged). Saves wall time and avoids holding large per-batch logits
+    # during that pass; per-epoch train curves in ClearML stay empty.
+    train_validation: bool = True
 
 
 @dataclass(frozen=True)
@@ -133,8 +137,8 @@ class OptunaCnf:
 
     sampler: Literal['grid', 'tpe', 'random'] = 'grid'
     direction: str = 'maximize'
-    n_trials: int = 30
-    pruner: str = 'median'
+    n_trials: int = 0
+    pruner: str = 'none'
     startup_trials: int = 5
     warmup_steps: int = 2
 
@@ -186,7 +190,7 @@ class BaseCnf:
     # DataLoader shuffling (re-seeded with a fold-derived offset).
     random_seed: int = 43
     print_logs: bool = True
-    upload_artifacts: bool = True
+    upload_artifacts: bool = False
     debug: bool = True
 
 
@@ -270,6 +274,9 @@ class BaseCnfWithHPO(PreBaseCnfWithHPO):
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
     
+    train: TrainingCnf = field(
+        default_factory=lambda: replace(TrainingCnf(), train_validation=True)
+    )
 
 
 @dataclass(frozen=True)
@@ -1447,9 +1454,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_prior': WpEntitiesPriorCnf(),
         'wpentities_tuned': WpEntitiesTunedCnf(),
         
-        
         'wp_entity_only': EntityOnlyCnf(),
-        'wv_entity_only': W2VEntityOnlyCnf(),
         'wikipedia2vec_entity_only': Wikipedia2VecEntityOnlyCnf(),
         'wikidata_description_entity_only': WikidataDescriptionEntityOnlyCnf(),
         'wikipedia_intro_entity_only': WikipediaIntroEntityOnlyCnf(),

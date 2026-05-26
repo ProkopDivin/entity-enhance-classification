@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 from dataclasses import asdict, dataclass, replace
@@ -42,6 +43,28 @@ if TYPE_CHECKING:
     from geneea.catlib.vec.dataset import EmbeddingDataset
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _is_better_score(*, candidate: float, best: float, direction: str) -> bool:
+    '''Return whether ``candidate`` improves on ``best`` for Optuna direction.'''
+    if direction == 'maximize':
+        return candidate > best
+    if direction == 'minimize':
+        return candidate < best
+    raise ValueError(f'Unsupported Optuna direction: {direction}')
+
+
+def _release_training_memory(*, model: Any) -> None:
+    '''Drop a trained model and encourage freeing GPU/CPU memory between CV folds.'''
+    del model
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +116,7 @@ class ProgressCounter:
 
 
 @dataclass(frozen=True)
-class CombinationResult:
+class TrialResult:
     """Aggregated outputs for one hyperparameter combination across all folds."""
 
     trial_row: dict[str, Any]
@@ -111,7 +134,7 @@ class CombinationResult:
 class SearchOutcome:
     """Best-trial selection plus accumulated rows from all Optuna trials."""
 
-    best: CombinationResult
+    best: TrialResult
     trial_rows: list[dict[str, Any]]
     fold_rows: list[dict[str, Any]]
 
@@ -338,7 +361,6 @@ class CV:
 
         # Fit-time state (populated by fit(), used across private methods)
         self._train_data: EmbeddingDataset | None = None
-        self._x_full: np.ndarray | None = None
         self._y_full: np.ndarray | None = None
         self._feature_dim: int = 0
         self._print_logs: bool = True
@@ -387,9 +409,9 @@ class CV:
         self._feature_dim = feature_dim
         self._print_logs = print_logs
         self._clearml_logger = clearml_logger
-        self._x_full, self._y_full = self._prepare_data()
+        self._y_full = self._prepare_labels()
         LOGGER.info(
-            f'CV data prepared: x_shape={self._x_full.shape}, '
+            f'CV data prepared: n_samples={self._y_full.shape[0]}, '
             f'y_shape={self._y_full.shape}, feature_dim={feature_dim}'
         )
 
@@ -454,15 +476,11 @@ class CV:
     # Data preparation
     # ------------------------------------------------------------------
 
-    def _prepare_data(self) -> tuple[np.ndarray, np.ndarray]:
-        """Extract X/Y NumPy arrays for stratified split planning."""
-        x_full = to_numpy_array(matrix_like=self._train_data.X)
-        y_full = (
-            to_numpy_array(matrix_like=self._train_data.Y)
-            if hasattr(self._train_data, 'Y')
-            else build_multilabel_targets(corpus=self._train_data.corpus)
-        )
-        return x_full, y_full
+    def _prepare_labels(self) -> np.ndarray:
+        """Extract label matrix for stratified CV splits (no embedding copy)."""
+        if hasattr(self._train_data, 'Y'):
+            return to_numpy_array(matrix_like=self._train_data.Y)
+        return build_multilabel_targets(corpus=self._train_data.corpus)
 
     # ------------------------------------------------------------------
     # Optuna infrastructure
@@ -611,8 +629,7 @@ class CV:
         x_dummy = np.zeros((int(y_val.shape[0]), 1), dtype=np.float32)
         idx_a, idx_b = next(splitter.split(x_dummy, y_val))
         return np.asarray(idx_a, dtype=np.int64), np.asarray(idx_b, dtype=np.int64)
-
-
+        
     def _evaluate_fold(
         self,
         *,
@@ -638,10 +655,11 @@ class CV:
             print_logs=self._print_logs,
             connect_config=False,
         )
+        model = train_result.model
 
         custom_thresholds = dict(self._eval_thresholds) if self._eval_thresholds else None
         df_corpora_fold, df_classes_fold, pred_scores = evaluateModel(
-            model=train_result.model,
+            model=model,
             evalData=val_data,
             evaluation_config=self._eval_cnf,
             customThresholds=custom_thresholds,
@@ -665,14 +683,16 @@ class CV:
                 eval_corpus=val_data_a.corpus,
                 tuning_cfg=self._tuning_cnf,
             )
+            del pred_scores_a
             thresholds_b = tune_thresholds(
                 pred_wgh_cats=pred_scores_b,
                 eval_corpus=val_data_b.corpus,
                 tuning_cfg=self._tuning_cnf,
             )
+            del pred_scores_b
 
             df_corpora_b, df_classes_b = evaluateModel(
-                model=train_result.model,
+                model=model,
                 evalData=val_data_b,
                 evaluation_config=self._eval_cnf,
                 customThresholds=thresholds_a,
@@ -680,7 +700,7 @@ class CV:
                 returnPredictions=False,
             )
             df_corpora_a, df_classes_a = evaluateModel(
-                model=train_result.model,
+                model=model,
                 evalData=val_data_a,
                 evaluation_config=self._eval_cnf,
                 customThresholds=thresholds_b,
@@ -689,8 +709,8 @@ class CV:
             )
             df_corpora_fold = _mean_eval_tables(first_df=df_corpora_a, second_df=df_corpora_b)
             df_classes_fold = _mean_eval_tables(first_df=df_classes_a, second_df=df_classes_b)
-            
-            # retune the tresholds - more data for tuning = more stability 
+
+            # retune the tresholds - more data for tuning = more stability
             fold_thresholds = tune_thresholds(
                 pred_wgh_cats=pred_scores,
                 eval_corpus=val_data.corpus,
@@ -714,6 +734,7 @@ class CV:
             train_f1_macro_relevant_per_epoch=train_result.train_f1_macro_relevant_per_epoch,
             dev_f1_macro_relevant_per_epoch=train_result.dev_f1_macro_relevant_per_epoch,
         )
+        _release_training_memory(model=model)
         return FoldEvalOutput(
             objective_row=objective_row,
             macro_relevant_row=macro_relevant_row,
@@ -736,7 +757,7 @@ class CV:
         model_config: ModelCnf,
         training_config: TrainingCnf,
         trial: Any = None,
-    ) -> CombinationResult:
+    ) -> TrialResult:
         """Run k-fold CV for one hyperparameter combination.
 
         :param trial: Optuna trial for per-fold intermediate reporting and pruning.
@@ -758,9 +779,10 @@ class CV:
         fold_corpora_dfs: list[pd.DataFrame] = []
         fold_classes_dfs: list[pd.DataFrame] = []
         pruned = False
+        x_dummy = np.zeros((int(self._y_full.shape[0]), 1), dtype=np.float32)
 
         for fold_idx, (fit_indices, val_indices) in enumerate(
-            cv_splitter.split(self._x_full, self._y_full), start=1,
+            cv_splitter.split(x_dummy, self._y_full), start=1,
         ):
             fit_data = slice_dataset(dataset=self._train_data, indices=fit_indices.tolist())
             val_data = slice_dataset(dataset=self._train_data, indices=val_indices.tolist())
@@ -811,7 +833,7 @@ class CV:
             params_json=params_json,
             fold_metrics=fold_metrics_list,
         )
-        return CombinationResult(
+        return TrialResult(
             trial_row=trial_row,
             fold_metrics=tuple(fold_metrics_list),
             fold_curves=tuple(fold_curves),
@@ -855,15 +877,18 @@ class CV:
         self._progress = ProgressCounter()
         trial_rows: list[dict[str, Any]] = []
         fold_rows: list[dict[str, Any]] = []
-        trial_results: dict[int, CombinationResult] = {}
+        best_trial_result: TrialResult | None = None
+        best_trial_score: float | None = None
+        direction = self._optuna_cnf.direction
 
         study = optuna.create_study(
-            direction=self._optuna_cnf.direction,
+            direction=direction,
             sampler=self._build_sampler(optuna_module=optuna),
             pruner=self._build_pruner(optuna_module=optuna),
         )
 
         def objective(trial: Any) -> float:
+            nonlocal best_trial_result, best_trial_score
             combo_model_cfg, combo_train_cfg = self._build_configs_from_trial(trial=trial)
             combo_result = self._run_combination(
                 combo_idx=trial.number + 1,
@@ -873,18 +898,30 @@ class CV:
             )
             trial_rows.append(combo_result.trial_row)
             fold_rows.extend(fm.to_row() for fm in combo_result.fold_metrics)
-            trial_results[trial.number] = combo_result
+            objective_value = float(combo_result.trial_row[f'{self._selection_metric}_mean'])
+            if (
+                best_trial_result is None
+                or _is_better_score(candidate=objective_value, best=best_trial_score, direction=direction)
+            ):
+                best_trial_result = combo_result
+                best_trial_score = objective_value
             if combo_result.pruned:
                 raise optuna.TrialPruned()
-            return float(combo_result.trial_row[f'{self._selection_metric}_mean'])
+            return objective_value
 
         study.optimize(func=objective, n_trials=self._n_trials)
 
-        if study.best_trial.number not in trial_results:
+        if best_trial_result is None:
             raise ValueError('No CV trial results were produced.')
+        if study.best_trial.number + 1 != best_trial_result.trial_row['trial_id']:
+            LOGGER.warning(
+                'CV best-trial id mismatch between Optuna and retained heavy result: '
+                f'optuna_trial={study.best_trial.number + 1}, '
+                f'retained_trial_id={best_trial_result.trial_row["trial_id"]}'
+            )
 
         return SearchOutcome(
-            best=trial_results[study.best_trial.number],
+            best=best_trial_result,
             trial_rows=trial_rows,
             fold_rows=fold_rows,
         )
