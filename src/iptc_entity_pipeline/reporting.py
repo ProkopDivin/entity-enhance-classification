@@ -272,60 +272,66 @@ def report_cv_fold(
 
     for fold_curve in fold_curves:
         iteration = fold_curve.fold_id
-        logger.report_scatter2d(
-            title='Cross Validation Fold Loss',
-            series=f'train fold {fold_curve.fold_id}',
-            iteration=iteration,
-            scatter=_scatter_xy(fold_curve.train_loss_per_epoch),
-            xaxis='epoch',
-            yaxis='loss',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='Cross Validation Fold Loss',
-            series=f'dev fold {fold_curve.fold_id}',
-            iteration=iteration,
-            scatter=_scatter_xy(fold_curve.dev_loss_per_epoch),
-            xaxis='epoch',
-            yaxis='loss',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='Cross Validation Fold F1_micro',
-            series=f'train fold {fold_curve.fold_id}',
-            iteration=iteration,
-            scatter=_scatter_xy(fold_curve.train_f1_micro_per_epoch),
-            xaxis='epoch',
-            yaxis='f1',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='Cross Validation Fold F1_micro',
-            series=f'dev fold {fold_curve.fold_id}',
-            iteration=iteration,
-            scatter=_scatter_xy(fold_curve.dev_f1_micro_per_epoch),
-            xaxis='epoch',
-            yaxis='f1',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='Cross Validation Fold F1_macro_relevant',
-            series=f'train fold {fold_curve.fold_id}',
-            iteration=iteration,
-            scatter=_scatter_xy(fold_curve.train_f1_macro_relevant_per_epoch),
-            xaxis='epoch',
-            yaxis='f1',
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title='Cross Validation Fold F1_macro_relevant',
-            series=f'dev fold {fold_curve.fold_id}',
-            iteration=iteration,
-            scatter=_scatter_xy(fold_curve.dev_f1_macro_relevant_per_epoch),
-            xaxis='epoch',
-            yaxis='f1',
-            mode='lines+markers',
-        )
+        if fold_curve.train_loss_per_epoch:
+            logger.report_scatter2d(
+                title='Cross Validation Fold Loss',
+                series=f'train fold {fold_curve.fold_id}',
+                iteration=iteration,
+                scatter=_scatter_xy(fold_curve.train_loss_per_epoch),
+                xaxis='epoch',
+                yaxis='loss',
+                mode='lines+markers',
+            )
+        if fold_curve.dev_loss_per_epoch:
+            logger.report_scatter2d(
+                title='Cross Validation Fold Loss',
+                series=f'dev fold {fold_curve.fold_id}',
+                iteration=iteration,
+                scatter=_scatter_xy(fold_curve.dev_loss_per_epoch),
+                xaxis='epoch',
+                yaxis='loss',
+                mode='lines+markers',
+            )
+        if fold_curve.train_f1_micro_per_epoch:
+            logger.report_scatter2d(
+                title='Cross Validation Fold F1_micro',
+                series=f'train fold {fold_curve.fold_id}',
+                iteration=iteration,
+                scatter=_scatter_xy(fold_curve.train_f1_micro_per_epoch),
+                xaxis='epoch',
+                yaxis='f1',
+                mode='lines+markers',
+            )
+        if fold_curve.dev_f1_micro_per_epoch:
+            logger.report_scatter2d(
+                title='Cross Validation Fold F1_micro',
+                series=f'dev fold {fold_curve.fold_id}',
+                iteration=iteration,
+                scatter=_scatter_xy(fold_curve.dev_f1_micro_per_epoch),
+                xaxis='epoch',
+                yaxis='f1',
+                mode='lines+markers',
+            )
+        if fold_curve.train_f1_macro_relevant_per_epoch:
+            logger.report_scatter2d(
+                title='Cross Validation Fold F1_macro_relevant',
+                series=f'train fold {fold_curve.fold_id}',
+                iteration=iteration,
+                scatter=_scatter_xy(fold_curve.train_f1_macro_relevant_per_epoch),
+                xaxis='epoch',
+                yaxis='f1',
+                mode='lines+markers',
+            )
+        if fold_curve.dev_f1_macro_relevant_per_epoch:
+            logger.report_scatter2d(
+                title='Cross Validation Fold F1_macro_relevant',
+                series=f'dev fold {fold_curve.fold_id}',
+                iteration=iteration,
+                scatter=_scatter_xy(fold_curve.dev_f1_macro_relevant_per_epoch),
+                xaxis='epoch',
+                yaxis='f1',
+                mode='lines+markers',
+            )
 
 
 def report_test_curve(*, logger: Any, result: TrainingResult, dev_series: str = 'test') -> None:
@@ -352,24 +358,26 @@ def report_test_curve(*, logger: Any, result: TrainingResult, dev_series: str = 
     for chart in charts:
         if not chart.train_curve and not chart.dev_curve:
             continue
-        logger.report_scatter2d(
-            title=chart.title,
-            series='train',
-            iteration=0,
-            scatter=_scatter_xy(chart.train_curve),
-            xaxis='epoch',
-            yaxis=chart.yaxis,
-            mode='lines+markers',
-        )
-        logger.report_scatter2d(
-            title=chart.title,
-            series=dev_series,
-            iteration=0,
-            scatter=_scatter_xy(chart.dev_curve),
-            xaxis='epoch',
-            yaxis=chart.yaxis,
-            mode='lines+markers',
-        )
+        if chart.train_curve:
+            logger.report_scatter2d(
+                title=chart.title,
+                series='train',
+                iteration=0,
+                scatter=_scatter_xy(chart.train_curve),
+                xaxis='epoch',
+                yaxis=chart.yaxis,
+                mode='lines+markers',
+            )
+        if chart.dev_curve:
+            logger.report_scatter2d(
+                title=chart.title,
+                series=dev_series,
+                iteration=0,
+                scatter=_scatter_xy(chart.dev_curve),
+                xaxis='epoch',
+                yaxis=chart.yaxis,
+                mode='lines+markers',
+            )
 
 
 def report_test_eval_scalars(

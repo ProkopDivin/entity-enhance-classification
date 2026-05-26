@@ -391,7 +391,9 @@ def trainClassificationModel(
     :param model: Model to train.
     :param trainData: Training dataset.
     :param devData: Development dataset.
-    :param trainingConfig: Training configuration.
+    :param trainingConfig: Training configuration. May include
+        ``trainValidation`` (default True); set False to skip
+        the per-epoch full training-set validation pass and train-only ClearML scalars.
     :param logConfig: Logging configuration.
     :param connect_config: Register config with ClearML task (disable during CV).
     :return: Typed training result with model, loss, and per-epoch curves.
@@ -404,6 +406,7 @@ def trainClassificationModel(
         task.connect(trainingConfig, name='trainingConfig')
 
     validation_split_name = str(trainingConfig.get('validationSplitName', 'dev')).strip().lower() or 'dev'
+    train_validation = bool(trainingConfig.get('trainValidation', True))
     validation_title = validation_split_name.capitalize()
 
     opt_factory, lr = _parse_optimizer(trainingConfig['optimizerConfig'])
@@ -519,29 +522,33 @@ def trainClassificationModel(
 
         _log_elapsed(logger=clearml_logger, label='time done', started_at=last_time, print_logs=print_logs)
 
-        last_time = time.time()
-        train_prec, train_rec, train_loss, train_macro_relevant_f1 = _validate_split(
-            model=model,
-            dataloader=train_loader,
-            loss_fn=loss_fn,
-            relevant_indices=relevant_indices,
-        )
-        _log_elapsed(logger=clearml_logger, label='time train validation done', started_at=last_time, print_logs=print_logs)
+        if train_validation:
+            last_time = time.time()
+            train_prec, train_rec, train_loss, train_macro_relevant_f1 = _validate_split(
+                model=model,
+                dataloader=train_loader,
+                loss_fn=loss_fn,
+                relevant_indices=relevant_indices,
+            )
+            _log_elapsed(
+                logger=clearml_logger, label='time train validation done', started_at=last_time,
+                print_logs=print_logs,
+            )
 
-        last_time = time.time()
-        train_stats.precision.append(train_prec)
-        train_stats.recall.append(train_rec)
-        train_stats.loss.append(train_loss)
-        train_stats.macro_relevant_f1.append(train_macro_relevant_f1)
-        _report_stats_scalars(
-            logger=clearml_logger,
-            title='Train Training Stats',
-            precision=train_prec,
-            recall=train_rec,
-            loss=train_loss,
-            iteration=epoch,
-            macro_relevant_f1=train_macro_relevant_f1,
-        )
+            last_time = time.time()
+            train_stats.precision.append(train_prec)
+            train_stats.recall.append(train_rec)
+            train_stats.loss.append(train_loss)
+            train_stats.macro_relevant_f1.append(train_macro_relevant_f1)
+            _report_stats_scalars(
+                logger=clearml_logger,
+                title='Train Training Stats',
+                precision=train_prec,
+                recall=train_rec,
+                loss=train_loss,
+                iteration=epoch,
+                macro_relevant_f1=train_macro_relevant_f1,
+            )
 
         if es_patience > 0 and epochs_without_improvement >= es_patience:
             clearml_logger.report_text(
