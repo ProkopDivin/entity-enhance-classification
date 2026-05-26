@@ -240,6 +240,7 @@ def build_dataset(
             entity_matrices=test_ragged.entity_matrices,
         )
         feature_dim = int(train_ragged.article_matrix.shape[1])
+        entity_store.clear_cache()
         return train_data, test_data, feature_dim
 
     logger.info('Building linked features for train corpus (%s articles)', len(corpora.train))
@@ -259,6 +260,7 @@ def build_dataset(
     train_data = build_emb_data(corpus=corpora.train, x_matrix=x_train)
     test_data = build_emb_data(corpus=corpora.test, x_matrix=x_test)
     feature_dim = int(x_train.shape[1])
+    entity_store.clear_cache()
     return train_data, test_data, feature_dim
 
 

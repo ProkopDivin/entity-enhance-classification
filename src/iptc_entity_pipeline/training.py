@@ -151,10 +151,12 @@ def train_model(
 
     log_config = {'PRINT_LOGS': print_logs}
 
-    if hasattr(train_data, 'Y'):
+    if hasattr(train_data, 'corpus') and hasattr(train_data.corpus, 'catCnt'):
+        out_dim = int(train_data.corpus.catCnt)
+    elif hasattr(train_data, 'Y'):
         out_dim = int(to_numpy_array(matrix_like=train_data.Y).shape[1])
     else:
-        out_dim = int(train_data.corpus.catCnt)
+        raise ValueError('Cannot infer output dim: train_data has neither a corpus.catCnt nor a Y attribute.')
     is_ragged = isinstance(train_data, RaggedEmbeddingDataset)
     requested_nn = str(getattr(model_config, 'nn_type', 'mlp')).strip().lower() or 'mlp'
     nn_type = requested_nn
