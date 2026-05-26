@@ -29,10 +29,15 @@ from dataclasses import dataclass
 from statistics import mean, median, mode, pstdev
 from typing import Any, Mapping, Sequence
 
+import numpy as np
 import pandas as pd
 
 from iptc_entity_pipeline.config import ThresholdTuningCnf
-from iptc_entity_pipeline.evaluate import filter_and_normalize, get_cat_name
+from iptc_entity_pipeline.evaluate import (
+    filter_and_normalize,
+    get_cat_name,
+    normalize_pred_cats,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -129,6 +134,79 @@ def tune_thresholds(
         raise ValueError('tuning_cfg.thresholds must not be empty')
     thr_stats = eval_at_thresholds(
         pred_wgh_cats=pred_wgh_cats,
+        eval_corpus=eval_corpus,
+        thresholds=tuning_cfg.thresholds,
+    )
+    cat_to_best = select_thresholds_by_f1(thr_stats=thr_stats, f_beta=tuning_cfg.f_beta)
+    return {cat: float(thr) for cat, (thr, _) in cat_to_best.items()}
+
+
+def eval_at_thresholds_dense(
+    *,
+    score_matrix: np.ndarray,
+    cat_list: Sequence[str],
+    eval_corpus: Any,
+    thresholds: Sequence[float],
+) -> dict[float, dict[str, Any]]:
+    """Dense-matrix counterpart of :func:`eval_at_thresholds`.
+
+    Avoids the ~30x Python-object overhead of the
+    ``list[list[tuple[cat, score]]]`` representation. For each candidate
+    threshold ``t`` a boolean ``(n_docs, n_classes)`` mask is built and
+    converted to per-doc category lists with the standard IPTC
+    normalization, then per-class stats are computed via
+    ``evalutil.multiStats``.
+
+    :param score_matrix: Dense ``(n_docs, n_classes)`` score matrix.
+    :param cat_list: Category ids matching the matrix columns.
+    :param eval_corpus: Corpus with gold labels.
+    :param thresholds: Threshold grid.
+    :return: Mapping ``threshold -> {category_id -> ClassData}``.
+    """
+    from geneea.evaluation import utils as evalutil
+
+    if score_matrix.ndim != 2:
+        raise ValueError(f'score_matrix must be 2D, got shape={score_matrix.shape}')
+    if score_matrix.shape[1] != len(cat_list):
+        raise ValueError(
+            f'score_matrix columns ({score_matrix.shape[1]}) do not match cat_list ({len(cat_list)})'
+        )
+    gold_vals = [doc.cats for doc in eval_corpus]
+    cats = list(cat_list)
+    thr_to_class_stats: dict[float, dict[str, Any]] = {}
+    for thr in thresholds:
+        keep = score_matrix >= float(thr)
+        raw_cats = [[cats[int(k)] for k in np.where(keep[i])[0]] for i in range(score_matrix.shape[0])]
+        pred_cats = normalize_pred_cats(pred_cats=raw_cats)
+        _, _, class_stats = evalutil.multiStats(goldVals=gold_vals, predVals=pred_cats)
+        thr_to_class_stats[float(thr)] = dict(class_stats)
+    return thr_to_class_stats
+
+
+def tune_thresholds_dense(
+    *,
+    score_matrix: np.ndarray,
+    cat_list: Sequence[str],
+    eval_corpus: Any,
+    tuning_cfg: ThresholdTuningCnf,
+) -> dict[str, float]:
+    """Dense-matrix counterpart of :func:`tune_thresholds`.
+
+    Picks the F-beta-maximizing threshold per class from a dense score
+    matrix. Equivalent to running :func:`tune_thresholds` on the matching
+    ``WghLabels`` view but ~30x cheaper in RAM for typical dev folds.
+
+    :param score_matrix: Dense ``(n_docs, n_classes)`` score matrix.
+    :param cat_list: Category ids matching the matrix columns.
+    :param eval_corpus: Dev/val corpus with gold labels.
+    :param tuning_cfg: Threshold tuning configuration (grid + beta).
+    :return: Mapping ``class -> selected_threshold``.
+    """
+    if not tuning_cfg.thresholds:
+        raise ValueError('tuning_cfg.thresholds must not be empty')
+    thr_stats = eval_at_thresholds_dense(
+        score_matrix=score_matrix,
+        cat_list=cat_list,
         eval_corpus=eval_corpus,
         thresholds=tuning_cfg.thresholds,
     )

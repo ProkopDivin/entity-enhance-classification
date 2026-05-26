@@ -31,7 +31,7 @@ from iptc_entity_pipeline.seeding import fold_seed, set_global_seed
 from iptc_entity_pipeline.threshold_tuning import (
     ThresholdTuningResult,
     aggregate_fold_thresholds,
-    tune_thresholds,
+    tune_thresholds_dense,
 )
 from iptc_entity_pipeline.training import (
     CvFoldCurves,
@@ -272,8 +272,15 @@ def _mean_eval_tables(*, first_df: pd.DataFrame, second_df: pd.DataFrame) -> pd.
     return out_df
 
 
-def _subset_predictions(*, pred_scores: Sequence[Any], indices: Sequence[int]) -> list[Any]:
-    """Select prediction-score rows by positional indices."""
+def _subset_predictions(*, pred_scores: Any, indices: Sequence[int]) -> Any:
+    """Select prediction rows by positional indices.
+
+    Supports both the dense ``np.ndarray`` produced by the current
+    matrix-based evaluation path and the legacy ``list[list[...]]``
+    representation (kept for any out-of-tree callers).
+    """
+    if isinstance(pred_scores, np.ndarray):
+        return pred_scores[np.asarray(indices, dtype=np.int64)]
     return [pred_scores[int(idx)] for idx in indices]
 
 
@@ -671,6 +678,7 @@ class CV:
             # it is this complicated to avoid data leakege - do not want to tune on the same data as we evaluate on
             if custom_thresholds:
                 raise ValueError('custom tresholds would be overridden by threshold tuning, do not provide custom thresholds or disable threshold tuning')
+            cat_list = list(model.catList)
             idx_a, idx_b = self._split_oof_indices(val_data=val_data, fold_idx=fold_idx)
             val_data_a = slice_dataset(dataset=val_data, indices=idx_a.tolist())
             val_data_b = slice_dataset(dataset=val_data, indices=idx_b.tolist())
@@ -678,14 +686,16 @@ class CV:
             pred_scores_a = _subset_predictions(pred_scores=pred_scores, indices=idx_a.tolist())
             pred_scores_b = _subset_predictions(pred_scores=pred_scores, indices=idx_b.tolist())
 
-            thresholds_a = tune_thresholds(
-                pred_wgh_cats=pred_scores_a,
+            thresholds_a = tune_thresholds_dense(
+                score_matrix=pred_scores_a,
+                cat_list=cat_list,
                 eval_corpus=val_data_a.corpus,
                 tuning_cfg=self._tuning_cnf,
             )
             del pred_scores_a
-            thresholds_b = tune_thresholds(
-                pred_wgh_cats=pred_scores_b,
+            thresholds_b = tune_thresholds_dense(
+                score_matrix=pred_scores_b,
+                cat_list=cat_list,
                 eval_corpus=val_data_b.corpus,
                 tuning_cfg=self._tuning_cnf,
             )
@@ -711,8 +721,9 @@ class CV:
             df_classes_fold = _mean_eval_tables(first_df=df_classes_a, second_df=df_classes_b)
 
             # retune the tresholds - more data for tuning = more stability
-            fold_thresholds = tune_thresholds(
-                pred_wgh_cats=pred_scores,
+            fold_thresholds = tune_thresholds_dense(
+                score_matrix=pred_scores,
+                cat_list=cat_list,
                 eval_corpus=val_data.corpus,
                 tuning_cfg=self._tuning_cnf,
             )

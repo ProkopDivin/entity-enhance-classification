@@ -701,7 +701,9 @@ def eval_final(
         f'{len(custom_thresholds) if custom_thresholds else 0} class(es)'
     )
 
-    df_corpora_test, df_classes_test, pred_scores = evaluateModel(
+    from iptc_entity_pipeline.legacy_reuse import wgh_labels_from_score_matrix
+
+    df_corpora_test, df_classes_test, pred_score_matrix = evaluateModel(
         model=trained_model,
         evalData=test_data,
         evaluation_config=eval_cfg,
@@ -726,10 +728,17 @@ def eval_final(
         df_classes_test=df_classes_test,
     )
 
+    pred_scores_legacy = list(
+        wgh_labels_from_score_matrix(
+            score_matrix=pred_score_matrix,
+            cat_list=list(trained_model.catList),
+        )
+    )
+    del pred_score_matrix
     save_paths = save_outputs(
         model=trained_model,
         test_data=test_data,
-        pred_scores=pred_scores,
+        pred_scores=pred_scores_legacy,
         eval_cnf=eval_cfg,
         emb_cnf=emb_cfg,
         config_mapping=config_mapping,
