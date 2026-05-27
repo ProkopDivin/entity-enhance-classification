@@ -866,6 +866,66 @@ class WpEntitiesTunedCnf(PreBaseCnfWithHPO):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+
+
+@dataclass(frozen=True)
+class WpEntitiesJV3ClsTunedCnf(WpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_en_jina_v3_cls',
+        )
+    )
+    
+    
+@dataclass(frozen=True)
+class WpEntitiesJV5ClsTunedCnf(WpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_en_jina_v5_cls'
+        )
+    )
+    
+
+@dataclass(frozen=True)
+class WpEntitiesPmmTunedCnf(WpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
+        )
+    )
     
     
 
