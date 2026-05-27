@@ -1212,6 +1212,8 @@ class ArticleOnlyTunedCnf(ArticleOnlyCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    
+    
 
 @dataclass(frozen=True)
 class BestArticleOnlyTunedCnf2(BestArticleOnlyCnf):
@@ -1500,6 +1502,7 @@ class TunningLearningRateF1Cnf(BaseCnfWithHPO3):
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
     return {
+        # testing longtail features
         'article_only': ArticleOnlyCnf(),
         'article_only_gelu': ArticleOnlyGeluCnf(),
         'article_only_skip': ArticleOnlySkipCnf(),
@@ -1514,6 +1517,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_prior': WpEntitiesPriorCnf(),
         'wpentities_tuned': WpEntitiesTunedCnf(),
         
+        # comparing entity entity description aproaches 
         'wp_entity_only': EntityOnlyCnf(),
         'wikipedia2vec_entity_only': Wikipedia2VecEntityOnlyCnf(),
         'wikidata_description_entity_only': WikidataDescriptionEntityOnlyCnf(),
@@ -1525,7 +1529,14 @@ def _config_map() -> dict[str, BaseCnf]:
         'wikipedia_intro_entities': WikipediaIntroEntitiesCnf(),
         'wikipedia_article_entities': WikipediaArticleEntitiesCnf(),
 
-
+        # testing different embeddings
+        'wpentities_jina_v3_cls': WpEntitiesJV3ClsTunedCnf(),
+        'wpentities_jina_v5_cls': WpEntitiesJV5ClsTunedCnf(),
+        'wpentities_pmm': WpEntitiesPmmTunedCnf(),
+        
+    
+        
+        
         # rozběhnout ještě hpo na tunning a normal article_only a wpentities
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),
