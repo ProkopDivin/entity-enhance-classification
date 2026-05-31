@@ -29,10 +29,16 @@ class FeatureBuildStats:
 
 @dataclass(frozen=True)
 class RaggedFeatureData:
-    """Ragged entity features for no-pooling mode."""
+    """Ragged entity features for no-pooling mode.
+
+    The per-document entity matrices are packed into a single ``entity_flat``
+    buffer with row-pointer ``entity_offsets`` so the dataclass pickles as
+    two contiguous numpy blobs instead of a tuple of N small arrays.
+    """
 
     article_matrix: np.ndarray
-    entity_matrices: tuple[np.ndarray, ...]
+    entity_flat: np.ndarray
+    entity_offsets: np.ndarray
     stats: FeatureBuildStats
 
 
@@ -191,7 +197,7 @@ class FeatureBuilder:
         corpus: Any,
         clearml_logger: Any | None = None,
     ) -> RaggedFeatureData:
-        """Build article vectors and per-document entity matrices for no-pooling mode."""
+        """Build article vectors and packed per-document entity matrices for no-pooling mode."""
         if not self._use_article_embeddings:
             raise ValueError('no_pooling mode currently requires use_article_embeddings=True')
 
@@ -231,9 +237,25 @@ class FeatureBuilder:
             total_missing_embeddings=tracking.total_missing_embeddings,
             entity_dim=int(entity_dim),
         )
+
+        article_matrix = np.vstack(article_rows) if article_rows else np.zeros((0, 0), dtype=np.float32)
+        if entity_rows:
+            lens = np.fromiter(
+                (m.shape[0] for m in entity_rows), dtype=np.int64, count=len(entity_rows),
+            )
+            entity_flat = np.vstack(entity_rows).astype(np.float32, copy=False)
+        else:
+            lens = np.zeros(0, dtype=np.int64)
+            entity_flat = np.zeros((0, int(entity_dim)), dtype=np.float32)
+        entity_offsets = np.empty(len(entity_rows) + 1, dtype=np.int64)
+        entity_offsets[0] = 0
+        np.cumsum(lens, out=entity_offsets[1:])
+        del entity_rows
+
         return RaggedFeatureData(
-            article_matrix=np.vstack(article_rows),
-            entity_matrices=tuple(entity_rows),
+            article_matrix=article_matrix,
+            entity_flat=entity_flat,
+            entity_offsets=entity_offsets,
             stats=stats,
         )
 

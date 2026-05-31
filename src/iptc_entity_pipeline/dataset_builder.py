@@ -16,35 +16,92 @@ LOGGER = logging.getLogger(__name__)
 
 
 class RaggedEmbeddingDataset(Dataset):
-    """Dataset carrying article vectors and per-sample ragged entity vectors."""
+    """Dataset carrying article vectors and per-sample ragged entity vectors.
+
+    Entity embeddings are stored as a single flat ``entity_flat`` buffer with
+    a per-document row-pointer ``entity_offsets`` (``offsets[i]:offsets[i+1]``
+    is doc ``i``'s slice). This packs the per-doc matrices into two
+    contiguous tensors, so pickling/transport between pipeline steps is
+    O(2 big blobs) instead of O(N small tensors).
+
+    The same class also serves as a *view* over a base dataset: when
+    ``doc_indices`` is provided, ``__len__``/``__getitem__`` and the lazy
+    ``X``/``Y`` properties index through it while still sharing the four
+    base buffers with the source dataset (mirrors :class:`EmbeddingSubset`).
+    """
 
     def __init__(
         self,
         *,
         corpus: Any,
         article_x: torch.Tensor,
-        entity_x: Sequence[torch.Tensor],
+        entity_flat: torch.Tensor,
+        entity_offsets: torch.Tensor,
         y: torch.Tensor,
+        doc_indices: torch.Tensor | None = None,
+        base_corpus: Any | None = None,
     ) -> None:
-        if len(article_x) != len(entity_x) or len(article_x) != len(y):
-            raise ValueError('RaggedEmbeddingDataset requires equal lengths for article_x, entity_x, and y')
+        if int(article_x.shape[0]) != int(y.shape[0]):
+            raise ValueError('RaggedEmbeddingDataset requires equal lengths for article_x and y')
+        if int(entity_offsets.shape[0]) != int(article_x.shape[0]) + 1:
+            raise ValueError(
+                'RaggedEmbeddingDataset requires entity_offsets of length article_x.shape[0] + 1'
+            )
+        if entity_flat.ndim != 2:
+            raise ValueError('entity_flat must be a 2D tensor (total_entities, entity_dim)')
+        if int(entity_offsets[-1].item()) != int(entity_flat.shape[0]):
+            raise ValueError(
+                'entity_offsets[-1] must equal entity_flat.shape[0] (total packed entities)'
+            )
         self.corpus = corpus
-        self.X = article_x
-        self.entity_X = tuple(entity_x)
-        self.Y = y
+        self._article_x_base = article_x
+        self._entity_flat = entity_flat
+        self._entity_offsets = entity_offsets
+        self._y_base = y
+        self._doc_indices = doc_indices
+        self._base_corpus = base_corpus if base_corpus is not None else corpus
+        self.entity_dim = int(entity_flat.shape[1])
         self.catList = list(corpus.catList) if hasattr(corpus, 'catList') else []
+        self._x_cache: torch.Tensor | None = None
+        self._y_cache: torch.Tensor | None = None
 
     def __len__(self) -> int:
-        return int(self.X.shape[0])
+        if self._doc_indices is not None:
+            return int(self._doc_indices.shape[0])
+        return int(self._article_x_base.shape[0])
+
+    def _resolve_doc(self, idx: int) -> int:
+        if self._doc_indices is not None:
+            return int(self._doc_indices[idx])
+        return int(idx)
 
     def __getitem__(self, idx: int) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        doc = self._resolve_doc(idx)
+        start = int(self._entity_offsets[doc])
+        end = int(self._entity_offsets[doc + 1])
         return (
             {
-                'article_embeddings': self.X[idx],
-                'entity_embeddings': self.entity_X[idx],
+                'article_embeddings': self._article_x_base[doc],
+                'entity_embeddings': self._entity_flat[start:end],
             },
-            self.Y[idx],
+            self._y_base[doc],
         )
+
+    @property
+    def X(self) -> torch.Tensor:
+        if self._doc_indices is None:
+            return self._article_x_base
+        if self._x_cache is None:
+            self._x_cache = self._article_x_base.index_select(0, self._doc_indices)
+        return self._x_cache
+
+    @property
+    def Y(self) -> torch.Tensor:
+        if self._doc_indices is None:
+            return self._y_base
+        if self._y_cache is None:
+            self._y_cache = self._y_base.index_select(0, self._doc_indices)
+        return self._y_cache
 
     def saveEmbeds(self, file_name: str | Path) -> None:
         """
@@ -55,7 +112,8 @@ class RaggedEmbeddingDataset(Dataset):
         """
         with open(file_name, 'w', encoding='utf-8') as f:
             for i, doc in enumerate(self.corpus):
-                vector = self.X[i]
+                doc_idx = self._resolve_doc(i)
+                vector = self._article_x_base[doc_idx]
                 vector_str = ' '.join(f'{v:.4g}' for v in vector)
                 f.write(f'{doc.id}\t{vector_str}\n')
 
@@ -137,18 +195,17 @@ def build_ragged_emb_data(
     *,
     corpus: Any,
     article_matrix: np.ndarray,
-    entity_matrices: Sequence[np.ndarray],
+    entity_flat: np.ndarray,
+    entity_offsets: np.ndarray,
 ) -> RaggedEmbeddingDataset:
-    """Build ragged embedding dataset for no-pooling mode."""
+    """Build ragged embedding dataset for no-pooling mode from packed buffers."""
     y_matrix = build_multilabel_targets(corpus=corpus)
-    article_x = torch.as_tensor(article_matrix, dtype=torch.float32)
-    entity_x = tuple(torch.as_tensor(matrix, dtype=torch.float32) for matrix in entity_matrices)
-    y_tensor = torch.as_tensor(y_matrix, dtype=torch.float32)
     return RaggedEmbeddingDataset(
         corpus=corpus,
-        article_x=article_x,
-        entity_x=entity_x,
-        y=y_tensor,
+        article_x=torch.from_numpy(np.ascontiguousarray(article_matrix, dtype=np.float32)),
+        entity_flat=torch.from_numpy(np.ascontiguousarray(entity_flat, dtype=np.float32)),
+        entity_offsets=torch.from_numpy(np.ascontiguousarray(entity_offsets, dtype=np.int64)),
+        y=torch.from_numpy(np.ascontiguousarray(y_matrix, dtype=np.float32)),
     )
 
 def _build_dataset_with_targets(
@@ -277,15 +334,19 @@ def slice_dataset(*, dataset: Any, indices: Sequence[int]) -> Any:
     idx_tensor = torch.as_tensor(indices, dtype=torch.long)
 
     if isinstance(dataset, RaggedEmbeddingDataset):
-        selected_corpus = _subset_corpus(base_corpus=dataset.corpus, indices=indices)
-        selected_article = dataset.X.index_select(0, idx_tensor)
-        selected_labels = dataset.Y.index_select(0, idx_tensor)
-        selected_entities = tuple(dataset.entity_X[int(i)] for i in indices)
+        composed = (
+            idx_tensor if dataset._doc_indices is None
+            else dataset._doc_indices.index_select(0, idx_tensor)
+        )
+        selected_corpus = _subset_corpus(base_corpus=dataset._base_corpus, indices=composed.tolist())
         return RaggedEmbeddingDataset(
             corpus=selected_corpus,
-            article_x=selected_article,
-            entity_x=selected_entities,
-            y=selected_labels,
+            article_x=dataset._article_x_base,
+            entity_flat=dataset._entity_flat,
+            entity_offsets=dataset._entity_offsets,
+            y=dataset._y_base,
+            doc_indices=composed,
+            base_corpus=dataset._base_corpus,
         )
 
     if isinstance(dataset, EmbeddingSubset):

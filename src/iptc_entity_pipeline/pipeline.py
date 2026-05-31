@@ -232,14 +232,18 @@ def build_dataset(
         train_data = build_ragged_emb_data(
             corpus=corpora.train,
             article_matrix=train_ragged.article_matrix,
-            entity_matrices=train_ragged.entity_matrices,
+            entity_flat=train_ragged.entity_flat,
+            entity_offsets=train_ragged.entity_offsets,
         )
+        del train_ragged
         test_data = build_ragged_emb_data(
             corpus=corpora.test,
             article_matrix=test_ragged.article_matrix,
-            entity_matrices=test_ragged.entity_matrices,
+            entity_flat=test_ragged.entity_flat,
+            entity_offsets=test_ragged.entity_offsets,
         )
-        feature_dim = int(train_ragged.article_matrix.shape[1])
+        del test_ragged
+        feature_dim = int(train_data.X.shape[1])
         entity_store.clear_cache()
         return train_data, test_data, feature_dim
 
