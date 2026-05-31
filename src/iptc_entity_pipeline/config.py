@@ -158,7 +158,7 @@ class ThresholdTuningCnf:
     enabled: bool = False
     thresholds: tuple[float, ...] = field(
         # používám jen pro toto
-        default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(5, 16))
+        default_factory=lambda: tuple(round(0.05 * i, 2) for i in range(5, 14))
     )
     f_beta: float = 1.0
     aggregation: Literal['mean', 'median', 'mode'] = 'mean' # remove other not usefull 
@@ -1027,14 +1027,122 @@ class WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
-            hidden_dims=(1024,),
+            hidden_dims=(4096,),
             dropouts1=(0.0,),
-            dropouts2=(0.0,),
+            dropouts2=(0.5,),
             attention_hidden_dims=(64, 128, 256, 512),
-            attention_dropouts=(0.0,),
+            attention_dropouts=(0.0,0.3,),
 
         )
     )
+    
+@dataclass(frozen=True)
+class WPEntitiesPmmAttentionHPOCnf(WpEntitiesPmmTunedCnf):
+    """Entity-enhanced configuration with explicit attention over entities."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.0,),
+            dropouts2=(0.5,),
+            attention_hidden_dims=(64, 128, 256, 512),
+            attention_dropouts=(0.0,0.3,),
+
+        )
+    )
+    
+@dataclass(frozen=True)
+class WikipediaArticleEntitiesCnf(BaseCnfWithHPO):
+    """Entity-enhanced configuration using Wikidata description embeddings."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/selected-article-embeddings',
+        )
+    )
+
+@dataclass(frozen=True)	
+class WArticleAtentionCnf(WikipediaArticleEntitiesCnf):
+    """Entity-enhanced configuration with explicit attention over entities."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.0,),
+            dropouts2=(0.3,),
+            attention_hidden_dims=(64, 128, 256, 512),
+            attention_dropouts=(0.0,0.3,),
+
+        )
+    )
+
+@dataclass(frozen=True)
+class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO):
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+        )
+    )
+    
+
+@dataclass(frozen=True)	
+class W2VecAttentionHPOCnf(Wikipedia2VecEntitiesCnf):
+    """Entity-enhanced configuration with explicit attention over entities."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            attention_hidden_dims=(64, 128, 256, 512),
+            attention_dropouts=(0.0,0.3,),
+
+        )
+    )  
     
 @dataclass(frozen=True)
 class WPEntitiesAttentionHPOCnf2(WpEntitiesTunedCnf):
@@ -1165,14 +1273,7 @@ class BestWPEntitiesENNLCnf(PreBaseCnfWithHPO):
     )
     
     
-@dataclass(frozen=True)
-class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO):
-    paths: PathsCnf = field(
-        default_factory=lambda: replace(
-            PathsCnf(),
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
-        )
-    )
+
 
 
 @dataclass(frozen=True)
@@ -1213,7 +1314,21 @@ class ArticleOnlyTunedCnf(ArticleOnlyCnf):
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
     
-    
+@dataclass(frozen=True)
+class ArticleOnlyTunedDiffThresholdsCnf(ArticleOnlyCnf):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True,
+                                        thresholds=([round(0.05 * i, 2) for i in range(2, 14)]))
+    )   
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.0,),
+            dropouts2=(0.3, ),
+            learning_rates=(0.00037,),
+        )
+    )
 
 @dataclass(frozen=True)
 class BestArticleOnlyTunedCnf2(BestArticleOnlyCnf):
@@ -1299,16 +1414,6 @@ class WikipediaIntroEntitiesCnf(BaseCnfWithHPO):
         )
     )
     
-@dataclass(frozen=True)
-class WikipediaArticleEntitiesCnf(BaseCnfWithHPO):
-    """Entity-enhanced configuration using Wikidata description embeddings."""
-
-    paths: PathsCnf = field(
-        default_factory=lambda: replace(
-            PathsCnf(),
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/selected-article-embeddings',
-        )
-    )
 
 
 @dataclass(frozen=True)
@@ -1492,6 +1597,18 @@ def _validate_config_dataclass_decorators() -> None:
 @dataclass(frozen=True)
 class TunningLearningRateCnf(BaseCnfWithHPO3):
     """  """
+    
+    
+
+@dataclass(frozen=True)
+class DebugAttentionCnf(DebugCnf):
+    """Debug configuration for quick local runs."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='entity_attention_mlp')
+    )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='no_pooling')
+    )
 
 
 @dataclass(frozen=True)
@@ -1535,21 +1652,31 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_pmm': WpEntitiesPmmTunedCnf(),
         
     
+        'article_only_tuned_diff_thresholds': ArticleOnlyTunedDiffThresholdsCnf(),
         
         
+        # entity-pooling 
+        'debug_attention': DebugAttentionCnf(),
+        'wpentities_attention_hpo': WPEntitiesAttentionHPOCnf(),
+        'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumCnf(),
+        'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumCnf(),
+        'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
+        'wpentities_pmm_attention': WPEntitiesPmmAttentionHPOCnf(),
+        'w2vec_attention': W2VecAttentionHPOCnf(),
+        'wikipedia_article_entities_attention': WArticleAtentionCnf(),
+ 
         # rozběhnout ještě hpo na tunning a normal article_only a wpentities
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),
         'entity_only': EntityOnlyCnf(),
         'no_embeddings': NoEmbeddingsCnf(),
         'wpentities': WpEntitiesCnf(),
-        'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
+        
         'wpentities_rel_th_5': WPEntitiesRelTH5(),
         'wpentities_attention': BestWpEntitiesAttentionCnf(),
         'wpentities_attention_hpo': WPEntitiesAttentionHPOCnf(),
         'wpentities_attention_hpo_2': WPEntitiesAttentionHPOCnf2(),
-        'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumCnf(),
-        'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumCnf(),
+        
         'wpentities_en_nl': WPEntitiesEnNlCnf(),
         'wpentities_nl': WPEntitiesNlCnf(),
         'wpentities_all_langs': WPEntitiesAllLangsCnf(),
