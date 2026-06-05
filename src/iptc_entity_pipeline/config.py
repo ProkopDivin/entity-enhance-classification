@@ -46,6 +46,7 @@ class EmbeddingCnf:
         'mean',
         'weighted_mean',
         'weighted_sum',
+        'weighted_mean_relevance',
         'weighted_sum_relevance',
         'no_pooling',
     ] = 'sum'
@@ -81,14 +82,14 @@ class TrainingCnf:
     # 0 = disabled. When > 0, monitors dev loss, stops after this many epochs
     # without improvement, and restores the best weights.
     early_stopping_patience: int = 5
-    early_stopping_min_delta: float = 0.000000001 # because of small classes the improvement can be very small
+    early_stopping_min_delta: float = 0.0000000001 # because of small classes the improvement can be very small
     # because the validation set is different than test set - not splited chronologically 
     # we do not want to overfit it - not expecting all the articles be the same
     early_stopping_metric: Literal['loss', 'f1'] = 'loss'
     # If False, skip the extra forward pass over the full training set each epoch (dev
     # validation unchanged). Saves wall time and avoids holding large per-batch logits
     # during that pass; per-epoch train curves in ClearML stay empty.
-    train_validation: bool = True
+    train_validation: bool = False
 
 
 @dataclass(frozen=True)
@@ -275,7 +276,7 @@ class BaseCnfWithHPO(PreBaseCnfWithHPO):
     )
     
     train: TrainingCnf = field(
-        default_factory=lambda: replace(TrainingCnf(), train_validation=True)
+        default_factory=lambda: replace(TrainingCnf(), train_validation=False)
     )
 
 
@@ -338,7 +339,7 @@ class WpEntitiesCnf5(BaseCnfWithHPO2):
     
     
 @dataclass(frozen=True)
-class WPEntitiesMeanCnf(BaseCnf):
+class WPEntitiesMeanCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration with mean pooling."""
 
     emb: EmbeddingCnf = field(
@@ -354,7 +355,7 @@ class WPEntitiesWeightedMeanCnf(PreBaseCnfWithHPO):
         default_factory=lambda: replace(
             EmbeddingCnf(),
             use_entity_relevance_weights=True,
-            entity_pooling='weighted_mean',
+            entity_pooling='weighted_mean_relevance',
         )
     )
     tuning: ThresholdTuningCnf = field(
@@ -454,7 +455,7 @@ class DebugCnf(BaseCnf):
         default_factory=lambda: replace(
             EmbeddingCnf(),
             use_entity_relevance_weights=True,
-            entity_pooling='weighted_mean',
+            entity_pooling='weighted_mean_relevance',
         )
     )
 
@@ -526,7 +527,7 @@ class WPEntitiesRelTH(BaseCnf):
     )   
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH1(BaseCnf):
+class WPEntitiesRelTH1(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
@@ -535,19 +536,20 @@ class WPEntitiesRelTH1(BaseCnf):
             entity_relevance_threshold=1.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
+
+@dataclass(frozen=True)
+class WPEntitiesRelTH2(BaseCnfWithHPO):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
+            EmbeddingCnf(),
+            entity_langs=('en',),
+            entity_relevance_threshold=2.0,
         )
-    )   
+    )
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH3(BaseCnf):
+class WPEntitiesRelTH3(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
@@ -556,22 +558,20 @@ class WPEntitiesRelTH3(BaseCnf):
             entity_relevance_threshold=3.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
+
+@dataclass(frozen=True)
+class WPEntitiesRelTH4(BaseCnfWithHPO):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
-            HyperparamSpace(),  
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
+            EmbeddingCnf(),
+            entity_langs=('en',),
+            entity_relevance_threshold=4.0,
         )
-    )   
+    )
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH5(PreBaseCnfWithHPO):
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
-    )
+class WPEntitiesRelTH5(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
@@ -581,8 +581,20 @@ class WPEntitiesRelTH5(PreBaseCnfWithHPO):
         )
     )
     
+    
 @dataclass(frozen=True)
-class WPEntitiesRelTH7(BaseCnf):
+class WPEntitiesRelTH6(BaseCnfWithHPO):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_langs=('en',),
+            entity_relevance_threshold=6.0,
+        )
+    )
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH7(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
@@ -591,20 +603,22 @@ class WPEntitiesRelTH7(BaseCnf):
             entity_relevance_threshold=7.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
-        )
-    )   
     
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH9(BaseCnf):
+class WPEntitiesRelTH8(BaseCnfWithHPO):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_langs=('en',),
+            entity_relevance_threshold=8.0,
+        )
+    )
+    
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH9(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
@@ -613,63 +627,19 @@ class WPEntitiesRelTH9(BaseCnf):
             entity_relevance_threshold=9.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
-        )
-    )   
-    
-    
-    
+
 @dataclass(frozen=True)
-class WPEntitiesRelTH11(BaseCnf):
+class WPEntitiesRelTH10(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
             EmbeddingCnf(),
             entity_langs=('en',),
-            entity_relevance_threshold=11.0,
+            entity_relevance_threshold=10.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
-        )
-    )   
     
-    
-    
-@dataclass(frozen=True)
-class WPEntitiesRelTH13(BaseCnf):
-    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
-    emb: EmbeddingCnf = field(
-        default_factory=lambda: replace(
-            EmbeddingCnf(),
-            entity_langs=('en',),
-            entity_relevance_threshold=13.0,
-        )
-    )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
-        )
-    )   
-    
+
 
 @dataclass(frozen=True)
 class WPEntitiesNlCnf(PreBaseCnfWithHPO):
@@ -682,7 +652,7 @@ class WPEntitiesNlCnf(PreBaseCnfWithHPO):
     )
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH15(BaseCnf):
+class WPEntitiesRelTH15(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
@@ -691,60 +661,30 @@ class WPEntitiesRelTH15(BaseCnf):
             entity_relevance_threshold=15.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
-        )
-    )   
-    
+
     
 @dataclass(frozen=True)
-class WPEntitiesRelTH17(BaseCnf):
+class WPEntitiesRelTH20(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
             EmbeddingCnf(),
             entity_langs=('en',),
-            entity_relevance_threshold=17.0,
+            entity_relevance_threshold=20.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
-        )
-    )   
-    
+
+
 @dataclass(frozen=True)
-class WPEntitiesRelTH999(BaseCnf):
+class WPEntitiesRelTH25(BaseCnfWithHPO):
     """Entity-enhanced configuration with English, German and Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
             EmbeddingCnf(),
             entity_langs=('en',),
-            entity_relevance_threshold=999.0,
+            entity_relevance_threshold=25.0,
         )
-    )
-    debug: bool = field(default_factory=lambda: True)
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.1,),
-            dropouts2=(0.3,),
-            learning_rates=(0.00037,),
-        )
-    ) 
-    
+    )   
 
 @dataclass(frozen=True)
 class WPEntitiesMentionWeightedSumCnf(PreBaseCnfWithHPO):
@@ -760,7 +700,36 @@ class WPEntitiesMentionWeightedSumCnf(PreBaseCnfWithHPO):
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
 
+@dataclass(frozen=True)
+class WPEntitiesMentionWeightedMeanCnf(PreBaseCnfWithHPO):
+    """Entity-enhanced configuration with mention-weighted mean pooling enabled."""
 
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='weighted_mean',
+        )
+    )
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesRelevanceWeightedMeanCnf(PreBaseCnfWithHPO):
+    """Entity-enhanced configuration with relevance-weighted mean pooling enabled."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='weighted_mean_relevance',
+        )
+    )
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    
+    
 @dataclass(frozen=True)
 class WPEntitiesRelevanceWeightedSumCnf(PreBaseCnfWithHPO):
     """Entity-enhanced configuration with relevance-weighted sum pooling enabled."""
@@ -824,34 +793,7 @@ def _resolve_assembly(*, assembly: AssemblyCnf, root_path: Path) -> AssemblyCnf:
     return replace(assembly, members=tuple(resolved_members))
 
 
-@dataclass(frozen=True)
-class BestWpEntitiesCnf(PreBaseCnfWithHPO):
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.0,),
-            dropouts2=(0.0, ),
-            learning_rates=(0.00037,),
-        )
-    )
 
-
-
-
-
-@dataclass(frozen=True)
-class BestWpEntitiesF1Cnf(BestWpEntitiesCnf):
-    train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1'))
-    hparam: HyperparamSpace = field(
-        default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(1024, ),
-            dropouts1=(0.0,),
-            dropouts2=(0.0, ),
-            learning_rates=(0.00037,),
-        )
-    )
 
 
 @dataclass(frozen=True)
@@ -866,7 +808,46 @@ class WpEntitiesTunedCnf(PreBaseCnfWithHPO):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    
 
+@dataclass(frozen=True)
+class BestWpEntitiesTunedCnf(WpEntitiesTunedCnf):
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(4096, ),
+            dropouts1=(0.0,),
+            dropouts2=(0.5, ),
+            learning_rates=(0.00037,),
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WpEntitiesTunedF1Cnf(PreBaseCnfWithHPO):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    train: TrainingCnf = field(
+        default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1')
+    )
+
+@dataclass(frozen=True)
+class BestWpEntitiesTunedF1Cnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled.
+
+    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
+    and per-class thresholds are aggregated by mean across folds, then reused
+    when evaluating the final model on test.
+    """
+
+    train: TrainingCnf = field(
+        default_factory=lambda: replace(TrainingCnf(), train_validation=True)
+    )
 
 @dataclass(frozen=True)
 class WpEntitiesJV3ClsTunedCnf(WpEntitiesTunedCnf):
@@ -926,66 +907,20 @@ class WpEntitiesPmmTunedCnf(WpEntitiesTunedCnf):
             entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
         )
     )
-    
-    
+
 
 @dataclass(frozen=True)
-class BestWpEntitiesTunedCnf2(BestWpEntitiesCnf):
+class WpEntitiesPmmTunedOnlyCnf(WpEntitiesPmmTunedCnf):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
     The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
     and per-class thresholds are aggregated by mean across folds, then reused
     when evaluating the final model on test.
     """
-
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False)
     )
-    random_seed: int = 53351
     
-@dataclass(frozen=True)
-class BestWpEntitiesTunedCnf3(BestWpEntitiesCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled.
-
-    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
-    and per-class thresholds are aggregated by mean across folds, then reused
-    when evaluating the final model on test.
-    """
-
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
-    )
-    random_seed: int = 163485
-    
-    
-@dataclass(frozen=True)
-class BestWpEntitiesTunedCnf4(BestWpEntitiesCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled.
-
-    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
-    and per-class thresholds are aggregated by mean across folds, then reused
-    when evaluating the final model on test.
-    """
-
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
-    )
-    random_seed: int = 61144
-    
-    
-@dataclass(frozen=True)
-class BestWpEntitiesTunedCnf5(BestWpEntitiesCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled.
-
-    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
-    and per-class thresholds are aggregated by mean across folds, then reused
-    when evaluating the final model on test.
-    """
-
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
-    )
-    random_seed: int = 8689129
   
     
 @dataclass(frozen=True)
@@ -1008,7 +943,7 @@ class BestWpEntitiesAttentionCnf(WpEntitiesTunedCnf):
 
 
 @dataclass(frozen=True)
-class WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
+class  WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
     """Entity-enhanced configuration with explicit attention over entities."""
 
     emb: EmbeddingCnf = field(
@@ -1313,6 +1248,33 @@ class ArticleOnlyTunedCnf(ArticleOnlyCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+
+@dataclass(frozen=True)
+class BestArticleOnlyTunedF1Cnf(BestArticleOnlyCnf):
+    train: TrainingCnf = field(
+        default_factory=lambda: replace(TrainingCnf(), train_validation=True)
+    )
+    
+    train: TrainingCnf = field(
+        default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1')
+    )
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+        
+@dataclass(frozen=True)
+class BestArticleOnlyTunedCnf(BestArticleOnlyCnf):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    train: TrainingCnf = field(
+        default_factory=lambda: replace(TrainingCnf(), train_validation=True)
+    )
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+
+    
     
 @dataclass(frozen=True)
 class ArticleOnlyTunedDiffThresholdsCnf(ArticleOnlyCnf):
@@ -1626,6 +1588,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'article_only_leaky': ArticleOnlyLeakyCnf(),
         'article_only_prior': ArticleOnlyPriorCnf(),
         'article_only_tuned': ArticleOnlyTunedCnf(),
+        #'article_only_tuned_f1': ArticleOnlyTunedF1Cnf(),
         
         'wpentities': WpEntitiesCnf(),
         'wpentities_gelu': WpEntitiesGeluCnf(),
@@ -1633,6 +1596,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_leaky': WpEntitiesLeakyCnf(),
         'wpentities_prior': WpEntitiesPriorCnf(),
         'wpentities_tuned': WpEntitiesTunedCnf(),
+        #'wpentities_tuned_f1': WpEntitiesTunedF1Cnf(),
         
         # comparing entity entity description aproaches 
         'wp_entity_only': EntityOnlyCnf(),
@@ -1650,6 +1614,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_jina_v3_cls': WpEntitiesJV3ClsTunedCnf(),
         'wpentities_jina_v5_cls': WpEntitiesJV5ClsTunedCnf(),
         'wpentities_pmm': WpEntitiesPmmTunedCnf(),
+        'wpentities_pmm_tuned_only': WpEntitiesPmmTunedOnlyCnf(),
         
     
         'article_only_tuned_diff_thresholds': ArticleOnlyTunedDiffThresholdsCnf(),
@@ -1660,18 +1625,37 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_attention_hpo': WPEntitiesAttentionHPOCnf(),
         'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumCnf(),
         'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumCnf(),
+        'wpentities_relevance_weighted_mean': WPEntitiesRelevanceWeightedMeanCnf(),
+        'wpentities_mention_weighted_mean': WPEntitiesMentionWeightedMeanCnf(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
+        'wpentities_mean': WPEntitiesMeanCnf(),
         'wpentities_pmm_attention': WPEntitiesPmmAttentionHPOCnf(),
         'w2vec_attention': W2VecAttentionHPOCnf(),
         'wikipedia_article_entities_attention': WArticleAtentionCnf(),
- 
+        
+        
+        # relevance treshold (all tuned )
+        'wpentities_rel_th_1': WPEntitiesRelTH1(),
+        'wpentities_rel_th_2': WPEntitiesRelTH2(),
+        'wpentities_rel_th_3': WPEntitiesRelTH3(),
+        'wpentities_rel_th_4': WPEntitiesRelTH4(),
+        'wpentities_rel_th_5': WPEntitiesRelTH5(),
+        'wpentities_rel_th_6': WPEntitiesRelTH6(),
+        'wpentities_rel_th_7': WPEntitiesRelTH7(),
+        'wpentities_rel_th_8': WPEntitiesRelTH8(),
+        'wpentities_rel_th_9': WPEntitiesRelTH9(),
+        'wpentities_rel_th_10': WPEntitiesRelTH10(),
+        'wpentities_rel_th_15': WPEntitiesRelTH15(),
+        'wpentities_rel_th_20': WPEntitiesRelTH20(),
+        'wpentities_rel_th_25': WPEntitiesRelTH25(),
+        
         # rozběhnout ještě hpo na tunning a normal article_only a wpentities
         'debug': DebugCnf(),
         'article_only': ArticleOnlyCnf(),
         'entity_only': EntityOnlyCnf(),
         'no_embeddings': NoEmbeddingsCnf(),
         'wpentities': WpEntitiesCnf(),
-        
+          
         'wpentities_rel_th_5': WPEntitiesRelTH5(),
         'wpentities_attention': BestWpEntitiesAttentionCnf(),
         'wpentities_attention_hpo': WPEntitiesAttentionHPOCnf(),
@@ -1681,23 +1665,21 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_nl': WPEntitiesNlCnf(),
         'wpentities_all_langs': WPEntitiesAllLangsCnf(),
         
-        'best_wpentities': BestWpEntitiesCnf(),
-        #'best_wpentities_f1': BestWpEntitiesF1Cnf(),
-        'best_wpentities_tuned': WpEntitiesTunedCnf(),
-        'best_wpentities_tuned_2': BestWpEntitiesTunedCnf2(),
-        'best_wpentities_tuned_3': BestWpEntitiesTunedCnf3(),
-        'best_wpentities_tuned_4': BestWpEntitiesTunedCnf4(),
-        'best_wpentities_tuned_5': BestWpEntitiesTunedCnf5(),
-        'best_article_only': BestArticleOnlyCnf(),
         
-        'best_article_only_tuned': ArticleOnlyTunedCnf(),
-        'best_article_only_tuned_2': BestArticleOnlyTunedCnf2(),
-        'best_article_only_tuned_3': BestArticleOnlyTunedCnf3(),
-        'best_article_only_tuned_4': BestArticleOnlyTunedCnf4(),
-        'best_article_only_tuned_5': BestArticleOnlyTunedCnf5(),
-        'best_wpentities_all_langs': BestWpentitiesAllLangsCnf(),
-        'best_wpentities_nl': BestWpentitiesNlCnf(),
-        'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
+        #'best_wpentities_f1': BestWpEntitiesF1Cnf(),
+        'best_wpentities_tuned': BestWpEntitiesTunedCnf(), 
+
+        #'best_article_only': BestArticleOnlyCnf(),
+        #
+        #'best_article_only_tuned': BestArticleOnlyTunedCnf(),
+        #'best_article_only_tuned_f1': BestArticleOnlyTunedF1Cnf(),
+        #'best_article_only_tuned_2': BestArticleOnlyTunedCnf2(),
+        #'best_article_only_tuned_3': BestArticleOnlyTunedCnf3(),
+        #'best_article_only_tuned_4': BestArticleOnlyTunedCnf4(),
+        #'best_article_only_tuned_5': BestArticleOnlyTunedCnf5(),
+        #'best_wpentities_all_langs': BestWpentitiesAllLangsCnf(),
+        #'best_wpentities_nl': BestWpentitiesNlCnf(),
+        #'best_wpentities_en_nl': BestWPEntitiesENNLCnf(),
         
         'wikipedia2vec_entities_all_langs': Wikipedia2VecEntitiesAllLangsCnf(),
         'best_wikipedia2vec_entities': BestWikipedia2VecEntitiesCnf(),

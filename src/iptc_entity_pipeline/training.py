@@ -164,8 +164,8 @@ def train_model(
         nn_type = 'entity_attention_mlp'
 
     entity_dim = int(getattr(model_config, 'entity_dim', 0))
-    if entity_dim <= 0 and is_ragged:
-        entity_dim = int(train_data.entity_dim)
+    if entity_dim <= 0 and is_ragged and len(train_data.entity_X) > 0 and train_data.entity_X[0].ndim == 2:
+        entity_dim = int(train_data.entity_X[0].shape[1])
     bias_from_prior_logits: list[float] | None = None
     if model_config.bias_from_prior:
         bias_from_prior_logits = _class_prior_logits(train_data=train_data)
