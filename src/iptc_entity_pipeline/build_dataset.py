@@ -18,6 +18,7 @@ from iptc_entity_pipeline.feature_builder import FeatureBuildStats, FeatureBuild
 from iptc_entity_pipeline.pooling import (
     EntityPoolingStrategy,
     MeanEntityPooling,
+    MentionWeightedMeanEntityPooling,
     MentionWeightedSumEntityPooling,
     NoEntityPooling,
     SumEntityPooling,
@@ -110,6 +111,9 @@ def get_pooling(
 ) -> EntityPoolingStrategy:
     """Select pooling strategy and entity weighting mode from config."""
     if emb_cfg.entity_pooling == 'weighted_mean':
+        pooling = MentionWeightedMeanEntityPooling()
+        logger.info('Using mention-weighted entity pooling (normalized weighted mean)')
+    elif emb_cfg.entity_pooling == 'weighted_mean_relevance':
         pooling = WeightedMeanEntityPooling()
         logger.info('Using relevance-weighted entity pooling (normalized weighted mean)')
     elif emb_cfg.entity_pooling == 'weighted_sum':

@@ -232,18 +232,22 @@ def build_dataset(
         train_data = build_ragged_emb_data(
             corpus=corpora.train,
             article_matrix=train_ragged.article_matrix,
-            entity_flat=train_ragged.entity_flat,
-            entity_offsets=train_ragged.entity_offsets,
+            entity_matrices=train_ragged.entity_matrices,
         )
-        del train_ragged
         test_data = build_ragged_emb_data(
             corpus=corpora.test,
             article_matrix=test_ragged.article_matrix,
-            entity_flat=test_ragged.entity_flat,
-            entity_offsets=test_ragged.entity_offsets,
+            entity_matrices=test_ragged.entity_matrices,
         )
-        del test_ragged
-        feature_dim = int(train_data.X.shape[1])
+        feature_dim = int(train_ragged.article_matrix.shape[1])
+        if emb_cnf.get('entity_pooling') == 'no_pooling':
+            logger.info('emb_cnf.get(\'entity_pooling\') is working')
+        else:
+            logger.info('emb_cnf.get(\'entity_pooling\') is not working')
+
+        # this is how fix -because of the way how outputs are picled the pipeline fails with oom error 
+        train_data.cache_temporary()
+        test_data.cache_temporary()
         entity_store.clear_cache()
         return train_data, test_data, feature_dim
 
@@ -404,7 +408,9 @@ def run_cv(
     task.connect(asdict(cv_cfg), name='cvConfig')
     task.connect(asdict(optuna_cfg), name='optunaConfig')
     task.connect(asdict(tuning_cfg), name='thresholdTuningConfig')
-
+    
+    train_data.load_temporary()
+        
     cv = CV(
         model_cnf=base_model,
         hparam_cnf=space,
@@ -562,7 +568,7 @@ def train_best(
 
     task.connect(best_model_cnf, name='bestModelConfig')
     task.connect(train_cnf, name='bestTrainingConfig')
-
+    train_data.load_temporary()
     monitor_data = test_data if test_data is not None else train_data
     curve_label = 'test' if test_data is not None else 'dev'
     validation_split_name = 'test' if test_data is not None else 'dev'
@@ -629,7 +635,7 @@ def eval_final(
         report_test_eval_scalars,
         report_test_eval_tables,
     )
-
+    test_data.load_temporary()
     def run_comparison():
         """Run optional baseline comparison and report results to ClearML."""
         comparison_cfg = config_mapping.get('evaluation_comparison') or config_mapping.get('comparison') or {}
@@ -1073,6 +1079,8 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
 
     from iptc_entity_pipeline.seeding import set_global_seed
     from iptc_entity_pipeline.reporting import report_cv_std, report_eval, report_test_eval_scalars
+    from iptc_entity_pipeline.config import EmbeddingCnf, conf_from_dict
+    
     paths_cnf = cnf['paths']
     emb_cnf = cnf['emb']
     model_cnf = cnf['model']
@@ -1091,6 +1099,8 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     debug = bool(cnf.get('debug', False))
     upload_artifacts = bool(cnf.get('upload_artifacts', False))
     random_seed = int(cnf.get('random_seed', 43))
+    emb = conf_from_dict(EmbeddingCnf, emb_cnf)
+    
     set_global_seed(seed=random_seed)
 
     if assembly_cnf.get('enabled'):
@@ -1158,6 +1168,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         emb_cnf=emb_cnf,
         article_embedding_stats=article_embedding_stats,
     )
+        
     log_stage(
         task=task,
         message=f'Stage 4/6: Running mandatory {cv_cnf.get("folds", 5)}-fold cross-validation on train',

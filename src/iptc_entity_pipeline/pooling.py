@@ -41,6 +41,21 @@ def _weighted_sum(
     return np.sum(np.vstack(entity_embeddings) * weights_arr[:, np.newaxis], axis=0, dtype=np.float32)
 
 
+def _weighted_mean(
+    *,
+    entity_embeddings: Sequence[np.ndarray],
+    weights_arr: np.ndarray,
+    embedding_dim: int,
+) -> np.ndarray:
+    """Compute weighted mean of entity embeddings."""
+    total_weight = float(np.sum(weights_arr, dtype=np.float32))
+    if total_weight <= 0.0:
+        return np.zeros(embedding_dim, dtype=np.float32)
+    embeddings_matrix = np.vstack(entity_embeddings).astype(np.float32)
+    weighted_embeddings = embeddings_matrix * weights_arr[:, np.newaxis]
+    return (np.sum(weighted_embeddings, axis=0, dtype=np.float32) / total_weight).astype(np.float32)
+
+
 @dataclass(frozen=True)
 class EntityPoolingResult:
     """Pooled vector with per-document entity-linking diagnostics."""
@@ -171,14 +186,11 @@ class WeightedMeanEntityPooling(EntityPoolingStrategy):
             entity_embeddings=entity_embeddings,
             weights=weights,
         )
-
-        total_weight = float(np.sum(weights_arr, dtype=np.float32))
-        if total_weight <= 0.0:
-            return np.zeros(embedding_dim, dtype=np.float32)
-
-        embeddings_matrix = np.vstack(entity_embeddings).astype(np.float32)
-        weighted_embeddings = embeddings_matrix * weights_arr[:, np.newaxis]   
-        return (np.sum(weighted_embeddings, axis=0, dtype=np.float32) / total_weight).astype(np.float32)
+        return _weighted_mean(
+            entity_embeddings=entity_embeddings,
+            weights_arr=weights_arr,
+            embedding_dim=embedding_dim,
+        )
 
 
 class WeightedSumEntityPooling(EntityPoolingStrategy):
@@ -225,6 +237,33 @@ class MentionWeightedSumEntityPooling(EntityPoolingStrategy):
             weights=weights,
         )
         return _weighted_sum(entity_embeddings=entity_embeddings, weights_arr=weights_arr)
+
+
+class MentionWeightedMeanEntityPooling(EntityPoolingStrategy):
+    """Pool entity vectors using mention-count weighted normalized mean."""
+
+    def _get_weighted_wdids(self, *, doc: DocWithEntities) -> list[tuple[str, float]]:
+        return get_doc_wdid_mention_counts(doc)
+
+    def _pool_embeddings(
+        self,
+        *,
+        entity_embeddings: Sequence[np.ndarray],
+        embedding_dim: int,
+        weights: Sequence[float] | None = None,
+    ) -> np.ndarray:
+        if not entity_embeddings:
+            return np.zeros(embedding_dim, dtype=np.float32)
+        weights_arr = _validate_weight_alignment(
+            class_name=self.__class__.__name__,
+            entity_embeddings=entity_embeddings,
+            weights=weights,
+        )
+        return _weighted_mean(
+            entity_embeddings=entity_embeddings,
+            weights_arr=weights_arr,
+            embedding_dim=embedding_dim,
+        )
 
 
 class NoEntityPooling(EntityPoolingStrategy):
