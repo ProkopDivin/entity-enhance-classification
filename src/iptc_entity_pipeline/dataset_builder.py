@@ -14,8 +14,6 @@ from geneea.catlib.data import Corpus
 from geneea.catlib.vec.dataset import EmbeddingDataset
 from torch.utils.data import Dataset
 
-import json
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -50,13 +48,21 @@ class RaggedEmbeddingDataset(Dataset):
             },
             self.Y[idx],
         )
-    
-    def __del__(self) -> None:
-        if self.tmp_dir is not None:
-            try:
-                shutil.rmtree(self.tmp_dir)
-            except Exception as e:
-                LOGGER.warning(f'Error deleting temporary directory {self.tmp_dir}: {e}')
+
+    def _remove_temporary_dir(self, tmp_dir: Path) -> None:
+        """
+        Delete a spilled-embedding temp directory.
+
+        Cleanup is deferred until :meth:`cleanup_temporary` so that multiple
+        ClearML pipeline steps can reload the same on-disk cache. Each step
+        receives a fresh unpickle of ``build_dataset`` output (``tmp_dir`` set,
+        ``X``/``entity_X`` cleared); an earlier step such as ``run_cv`` must
+        not delete the spill files while a later step still needs them.
+        """
+        try:
+            shutil.rmtree(tmp_dir)
+        except Exception:
+            LOGGER.warning(f'Error deleting temporary directory {tmp_dir}')
 
     def saveEmbeds(self, file_name: str | Path) -> None:
         """
@@ -74,11 +80,8 @@ class RaggedEmbeddingDataset(Dataset):
     def cache_temporary(self) -> None:
         """Save embeddings to temporary files and release in-memory tensors."""
         tmp_dir = Path(tempfile.mkdtemp(prefix='ragged_emb_', dir='/tmp'))
-        with open(tmp_dir / 'X.tsv', 'w') as xf:
-            with open(tmp_dir / 'entity_X.tsv', 'w') as ef:
-                for article_x, entity_x in zip(self.X, self.entity_X):
-                    xf.write(json.dumps(article_x.numpy().tolist()) + '\n')
-                    ef.write(json.dumps(entity_x.numpy().tolist()) + '\n')
+        torch.save(self.X, tmp_dir / 'X.pt')
+        torch.save(self.entity_X, tmp_dir / 'entity_X.pt')
 
         del self.X, self.entity_X
         self.X = None
@@ -87,15 +90,20 @@ class RaggedEmbeddingDataset(Dataset):
 
     def load_temporary(self) -> None:
         """Load embeddings from temporary files back into memory."""
-        if self.tmp_dir is None: # cache was not used there is nothing to load 
+        if self.tmp_dir is None or self.X is not None:
             return
-        with open(self.tmp_dir / 'X.tsv', 'r') as xf:
-            with open(self.tmp_dir / 'entity_X.tsv', 'r') as ef:
-                article_tensors = [torch.tensor(json.loads(line.strip())) for line in xf]
-                entity_tensors = [torch.tensor(json.loads(line.strip())) for line in ef]
-        self.X = torch.stack(article_tensors)
-        self.entity_X = tuple(entity_tensors)
+        tmp_dir = self.tmp_dir
+        self.X = torch.load(tmp_dir / 'X.pt', map_location='cpu')
+        entity_x = torch.load(tmp_dir / 'entity_X.pt', map_location='cpu')
+        self.entity_X = tuple(entity_x)
+
+    def cleanup_temporary(self) -> None:
+        """Delete on-disk spill files once no downstream pipeline step needs them."""
+        if self.tmp_dir is None:
+            return
+        tmp_dir = self.tmp_dir
         self.tmp_dir = None
+        self._remove_temporary_dir(tmp_dir)
 
     
     @staticmethod
@@ -285,6 +293,67 @@ class EmbeddingSubset(Dataset):
         return self.corpus.catCnt
 
 
+class RaggedEmbeddingSubset(RaggedEmbeddingDataset):
+    """Index-view over ragged embeddings without copying entity tensors."""
+
+    def __init__(
+        self,
+        *,
+        base_x: torch.Tensor,
+        base_entity_x: Sequence[torch.Tensor],
+        base_y: torch.Tensor,
+        base_corpus: Any,
+        indices: torch.Tensor,
+        corpus: Any,
+    ) -> None:
+        self._base_x = base_x
+        self._base_entity_x = tuple(base_entity_x)
+        self._base_y = base_y
+        self._base_corpus = base_corpus
+        self._indices = indices
+        self.corpus = corpus
+        self.catList = list(corpus.catList) if hasattr(corpus, 'catList') else []
+        self.tmp_dir = None
+        self._x_cache: torch.Tensor | None = None
+        self._y_cache: torch.Tensor | None = None
+        self._entity_cache: tuple[torch.Tensor, ...] | None = None
+
+    def __len__(self) -> int:
+        return int(self._indices.shape[0])
+
+    def __getitem__(self, idx: int) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        base_idx = int(self._indices[idx])
+        return (
+            {
+                'article_embeddings': self._base_x[base_idx],
+                'entity_embeddings': self._base_entity_x[base_idx],
+            },
+            self._base_y[base_idx],
+        )
+
+    @property
+    def X(self) -> torch.Tensor:
+        if self._x_cache is None:
+            self._x_cache = self._base_x.index_select(0, self._indices)
+        return self._x_cache
+
+    @property
+    def Y(self) -> torch.Tensor:
+        if self._y_cache is None:
+            self._y_cache = self._base_y.index_select(0, self._indices)
+        return self._y_cache
+
+    @property
+    def entity_X(self) -> tuple[torch.Tensor, ...]:
+        if self._entity_cache is None:
+            self._entity_cache = tuple(self._base_entity_x[int(i)] for i in self._indices.tolist())
+        return self._entity_cache
+
+    @property
+    def catCnt(self) -> int:
+        return self.corpus.catCnt
+
+
 def _subset_corpus(*, base_corpus: Any, indices: Sequence[int]) -> Corpus:
     """Build a sub-corpus that preserves the parent ``catList``/``catToIdx``.
 
@@ -317,15 +386,26 @@ def slice_dataset(*, dataset: Any, indices: Sequence[int]) -> Any:
     idx_tensor = torch.as_tensor(indices, dtype=torch.long)
 
     if isinstance(dataset, RaggedEmbeddingDataset):
+        if isinstance(dataset, RaggedEmbeddingSubset):
+            composed = dataset._indices.index_select(0, idx_tensor)
+            selected_corpus = _subset_corpus(base_corpus=dataset._base_corpus, indices=composed.tolist())
+            return RaggedEmbeddingSubset(
+                base_x=dataset._base_x,
+                base_entity_x=dataset._base_entity_x,
+                base_y=dataset._base_y,
+                base_corpus=dataset._base_corpus,
+                indices=composed,
+                corpus=selected_corpus,
+            )
+
         selected_corpus = _subset_corpus(base_corpus=dataset.corpus, indices=indices)
-        selected_article = dataset.X.index_select(0, idx_tensor)
-        selected_labels = dataset.Y.index_select(0, idx_tensor)
-        selected_entities = tuple(dataset.entity_X[int(i)] for i in indices)
-        return RaggedEmbeddingDataset(
+        return RaggedEmbeddingSubset(
+            base_x=dataset.X,
+            base_entity_x=dataset.entity_X,
+            base_y=dataset.Y,
+            base_corpus=dataset.corpus,
+            indices=idx_tensor,
             corpus=selected_corpus,
-            article_x=selected_article,
-            entity_x=selected_entities,
-            y=selected_labels,
         )
 
     if isinstance(dataset, EmbeddingSubset):

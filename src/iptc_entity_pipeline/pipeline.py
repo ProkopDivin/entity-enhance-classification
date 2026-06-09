@@ -569,6 +569,8 @@ def train_best(
     task.connect(best_model_cnf, name='bestModelConfig')
     task.connect(train_cnf, name='bestTrainingConfig')
     train_data.load_temporary()
+    if test_data is not None:
+        test_data.load_temporary()
     monitor_data = test_data if test_data is not None else train_data
     curve_label = 'test' if test_data is not None else 'dev'
     validation_split_name = 'test' if test_data is not None else 'dev'
@@ -583,15 +585,18 @@ def train_best(
     if test_data is not None and train_cfg.early_stopping_patience != 0:
         raise ValueError('Final retraining on test monitor split requires early stopping to be disabled')
 
-    result = train_model(
-        train_data=train_data,
-        dev_data=monitor_data,
-        feature_dim=feature_dim,
-        model_config=model_cfg,
-        training_config=train_cfg,
-        print_logs=print_logs,
-        validation_split_name=validation_split_name,
-    )
+    try:
+        result = train_model(
+            train_data=train_data,
+            dev_data=monitor_data,
+            feature_dim=feature_dim,
+            model_config=model_cfg,
+            training_config=train_cfg,
+            print_logs=print_logs,
+            validation_split_name=validation_split_name,
+        )
+    finally:
+        train_data.cleanup_temporary()
 
     report_test_curve(logger=clearml_logger, result=result, dev_series=curve_label)
     logger.info(
@@ -635,7 +640,6 @@ def eval_final(
         report_test_eval_scalars,
         report_test_eval_tables,
     )
-    test_data.load_temporary()
     def run_comparison():
         """Run optional baseline comparison and report results to ClearML."""
         comparison_cfg = config_mapping.get('evaluation_comparison') or config_mapping.get('comparison') or {}
@@ -713,79 +717,83 @@ def eval_final(
 
     from iptc_entity_pipeline.legacy_reuse import wgh_labels_from_score_matrix
 
-    df_corpora_test, df_classes_test, pred_score_matrix = evaluateModel(
-        model=trained_model,
-        evalData=test_data,
-        evaluation_config=eval_cfg,
-        customThresholds=custom_thresholds,
-        returnPredictions=True,
-    )
-
-    scalar_metrics = build_test_scalar_metrics(
-        df_corpora_test=df_corpora_test,
-        df_classes_test=df_classes_test,
-        objective_row=objective_row,
-    )
-    report_test_eval_scalars(
-        clearml_logger=clearml_logger,
-        df_corpora_test=df_corpora_test,
-        df_classes_test=df_classes_test,
-        objective_row=objective_row,
-    )
-    report_test_eval_tables(
-        clearml_logger=clearml_logger,
-        df_corpora_test=df_corpora_test,
-        df_classes_test=df_classes_test,
-    )
-
-    pred_scores_legacy = list(
-        wgh_labels_from_score_matrix(
-            score_matrix=pred_score_matrix,
-            cat_list=list(trained_model.catList),
+    test_data.load_temporary()
+    try:
+        df_corpora_test, df_classes_test, pred_score_matrix = evaluateModel(
+            model=trained_model,
+            evalData=test_data,
+            evaluation_config=eval_cfg,
+            customThresholds=custom_thresholds,
+            returnPredictions=True,
         )
-    )
-    del pred_score_matrix
-    save_paths = save_outputs(
-        model=trained_model,
-        test_data=test_data,
-        pred_scores=pred_scores_legacy,
-        eval_cnf=eval_cfg,
-        emb_cnf=emb_cfg,
-        config_mapping=config_mapping,
-        config_name=config_name,
-        feature_dim=feature_dim,
-        tuned_thresholds=custom_thresholds,
-        threshold_report_df=threshold_report_df,
-        upload_artifacts=upload_artifacts,
-    )
 
-    comparison_result = run_comparison()
+        scalar_metrics = build_test_scalar_metrics(
+            df_corpora_test=df_corpora_test,
+            df_classes_test=df_classes_test,
+            objective_row=objective_row,
+        )
+        report_test_eval_scalars(
+            clearml_logger=clearml_logger,
+            df_corpora_test=df_corpora_test,
+            df_classes_test=df_classes_test,
+            objective_row=objective_row,
+        )
+        report_test_eval_tables(
+            clearml_logger=clearml_logger,
+            df_corpora_test=df_corpora_test,
+            df_classes_test=df_classes_test,
+        )
 
-    output_dir = Path(save_paths.output_dir)
-    model_name = sanitize_name(value=config_name)
-    excel_path = output_dir / f'final_evaluation_tables_{model_name}.xlsx'
-    export_eval_excel(
-        excel_path=excel_path,
-        df_corpora_test=df_corpora_test,
-        df_classes_test=df_classes_test,
-        comparison_result=comparison_result,
-    )
+        pred_scores_legacy = list(
+            wgh_labels_from_score_matrix(
+                score_matrix=pred_score_matrix,
+                cat_list=list(trained_model.catList),
+            )
+        )
+        del pred_score_matrix
+        save_paths = save_outputs(
+            model=trained_model,
+            test_data=test_data,
+            pred_scores=pred_scores_legacy,
+            eval_cnf=eval_cfg,
+            emb_cnf=emb_cfg,
+            config_mapping=config_mapping,
+            config_name=config_name,
+            feature_dim=feature_dim,
+            tuned_thresholds=custom_thresholds,
+            threshold_report_df=threshold_report_df,
+            upload_artifacts=upload_artifacts,
+        )
 
-    if upload_artifacts:
-        upload_eval_artifacts()
+        comparison_result = run_comparison()
 
-    objective_metrics = df_corpora_test.loc[objective_row].to_dict()
-    obj_suffix = objective_suffix(objective_row)
-    logger.info(
-        f'Evaluation complete: F1_{obj_suffix}={scalar_metrics[f"F1_{obj_suffix}"]:.4f}, '
-        f'F1_macro_relevant={scalar_metrics["F1_macro_relevant"]:.4f}, config={config_name}'
-    )
-    return EvalResult(
-        test_corpora_df=df_corpora_test,
-        test_classes_df=df_classes_test,
-        objective_metrics=objective_metrics,
-        scalar_metrics=scalar_metrics,
-    )
+        output_dir = Path(save_paths.output_dir)
+        model_name = sanitize_name(value=config_name)
+        excel_path = output_dir / f'final_evaluation_tables_{model_name}.xlsx'
+        export_eval_excel(
+            excel_path=excel_path,
+            df_corpora_test=df_corpora_test,
+            df_classes_test=df_classes_test,
+            comparison_result=comparison_result,
+        )
+
+        if upload_artifacts:
+            upload_eval_artifacts()
+
+        objective_metrics = df_corpora_test.loc[objective_row].to_dict()
+        obj_suffix = objective_suffix(objective_row)
+        logger.info(
+            f'Evaluation complete: F1_{obj_suffix}={scalar_metrics[f"F1_{obj_suffix}"]:.4f}, '
+            f'F1_macro_relevant={scalar_metrics["F1_macro_relevant"]:.4f}, config={config_name}'
+        )
+        return EvalResult(
+            test_corpora_df=df_corpora_test,
+            test_classes_df=df_classes_test,
+            objective_metrics=objective_metrics,
+            scalar_metrics=scalar_metrics,
+        )
+    finally:
+        test_data.cleanup_temporary()
 
 
 def _run_assembly_training_pipeline(

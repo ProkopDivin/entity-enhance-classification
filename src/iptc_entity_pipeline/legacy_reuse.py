@@ -22,7 +22,11 @@ import torch
 import torch.nn as nn
 from clearml import Task
 from geneea.catlib.model.nnet import (
+    EntityAttention3MLP,
+    EntityAttention2MLP,
     EntityAttentionMLP,
+    EntityMhaAttention2MLP,
+    EntityMhaAttentionMLP,
     EntityNoPoolingMLP,
     LeakyMLP,
     MLP,
@@ -69,6 +73,14 @@ def _resolve_nn_type(model_config: Mapping[str, Any]) -> Type[MLPNN]:
         return EntityNoPoolingMLP
     if nn_name == 'entity_attention_mlp':
         return EntityAttentionMLP
+    if nn_name in {'entity_attention3_mlp', 'entity_attention_3_mlp'}:
+        return EntityAttention3MLP
+    if nn_name in {'entity_attention2_mlp', 'entity_attention_2_mlp'}:
+        return EntityAttention2MLP
+    if nn_name in {'entity_mha_attention_mlp', 'entity_multihead_attention_mlp'}:
+        return EntityMhaAttentionMLP
+    if nn_name in {'entity_mha_attention2_mlp', 'entity_multihead_attention2_mlp'}:
+        return EntityMhaAttention2MLP
     raise ValueError(f'Unknown nnType: {nn_name}')
 
 
@@ -356,13 +368,22 @@ def createClassificationModel(
 
     nn_type = _resolve_nn_type(model_config=modelConfig)
     nn_kwargs: dict[str, Any] = {}
-    if nn_type in {EntityNoPoolingMLP, EntityAttentionMLP}:
+    if nn_type in {
+        EntityNoPoolingMLP,
+        EntityAttention3MLP,
+        EntityAttentionMLP,
+        EntityAttention2MLP,
+        EntityMhaAttentionMLP,
+        EntityMhaAttention2MLP,
+    }:
         nn_kwargs['entityDim'] = int(modelConfig['entityDim'])
-    if nn_type is EntityAttentionMLP:
+    if nn_type in {EntityAttentionMLP, EntityAttention2MLP}:
         nn_kwargs.update({
             'attentionHiddenDim': int(modelConfig['attentionHiddenDim']),
             'attentionDropout': float(modelConfig.get('attentionDropout', 0.0)),
         })
+    if nn_type in {EntityMhaAttentionMLP, EntityMhaAttention2MLP}:
+        nn_kwargs['attentionNumHeads'] = int(modelConfig.get('attentionNumHeads', 1))
     bias_from_prior_logits = modelConfig.get('biasFromPriorLogits')
 
     return NeuralCategModel.create(

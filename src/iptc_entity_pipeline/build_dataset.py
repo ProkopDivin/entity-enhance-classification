@@ -36,6 +36,8 @@ class EntityEmbeddingStats:
     linked_unique_wdids: int = 0
     found_embeddings: int = 0
     missing_embeddings: int = 0
+    max_found_embeddings_per_article: int = 0
+    p99_found_embeddings_per_article: int = 0
 
 
 @dataclass(frozen=True)
@@ -155,8 +157,19 @@ def report_ent_stats(
         f'linked_with_embedding={found_cnt} '
         f'unlinked_missing_embedding={missing_cnt} '
         f'coverage={linked_ratio:.4f} '
-        f'entity_dim={entity_dim}'
+        f'entity_dim={entity_dim} '
+        f'max_found_per_article={stats.max_found_embeddings_per_article} '
+        f'p99_found_per_article={stats.p99_found_embeddings_per_article}'
     )
     logger.info(summary_message)
     if clearml_task is not None:
         clearml_task.get_logger().report_text(summary_message, print_console=True)
+    return EntityEmbeddingStats(
+        use_entity_embeddings=True,
+        entity_dim=entity_dim,
+        linked_unique_wdids=total_wdids,
+        found_embeddings=found_cnt,
+        missing_embeddings=missing_cnt,
+        max_found_embeddings_per_article=stats.max_found_embeddings_per_article,
+        p99_found_embeddings_per_article=stats.p99_found_embeddings_per_article,
+    )
