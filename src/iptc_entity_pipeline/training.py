@@ -73,6 +73,7 @@ def model_payload(*, model_config: ModelCnf, nn_type: str = 'mlp') -> dict[str, 
         'entityDim': model_config.entity_dim,
         'attentionHiddenDim': model_config.attention_hidden_dim,
         'attentionDropout': model_config.attention_dropout,
+        'attentionNumHeads': model_config.attention_num_heads,
         'biasFromPrior': model_config.bias_from_prior,
     }
 

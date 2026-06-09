@@ -63,6 +63,7 @@ class ModelCnf:
     entity_dim: int = 0
     attention_hidden_dim: int = 128
     attention_dropout: float = 0.0
+    attention_num_heads: int = 1
     bias_from_prior: bool = False
 
 
@@ -639,6 +640,53 @@ class WPEntitiesRelTH10(BaseCnfWithHPO):
         )
     )
     
+@dataclass(frozen=True)
+class WPEntitiesRelTH11(BaseCnfWithHPO):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_langs=('en',),
+            entity_relevance_threshold=11.0,
+        )
+    )
+    
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH12(BaseCnfWithHPO):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_langs=('en',),
+            entity_relevance_threshold=12.0,
+        )
+    )
+    
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH13(BaseCnfWithHPO):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_langs=('en',),
+            entity_relevance_threshold=13.0,
+        )
+    )
+    
+@dataclass(frozen=True)
+class WPEntitiesRelTH14(BaseCnfWithHPO):
+    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_langs=('en',),
+            entity_relevance_threshold=14.0,
+        )
+    )
+    
+    
 
 
 @dataclass(frozen=True)
@@ -650,6 +698,8 @@ class WPEntitiesNlCnf(PreBaseCnfWithHPO):
             entity_langs=('nl',),
         )
     )
+    
+    
     
 @dataclass(frozen=True)
 class WPEntitiesRelTH15(BaseCnfWithHPO):
@@ -943,6 +993,63 @@ class BestWpEntitiesAttentionCnf(WpEntitiesTunedCnf):
 
 
 @dataclass(frozen=True)
+class BestWpEntitiesAttention2Cnf(WpEntitiesTunedCnf):
+    """Entity-enhanced config with per-entity attention plus pooled-entity gating."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention2_mlp',
+            attention_hidden_dim=512,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class BestWpEntitiesMhaAttentionCnf(WpEntitiesTunedCnf):
+    """Best entity-enhanced config with MHA over entities."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention_mlp',
+            attention_num_heads=8,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class BestWpEntitiesMhaAttention2Cnf(WpEntitiesTunedCnf):
+    """Best entity-enhanced config with MHA and attention-weight scaling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention2_mlp',
+            attention_num_heads=8,
+        )
+    )
+
+
+@dataclass(frozen=True)
 class  WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
     """Entity-enhanced configuration with explicit attention over entities."""
 
@@ -965,8 +1072,8 @@ class  WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
             hidden_dims=(4096,),
             dropouts1=(0.0,),
             dropouts2=(0.5,),
-            attention_hidden_dims=(64, 128, 256, 512),
-            attention_dropouts=(0.0,0.3,),
+            attention_hidden_dims=(64, 256, 512), # 128, #TODO: return this back 
+            attention_dropouts=(0.0, 0.3,),
 
         )
     )
@@ -1079,8 +1186,92 @@ class W2VecAttentionHPOCnf(Wikipedia2VecEntitiesCnf):
         )
     )  
     
+
+
 @dataclass(frozen=True)
-class WPEntitiesAttentionHPOCnf2(WpEntitiesTunedCnf):
+class WPEntitiesAttention2HPOCnf(WPEntitiesAttentionHPOCnf):
+    """Entity-enhanced configuration with attention plus pooled-entity gating."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention2_mlp',
+        )
+    )
+
+
+
+@dataclass(frozen=True)
+class WPEntitiesPmmAttention2HPOCnf(WPEntitiesAttentionHPOCnf):
+    """PMM entity embeddings with attention2 architecture and HPO."""
+
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention2_mlp',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WArticleAttention2Cnf(WikipediaArticleEntitiesCnf):
+    """Wikipedia article entity embeddings with attention2 architecture."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention2_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.0,),
+            dropouts2=(0.3,),
+            attention_hidden_dims=(64, 128, 256, 512),
+            attention_dropouts=(0.0, 0.3),
+        )
+    )
+
+
+@dataclass(frozen=True)
+class W2VecAttention2HPOCnf(Wikipedia2VecEntitiesCnf):
+    """Wikipedia2Vec entity embeddings with attention2 architecture."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention2_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(1024,),
+            dropouts1=(0.1,),
+            dropouts2=(0.3,),
+            attention_hidden_dims=(64, 128, 256, 512),
+            attention_dropouts=(0.0, 0.3),
+        )
+    )
+
+###--------------------------------------------------TRY RUNS FOR ATTENTION----------------------
+@dataclass(frozen=True)
+class TryAttentionBase(WpEntitiesTunedCnf):
     """Entity-enhanced configuration with explicit attention over entities."""
 
     emb: EmbeddingCnf = field(
@@ -1099,14 +1290,208 @@ class WPEntitiesAttentionHPOCnf2(WpEntitiesTunedCnf):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
-            hidden_dims=(1024,),
+            hidden_dims=(4096,),
             dropouts1=(0.0,),
-            dropouts2=(0.0,),
-            attention_hidden_dims=(512,),
-            attention_dropouts=(0.0, 0.1, 0.3, 0.5),
+            dropouts2=(0.5,),
+            attention_hidden_dims=(512,), # 128, #TODO: return this back
+            attention_dropouts=(0.3,),
 
         )
     )
+@dataclass(frozen=True)
+class WPEntitiesAttention2TryCnf(TryAttentionBase):
+    """Entity-enhanced configuration with attention plus pooled-entity gating."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention2_mlp',
+        )
+    )
+    
+
+
+@dataclass(frozen=True)
+class WPEntitiesPmmAttention2TryCnf(TryAttentionBase):
+    """PMM entity embeddings with attention2 architecture and HPO."""
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention2_mlp',
+        )
+    )
+    
+@dataclass(frozen=True)
+class  WPEntitiesAttentionTryCnf(TryAttentionBase):
+    """Entity-enhanced configuration with explicit attention over entities."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+
+    
+@dataclass(frozen=True)
+class WPEntitiesPmmAttentionTryCnf(TryAttentionBase):
+    """Entity-enhanced configuration with explicit attention over entities."""
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
+        )
+    )
+
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesAttention3TryCnf(TryAttentionBase):
+    """Entity-enhanced configuration with two-stage softmax gated attention."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention3_mlp',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesPmmAttention3TryCnf(TryAttentionBase):
+    """PMM entity embeddings with two-stage softmax gated attention."""
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention3_mlp',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesMhaAttentionTryCnf(TryAttentionBase):
+    """Entity-enhanced configuration with MHA pooling."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention_mlp',
+            attention_num_heads=8,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesPmmMhaAttentionTryCnf(TryAttentionBase):
+    """PMM entity embeddings with MHA pooling."""
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention_mlp',
+            attention_num_heads=8,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesMhaAttention2TryCnf(TryAttentionBase):
+    """Entity-enhanced configuration with MHA pooling and gated fusion."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention2_mlp',
+            attention_num_heads=8,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesPmmMhaAttention2TryCnf(TryAttentionBase):
+    """PMM entity embeddings with MHA pooling and gated fusion."""
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention2_mlp',
+            attention_num_heads=8,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesMhaAttentionTry1HeadCnf(WPEntitiesMhaAttentionTryCnf):
+    """Entity-enhanced MHA pooling with 1 attention head."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention_mlp',
+            attention_num_heads=1,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesPmmMhaAttentionTry1HeadCnf(WPEntitiesPmmMhaAttentionTryCnf):
+    """PMM entity embeddings with MHA pooling and 1 attention head."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention_mlp',
+            attention_num_heads=1,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesMhaAttention2Try1HeadCnf(WPEntitiesMhaAttention2TryCnf):
+    """Entity-enhanced MHA pooling + gated fusion with 1 attention head."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention2_mlp',
+            attention_num_heads=1,
+        )
+    )
+
+
+@dataclass(frozen=True)
+class WPEntitiesPmmMhaAttention2Try1HeadCnf(WPEntitiesPmmMhaAttention2TryCnf):
+    """PMM entity embeddings with MHA pooling + gated fusion and 1 attention head."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention2_mlp',
+            attention_num_heads=1,
+        )
+    )
+
 
 @dataclass(frozen=True)
 class BestArticleOnlyCnf(PreBaseCnfWithHPO):
@@ -1415,6 +1800,87 @@ class WikipediaArticleEntityOnlyCnf(WikipediaArticleEntitiesCnf):
 
 
 @dataclass(frozen=True)
+class WPEntityOnlyMeanCnf(EntityOnlyCnf):
+    """Entity-only configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False, entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class Wikipedia2VecEntityOnlyMeanCnf(Wikipedia2VecEntityOnlyCnf):
+    """Wikipedia2Vec entity-only configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False, entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class WikidataDescriptionEntityOnlyMeanCnf(WikidataDescriptionEntityOnlyCnf):
+    """Wikidata description entity-only configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False, entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class WikipediaIntroEntityOnlyMeanCnf(WikipediaIntroEntityOnlyCnf):
+    """Wikipedia intro entity-only configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False, entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class WikipediaArticleEntityOnlyMeanCnf(WikipediaArticleEntityOnlyCnf):
+    """Wikipedia article entity-only configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False, entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class Wikipedia2VecEntitiesMeanCnf(Wikipedia2VecEntitiesCnf):
+    """Wikipedia2Vec entity-enhanced configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class WikidataDescriptionEntitiesMeanCnf(WikidataDescriptionEntitiesCnf):
+    """Wikidata description entity-enhanced configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class WikipediaIntroEntitiesMeanCnf(WikipediaIntroEntitiesCnf):
+    """Wikipedia intro entity-enhanced configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class WikipediaArticleEntitiesMeanCnf(WikipediaArticleEntitiesCnf):
+    """Wikipedia article entity-enhanced configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
 class Assembly1Cnf(BaseCnf):
     """Dual-model assembly demo using two tuned single-model configs.
 
@@ -1566,7 +2032,48 @@ class TunningLearningRateCnf(BaseCnfWithHPO3):
 class DebugAttentionCnf(DebugCnf):
     """Debug configuration for quick local runs."""
     model: ModelCnf = field(
-        default_factory=lambda: replace(ModelCnf(), nn_type='entity_attention_mlp')
+        default_factory=lambda: replace(ModelCnf(), nn_type='entity_attention2_mlp')
+    )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='no_pooling')
+    )
+
+
+@dataclass(frozen=True)
+class DebugAttention3Cnf(DebugCnf):
+    """Debug configuration for two-stage softmax gated attention."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(ModelCnf(), nn_type='entity_attention3_mlp')
+    )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='no_pooling')
+    )
+
+
+@dataclass(frozen=True)
+class DebugMhaAttentionCnf(DebugCnf):
+    """Debug configuration for MHA entity pooling."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention_mlp',
+            attention_num_heads=8,
+        )
+    )
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='no_pooling')
+    )
+
+
+@dataclass(frozen=True)
+class DebugMhaAttention2Cnf(DebugCnf):
+    """Debug configuration for MHA entity pooling with gated fusion."""
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_mha_attention2_mlp',
+            attention_num_heads=8,
+        )
     )
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='no_pooling')
@@ -1609,6 +2116,19 @@ def _config_map() -> dict[str, BaseCnf]:
         'wikidata_description_entities': WikidataDescriptionEntitiesCnf(),
         'wikipedia_intro_entities': WikipediaIntroEntitiesCnf(),
         'wikipedia_article_entities': WikipediaArticleEntitiesCnf(),
+        # entity-pooling with mean
+        'wp_entity_only_mean': WPEntityOnlyMeanCnf(),
+        'wikipedia2vec_entity_only_mean': Wikipedia2VecEntityOnlyMeanCnf(),
+        'wikidata_description_entity_only_mean': WikidataDescriptionEntityOnlyMeanCnf(),
+        'wikipedia_intro_entity_only_mean': WikipediaIntroEntityOnlyMeanCnf(),
+        'wikipedia_article_entity_only_mean': WikipediaArticleEntityOnlyMeanCnf(),
+        'wp_entities_mean': WPEntitiesMeanCnf(),
+        'wikipedia2vec_entities_mean': Wikipedia2VecEntitiesMeanCnf(),
+        'wikidata_description_entities_mean': WikidataDescriptionEntitiesMeanCnf(),
+        'wikipedia_intro_entities_mean': WikipediaIntroEntitiesMeanCnf(),
+        'wikipedia_article_entities_mean': WikipediaArticleEntitiesMeanCnf(),
+        
+
 
         # testing different embeddings
         'wpentities_jina_v3_cls': WpEntitiesJV3ClsTunedCnf(),
@@ -1619,10 +2139,29 @@ def _config_map() -> dict[str, BaseCnf]:
     
         'article_only_tuned_diff_thresholds': ArticleOnlyTunedDiffThresholdsCnf(),
         
+        #try runs
+        'try_wpentities_attention2': WPEntitiesAttention2TryCnf(),
+        'try_wpentities_pmm_attention2': WPEntitiesPmmAttention2TryCnf(),
+        'try_wpentities_attention': WPEntitiesAttentionTryCnf(),
+        'try_wpentities_pmm_attention': WPEntitiesPmmAttentionTryCnf(),
+        'try_wpentities_attention3': WPEntitiesAttention3TryCnf(),
+        'try_wpentities_pmm_attention3': WPEntitiesPmmAttention3TryCnf(),
+        'try_wpentities_mha_attention_h1': WPEntitiesMhaAttentionTry1HeadCnf(),
+        'try_wpentities_pmm_mha_attention_h1': WPEntitiesPmmMhaAttentionTry1HeadCnf(),
+        'try_wpentities_mha_attention2_h1': WPEntitiesMhaAttention2Try1HeadCnf(),
+        'try_wpentities_pmm_mha_attention2_h1': WPEntitiesPmmMhaAttention2Try1HeadCnf(),
+        'try_wpentities_mha_attention_h8': WPEntitiesMhaAttentionTryCnf(),
+        'try_wpentities_pmm_mha_attention_h8': WPEntitiesPmmMhaAttentionTryCnf(),
+        'try_wpentities_mha_attention2_h8': WPEntitiesMhaAttention2TryCnf(),
+        'try_wpentities_pmm_mha_attention2_h8': WPEntitiesPmmMhaAttention2TryCnf(),
         
         # entity-pooling 
         'debug_attention': DebugAttentionCnf(),
+        'debug_attention3': DebugAttention3Cnf(),
+        'debug_mha_attention': DebugMhaAttentionCnf(),
+        'debug_mha_attention2': DebugMhaAttention2Cnf(),
         'wpentities_attention_hpo': WPEntitiesAttentionHPOCnf(),
+        
         'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumCnf(),
         'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumCnf(),
         'wpentities_relevance_weighted_mean': WPEntitiesRelevanceWeightedMeanCnf(),
@@ -1633,6 +2172,8 @@ def _config_map() -> dict[str, BaseCnf]:
         'w2vec_attention': W2VecAttentionHPOCnf(),
         'wikipedia_article_entities_attention': WArticleAtentionCnf(),
         
+        
+        # entity-pooling with mean
         
         # relevance treshold (all tuned )
         'wpentities_rel_th_1': WPEntitiesRelTH1(),
@@ -1645,6 +2186,10 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_rel_th_8': WPEntitiesRelTH8(),
         'wpentities_rel_th_9': WPEntitiesRelTH9(),
         'wpentities_rel_th_10': WPEntitiesRelTH10(),
+        'wpentities_rel_th_11': WPEntitiesRelTH11(),
+        'wpentities_rel_th_12': WPEntitiesRelTH12(),
+        'wpentities_rel_th_13': WPEntitiesRelTH13(),
+        'wpentities_rel_th_14': WPEntitiesRelTH14(),
         'wpentities_rel_th_15': WPEntitiesRelTH15(),
         'wpentities_rel_th_20': WPEntitiesRelTH20(),
         'wpentities_rel_th_25': WPEntitiesRelTH25(),
@@ -1658,8 +2203,9 @@ def _config_map() -> dict[str, BaseCnf]:
           
         'wpentities_rel_th_5': WPEntitiesRelTH5(),
         'wpentities_attention': BestWpEntitiesAttentionCnf(),
+        'wpentities_mha_attention': BestWpEntitiesMhaAttentionCnf(),
+        'wpentities_mha_attention2': BestWpEntitiesMhaAttention2Cnf(),
         'wpentities_attention_hpo': WPEntitiesAttentionHPOCnf(),
-        'wpentities_attention_hpo_2': WPEntitiesAttentionHPOCnf2(),
         
         'wpentities_en_nl': WPEntitiesEnNlCnf(),
         'wpentities_nl': WPEntitiesNlCnf(),

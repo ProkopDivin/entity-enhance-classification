@@ -25,6 +25,8 @@ class FeatureBuildStats:
     total_found_embeddings: int
     total_missing_embeddings: int
     entity_dim: int
+    max_found_embeddings_per_article: int
+    p99_found_embeddings_per_article: int
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class _BuildTracking:
     unique_missing_wdids: set[str]
     total_found_embeddings: int
     total_missing_embeddings: int
+    found_embeddings_per_article: list[int]
 
 
 class FeatureBuilder:
@@ -76,6 +79,7 @@ class FeatureBuilder:
             unique_missing_wdids=set(),
             total_found_embeddings=0,
             total_missing_embeddings=0,
+            found_embeddings_per_article=[],
         )
 
     @staticmethod
@@ -89,6 +93,7 @@ class FeatureBuilder:
         tracking.total_found_embeddings += pooling_result.found_embeddings
         tracking.total_missing_embeddings += pooling_result.missing_embeddings
         tracking.unique_missing_wdids.update(pooling_result.missing_wdids)
+        tracking.found_embeddings_per_article.append(int(pooling_result.found_embeddings))
 
         if pooling_result.missing_wdids:
             unique_missing_wdids = sorted(set(pooling_result.missing_wdids))
@@ -105,6 +110,8 @@ class FeatureBuilder:
         indexed_embedding_files = self._entity_embedding_store.indexed_file_count()
         avg_missing_per_article = (tracking.total_missing_embeddings / total_docs) if total_docs else 0.0
         avg_found_per_article = (tracking.total_found_embeddings / total_docs) if total_docs else 0.0
+        max_found_per_article = max(tracking.found_embeddings_per_article, default=0)
+        p99_found_per_article = self._p99_count(values=tracking.found_embeddings_per_article)
         return (
             'Entity embedding final stats: '
             f'unique_missing={unique_missing_entities} '
@@ -113,8 +120,20 @@ class FeatureBuilder:
             f'missing_ratio='
             f'{((unique_missing_entities / unique_total_entities) if unique_total_entities else 0.0):.4f} '
             f'avg_missing_per_article={avg_missing_per_article:.4f} '
-            f'avg_found_per_article={avg_found_per_article:.4f}'
+            f'avg_found_per_article={avg_found_per_article:.4f} '
+            f'max_found_per_article={max_found_per_article} '
+            f'p99_found_per_article={p99_found_per_article}'
         )
+
+    @staticmethod
+    def _p99_count(*, values: list[int]) -> int:
+        """Return the count threshold where 99% of articles are at or below it."""
+        if not values:
+            return 0
+        sorted_vals = sorted(values)
+        index = int(np.ceil(0.99 * len(sorted_vals))) - 1
+        index = max(0, min(index, len(sorted_vals) - 1))
+        return int(sorted_vals[index])
 
     @staticmethod
     def _report_final_stats(*, final_stats_message: str, clearml_logger: Any | None) -> None:
@@ -182,6 +201,8 @@ class FeatureBuilder:
             total_found_embeddings=tracking.total_found_embeddings,
             total_missing_embeddings=tracking.total_missing_embeddings,
             entity_dim=int(entity_dim),
+            max_found_embeddings_per_article=max(tracking.found_embeddings_per_article, default=0),
+            p99_found_embeddings_per_article=self._p99_count(values=tracking.found_embeddings_per_article),
         )
         return matrix, stats
 
@@ -230,6 +251,8 @@ class FeatureBuilder:
             total_found_embeddings=tracking.total_found_embeddings,
             total_missing_embeddings=tracking.total_missing_embeddings,
             entity_dim=int(entity_dim),
+            max_found_embeddings_per_article=max(tracking.found_embeddings_per_article, default=0),
+            p99_found_embeddings_per_article=self._p99_count(values=tracking.found_embeddings_per_article),
         )
         return RaggedFeatureData(
             article_matrix=np.vstack(article_rows),
