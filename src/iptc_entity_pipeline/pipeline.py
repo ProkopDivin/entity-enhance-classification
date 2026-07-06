@@ -839,8 +839,7 @@ def _run_assembly_training_pipeline(
     """
     from pathlib import Path
 
-    from iptc_entity_pipeline.assembly_io import load_thresholds
-    from iptc_entity_pipeline.assembly_model import AssemblyModel
+    from iptc_entity_pipeline.assembly import AssemblyModel, load_thresholds
 
     task = Task.current_task()
     members_raw = list(assembly_cnf.get('members') or ())
