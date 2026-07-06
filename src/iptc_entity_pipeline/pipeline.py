@@ -77,12 +77,14 @@ def load_data(
         csv_path=paths.train_csv,
         wdid_mapping=wdid_mapping,
         min_relevance=emb.entity_relevance_threshold,
+        remove_types=emb.remove_types,
     )
     attach_entities(
         corpus=corpora.test,
         csv_path=paths.test_csv,
         wdid_mapping=wdid_mapping,
         min_relevance=emb.entity_relevance_threshold,
+        remove_types=emb.remove_types,
     )
     return corpora
 
