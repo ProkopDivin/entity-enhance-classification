@@ -37,6 +37,7 @@ class LinkedEntity:
     wd_ids: tuple[str, ...]
     relevance: float
     mention_count: int = 1
+    entity_type: str | None = None
     raw_entity: Mapping[str, Any] | None = None
 
 
@@ -398,12 +399,15 @@ def attach_entities(
                         relevance = 0.0
                     if relevance < min_relevance:
                         continue
+                    type_raw = ent.get('type')
+                    entity_type = type_raw.strip() if isinstance(type_raw, str) and type_raw.strip() else None
                     linked.append(
                         LinkedEntity(
                             gkb_id=gkb_id,
                             wd_ids=wd_ids,
                             relevance=relevance,
                             mention_count=mention_count,
+                            entity_type=entity_type,
                             raw_entity=dict(ent),
                         )
                     )
