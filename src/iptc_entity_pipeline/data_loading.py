@@ -272,6 +272,67 @@ def load_wdid_map(*, wdid_mapping_tsv: str) -> dict[str, list[str]]:
     return mapping
 
 
+def _normalize_wdids(*, value: Any) -> tuple[str, ...]:
+    """
+    Normalize one-or-many Wikidata IDs to a deduplicated tuple.
+
+    :param value: Scalar, list, or pipe/comma-separated string of wdIds.
+    :return: Immutable tuple of unique non-empty wdId strings.
+    """
+    if value is None:
+        return ()
+
+    wdids: list[str] = []
+    if isinstance(value, str):
+        normalized = value.replace('|', ',')
+        wdids.extend(chunk.strip() for chunk in normalized.split(',') if chunk.strip())
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                wdids.append(item.strip())
+    else:
+        item = str(value).strip()
+        if item:
+            wdids.append(item)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in wdids:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return tuple(unique)
+
+
+def _resolve_entity_ids(
+    *,
+    ent: Mapping[str, Any],
+    wdid_mapping: Mapping[str, Sequence[str]],
+) -> tuple[str, tuple[str, ...]] | None:
+    """
+    Resolve entity identifier and mapped wdIds from one raw entity record.
+
+    Supports gkbId lookup via ``wdid_mapping`` and inline ``wdId`` /
+    ``wdids`` fields used in gold-origin corpora.
+
+    :param ent: Raw entity dict from CSV JSON.
+    :param wdid_mapping: gkbId -> wdId list mapping.
+    :return: ``(gkb_id, wd_ids)`` or ``None`` when no identifier is present.
+    """
+    gkb_id_raw = ent.get('gkbId') or ent.get('gkb_id')
+    gkb_id = gkb_id_raw.strip() if isinstance(gkb_id_raw, str) and gkb_id_raw.strip() else None
+    inline_wdids = _normalize_wdids(value=ent.get('wdId') or ent.get('wdid') or ent.get('wdids'))
+
+    if gkb_id is not None:
+        return gkb_id, tuple(wdid_mapping.get(gkb_id, ()))
+
+    if inline_wdids:
+        return inline_wdids[0], inline_wdids
+
+    return None
+
+
 def attach_entities(
     *,
     corpus: Any,
@@ -310,10 +371,10 @@ def attach_entities(
                 for ent in raw_entities:
                     if not isinstance(ent, Mapping):
                         continue
-                    gkb_id = ent.get('gkbId', '')
-                    if not gkb_id:
+                    resolved = _resolve_entity_ids(ent=ent, wdid_mapping=wdid_mapping)
+                    if resolved is None:
                         continue
-                    wd_ids = tuple(wdid_mapping.get(gkb_id, ()))
+                    gkb_id, wd_ids = resolved
                     mentions = ent.get('mentions')
                     mention_count = 1
                     if isinstance(mentions, list):

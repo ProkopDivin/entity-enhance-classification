@@ -47,10 +47,14 @@ class _BuildTracking:
     total_found_embeddings: int
     total_missing_embeddings: int
     found_embeddings_per_article: list[int]
+    articles_without_linked_entities: int
+
+
+_SUPPORTED_COMBINE_METHODS = frozenset({'concat', 'sum'})
 
 
 class FeatureBuilder:
-    """Create concatenated article + pooled-entity embeddings for one corpus."""
+    """Create article + pooled-entity embeddings for one corpus."""
 
     def __init__(
         self,
@@ -61,8 +65,11 @@ class FeatureBuilder:
         use_article_embeddings: bool = True,
         combine_method: str = 'concat',
     ) -> None:
-        if combine_method != 'concat':
-            raise ValueError(f'Unsupported v1 combine method: {combine_method}')
+        if combine_method not in _SUPPORTED_COMBINE_METHODS:
+            raise ValueError(
+                f'Unsupported combine_method={combine_method!r}, '
+                f'expected one of {sorted(_SUPPORTED_COMBINE_METHODS)}'
+            )
         if use_article_embeddings and article_embedding_provider is None:
             raise ValueError('article_embedding_provider is required when use_article_embeddings=True')
         self._article_embedding_provider = article_embedding_provider
@@ -70,6 +77,30 @@ class FeatureBuilder:
         self._pooling_strategy = pooling_strategy
         self._use_article_embeddings = use_article_embeddings
         self._combine_method = combine_method
+
+    def _combine_article_entity(
+        self,
+        *,
+        article_embedding: np.ndarray,
+        entity_embedding: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Fuse article and pooled-entity vectors according to ``combine_method``.
+
+        :param article_embedding: Article vector.
+        :param entity_embedding: Pooled entity vector.
+        :return: Fused feature vector.
+        """
+        article = np.asarray(article_embedding, dtype=np.float32)
+        entity = np.asarray(entity_embedding, dtype=np.float32)
+        if self._combine_method == 'concat':
+            return np.concatenate([article, entity])
+        if article.shape != entity.shape:
+            raise ValueError(
+                f'combine_method=sum requires matching embedding dims, '
+                f'article_dim={article.shape[0]}, entity_dim={entity.shape[0]}'
+            )
+        return article + entity
 
     @staticmethod
     def _init_tracking() -> _BuildTracking:
@@ -80,6 +111,7 @@ class FeatureBuilder:
             total_found_embeddings=0,
             total_missing_embeddings=0,
             found_embeddings_per_article=[],
+            articles_without_linked_entities=0,
         )
 
     @staticmethod
@@ -102,6 +134,8 @@ class FeatureBuilder:
                 doc_id,
                 ', '.join(unique_missing_wdids),
             )
+        if not wdids:
+            tracking.articles_without_linked_entities += 1
 
     def _final_message(self, *, tracking: _BuildTracking, total_docs: int) -> str:
         """Compose final entity-linking summary for logs and ClearML."""
@@ -112,6 +146,10 @@ class FeatureBuilder:
         avg_found_per_article = (tracking.total_found_embeddings / total_docs) if total_docs else 0.0
         max_found_per_article = max(tracking.found_embeddings_per_article, default=0)
         p99_found_per_article = self._p99_count(values=tracking.found_embeddings_per_article)
+        articles_without_linked_entities = tracking.articles_without_linked_entities
+        articles_without_linked_entities_pct = (
+            (articles_without_linked_entities / total_docs * 100) if total_docs else 0.0
+        )
         return (
             'Entity embedding final stats: '
             f'unique_missing={unique_missing_entities} '
@@ -122,7 +160,9 @@ class FeatureBuilder:
             f'avg_missing_per_article={avg_missing_per_article:.4f} '
             f'avg_found_per_article={avg_found_per_article:.4f} '
             f'max_found_per_article={max_found_per_article} '
-            f'p99_found_per_article={p99_found_per_article}'
+            f'p99_found_per_article={p99_found_per_article} '
+            f'articles_without_linked_entities={articles_without_linked_entities} '
+            f'articles_without_linked_entities_pct={articles_without_linked_entities_pct:.4f}%'
         )
 
     @staticmethod
@@ -162,7 +202,9 @@ class FeatureBuilder:
         :param corpus: ``geneea.catlib.data.Corpus`` object with entities attached to each doc.
         :param clearml_logger: Optional ClearML task logger used to report summary text.
         :param return_stats: If ``True``, return matrix together with coverage stats.
-        :return: Feature matrix of shape ``[docs, article_dim + entity_dim]`` or ``[docs, entity_dim]``.
+        :return: Feature matrix of shape ``[docs, article_dim + entity_dim]`` (concat),
+            ``[docs, article_dim]`` (sum, requires ``article_dim == entity_dim``),
+            or ``[docs, entity_dim]`` when article embeddings are disabled.
         """
         entity_dim = self._entity_embedding_store.infer_embedding_dim()
         rows: list[np.ndarray] = []
@@ -183,7 +225,10 @@ class FeatureBuilder:
             if self._use_article_embeddings:
                 assert self._article_embedding_provider is not None
                 article_embedding = self._article_embedding_provider.get_embedding(article_id=doc.id)
-                row = np.concatenate([article_embedding, pooling_result.pooled_embedding]).astype(np.float32)
+                row = self._combine_article_entity(
+                    article_embedding=article_embedding,
+                    entity_embedding=pooling_result.pooled_embedding,
+                )
             else:
                 row = np.asarray(pooling_result.pooled_embedding, dtype=np.float32)
             rows.append(row)

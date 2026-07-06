@@ -200,10 +200,15 @@ def build_dataset(
         return dataset_bundle.train_data, dataset_bundle.test_data, dataset_bundle.feature_dim
 
     selected_langs = tuple(emb.entity_langs) if emb.entity_langs else (emb.entity_lang,)
-    logger.info('Using entity embedding languages=%s', selected_langs)
+    logger.info(
+        'Using entity embedding languages=%s mode=%s',
+        selected_langs,
+        emb.entity_lang_mode,
+    )
     entity_store = EntityEmbeddingStore(
         root_dir=paths.entity_embeddings_dir,
         langs=selected_langs,
+        lang_mode=emb.entity_lang_mode,
     )
     entity_store.compute_train_mean_from_corpus(corpus=corpora.train)
     pooling = get_pooling(emb_cfg=emb, logger=logger)
