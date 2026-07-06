@@ -732,7 +732,7 @@ def evaluateModel(
     """
     from dataclasses import asdict
 
-    from iptc_entity_pipeline.evaluation.evaluate import (
+    from iptc_entity_pipeline.evaluate import (
         evaluate_classes,
         evaluate_corpora,
         pred_cats_from_matrix,

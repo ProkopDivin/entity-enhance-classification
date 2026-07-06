@@ -31,7 +31,7 @@ from dataclasses import asdict
 from iptc_entity_pipeline.assembly.model import ClassToModelMap
 from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.cross_validation import CvOutputs
-from iptc_entity_pipeline.evaluation.evaluate import get_cat_name
+from iptc_entity_pipeline.evaluate import get_cat_name
 
 LOGGER = logging.getLogger(__name__)
 
