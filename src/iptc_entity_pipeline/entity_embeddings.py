@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -26,11 +26,13 @@ class EntityEmbeddingStore:
         *,
         root_dir: str,
         langs: tuple[str, ...] | str = ('en',),
+        lang_mode: Literal['average', 'fallback'] = 'average',
     ) -> None:
         self._root_dir = Path(root_dir)
         raw_langs = (langs,) if isinstance(langs, str) else langs
         normalized_langs = tuple(dict.fromkeys(lang.strip() for lang in raw_langs if lang and lang.strip()))
         self._langs = normalized_langs if normalized_langs else ('en',)
+        self._lang_mode = lang_mode
         self._cache: dict[str, np.ndarray | None] = {}
         self._wdid_lang_to_paths: dict[str, dict[str, list[Path]]] = {}
         self._sample_path: Path | None = None
@@ -107,17 +109,30 @@ class EntityEmbeddingStore:
         if wdid in self._cache:
             return self._cache[wdid]
 
+        if self._lang_mode == 'fallback':
+            for lang in self._langs:
+                chunk_paths = self._chunk_paths(wdid=wdid, lang=lang)
+                if not chunk_paths:
+                    continue
+                chunks = [np.asarray(np.load(path), dtype=np.float32) for path in chunk_paths]
+                embedding = np.mean(np.vstack(chunks), axis=0, dtype=np.float32)
+                self._cache[wdid] = embedding
+                return embedding
+            self._cache[wdid] = None
+            return None
+
         chunks_all_langs: list[np.ndarray] = []
         for lang in self._langs:
             chunk_paths = self._chunk_paths(wdid=wdid, lang=lang)
             if not chunk_paths:
                 continue
             chunks_all_langs.extend(np.asarray(np.load(path), dtype=np.float32) for path in chunk_paths)
-
+        
+        # so we do not have to search in memory for it 
         if not chunks_all_langs:
             self._cache[wdid] = None
             return None
-        # there can be multiple chunks for the same wdid when the entity is too long 
+        # there can be multiple chunks for the same wdid when the entity is too known
         embedding = np.mean(np.vstack(chunks_all_langs), axis=0, dtype=np.float32)
         self._cache[wdid] = embedding
         return embedding
