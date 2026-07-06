@@ -25,7 +25,7 @@ from iptc_entity_pipeline.dataset_builder import (
     slice_dataset,
     to_numpy_array,
 )
-from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW, aggregate_fold_dfs
+from iptc_entity_pipeline.evaluation.evaluate import CLASS_RELEVANT_MACRO_ROW, aggregate_fold_dfs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.seeding import fold_seed, set_global_seed
 from iptc_entity_pipeline.threshold_tuning import (
@@ -287,9 +287,9 @@ def _subset_predictions(*, pred_scores: Any, indices: Sequence[int]) -> Any:
 def _build_cv_dev_row(best_trial: Mapping[str, Any]) -> dict[str, Any]:
     """Build CV summary metrics from a best-trial row.
 
-    Keys match :data:`iptc_entity_pipeline.reporting.METRIC_SERIES` and
-    :data:`iptc_entity_pipeline.reporting.STD_METRIC_SERIES` so
-    :func:`~iptc_entity_pipeline.reporting.report_eval` can log scalars
+    Keys match :data:`iptc_entity_pipeline.evaluation.reporting.METRIC_SERIES` and
+    :data:`iptc_entity_pipeline.evaluation.reporting.STD_METRIC_SERIES` so
+    :func:`~iptc_entity_pipeline.evaluation.reporting.report_eval` can log scalars
     without renaming.
     """
     return {

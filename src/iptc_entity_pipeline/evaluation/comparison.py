@@ -31,7 +31,7 @@ import pandas as pd
 from iptc_entity_pipeline.category_sets import load_relevant_cat_ids, load_tail_cat_ids
 from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.data_loading import sanitize_name
-from iptc_entity_pipeline.evaluate import (
+from iptc_entity_pipeline.evaluation.evaluate import (
     CLASS_RELEVANT_MACRO_ROW,
     REMOVED_CAT_IDS,
     evaluate_predictions,

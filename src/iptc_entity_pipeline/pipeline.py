@@ -11,10 +11,10 @@ from clearml.automation.controller import PipelineDecorator
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
 from iptc_entity_pipeline.config import BaseCnf, resolve_paths
 from iptc_entity_pipeline.data_loading import attach_entities, load_and_normalize, load_wdid_map, sanitize_name
-from iptc_entity_pipeline.evaluation_comparison import build_path, compare_runs
+from iptc_entity_pipeline.evaluation import build_path, compare_runs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.model_io import save_outputs
-from iptc_entity_pipeline.reporting import (
+from iptc_entity_pipeline.evaluation.reporting import (
     log_stage,
     objective_suffix,
     report_cv,
@@ -22,7 +22,7 @@ from iptc_entity_pipeline.reporting import (
 )
 
 from iptc_entity_pipeline.training import train_model
-from iptc_entity_pipeline.reporting import conf_logging
+from iptc_entity_pipeline.evaluation.reporting import conf_logging
 
 RV_LOAD_DATA = ['corpora']
 RV_PREPARE_ARTICLE_EMBEDDINGS = ['articleEmbeddingStats']
@@ -635,11 +635,11 @@ def eval_final(
 
     from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf, conf_from_dict
     from iptc_entity_pipeline.data_loading import sanitize_name
-    from iptc_entity_pipeline.evaluation_comparison import build_path, compare_runs
+    from iptc_entity_pipeline.evaluation import build_path, compare_runs
     from iptc_entity_pipeline.legacy_reuse import evaluateModel
     from iptc_entity_pipeline.model_io import export_eval_excel, save_outputs
     from iptc_entity_pipeline.pipeline import EvalResult
-    from iptc_entity_pipeline.reporting import (
+    from iptc_entity_pipeline.evaluation.reporting import (
         build_test_scalar_metrics,
         conf_logging,
         report_test_eval_scalars,
@@ -1052,7 +1052,7 @@ def _run_assembly_training_pipeline(
         threshold_report_df=assembly_result.threshold_report_df,
         upload_artifacts=upload_artifacts,
     )
-    from iptc_entity_pipeline.reporting import report_test_eval_scalars
+    from iptc_entity_pipeline.evaluation.reporting import report_test_eval_scalars
 
     report_test_eval_scalars(
         clearml_logger=task.get_logger(),
@@ -1090,7 +1090,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     task.add_tags([config_name])
 
     from iptc_entity_pipeline.seeding import set_global_seed
-    from iptc_entity_pipeline.reporting import report_cv_std, report_eval, report_test_eval_scalars
+    from iptc_entity_pipeline.evaluation.reporting import report_cv_std, report_eval, report_test_eval_scalars
     from iptc_entity_pipeline.config import EmbeddingCnf, conf_from_dict
     
     paths_cnf = cnf['paths']
