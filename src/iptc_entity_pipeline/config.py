@@ -4,6 +4,8 @@ from dataclasses import Field, asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
+from iptc_entity_pipeline.data_loading import EntityType, remove_types_except
+
 DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
 ALL_ENTITY_LANGS = ('en', 'de','fr' , 'nl', 'es' , 'cs')
 GOLD_ORIGIN_TRAIN_CSV = f'{DATA_ROOT}/gold-origin/all-corpora-train-entities.csv'
@@ -50,6 +52,7 @@ class EmbeddingCnf:
     entity_langs: tuple[str, ...] = ()
     entity_lang_mode: Literal['average', 'fallback'] = 'average'
     entity_relevance_threshold: float = 0.0
+    remove_types: tuple[str, ...] = ()
     use_entity_relevance_weights: bool = False
     use_article_embeddings: bool = True
     use_entity_embeddings: bool = True
@@ -353,13 +356,77 @@ class WpEntitiesCnf5(BaseCnfWithHPO2):
     random_seed: int = 984621
     
     
+def _wp_entities_mean_emb(*, remove_types: tuple[str, ...] = ()) -> EmbeddingCnf:
+    """Build mean-pooled embedding config with optional type filtering."""
+    return replace(EmbeddingCnf(), entity_pooling='mean', remove_types=remove_types)
+
+
+def _wp_entities_mean_only_type_emb(*, keep_type: str) -> EmbeddingCnf:
+    """Build mean-pooled embedding config that keeps a single entity type."""
+    return _wp_entities_mean_emb(remove_types=remove_types_except(keep_type=keep_type))
+
+
 @dataclass(frozen=True)
 class WPEntitiesMeanCnf(BaseCnfWithHPO):
     """Entity-enhanced configuration with mean pooling."""
 
-    emb: EmbeddingCnf = field(
-        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
-    )
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_emb())
+
+
+@dataclass(frozen=True)
+class WPEntitiesMeanNoLocationCnf(WPEntitiesMeanCnf):
+    """Mean-pooled entity-enhanced config with location entities removed."""
+
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_emb(remove_types=('location',)))
+
+
+@dataclass(frozen=True)
+class WPEntitiesMeanOnlyEventCnf(WPEntitiesMeanCnf):
+    """Mean-pooled config keeping only event entities."""
+
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_only_type_emb(keep_type='event'))
+
+
+@dataclass(frozen=True)
+class WPEntitiesMeanOnlyGeneralCnf(WPEntitiesMeanCnf):
+    """Mean-pooled config keeping only general entities."""
+
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_only_type_emb(keep_type='general'))
+
+
+@dataclass(frozen=True)
+class WPEntitiesMeanOnlyLocationCnf(WPEntitiesMeanCnf):
+    """Mean-pooled config keeping only location entities."""
+
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_only_type_emb(keep_type='location'))
+
+
+@dataclass(frozen=True)
+class WPEntitiesMeanOnlyOrganizationCnf(WPEntitiesMeanCnf):
+    """Mean-pooled config keeping only organization entities."""
+
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_only_type_emb(keep_type='organization'))
+
+
+@dataclass(frozen=True)
+class WPEntitiesMeanOnlyPersonCnf(WPEntitiesMeanCnf):
+    """Mean-pooled config keeping only person entities."""
+
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_only_type_emb(keep_type='person'))
+
+
+@dataclass(frozen=True)
+class WPEntitiesMeanOnlyProductCnf(WPEntitiesMeanCnf):
+    """Mean-pooled config keeping only product entities."""
+
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_only_type_emb(keep_type='product'))
+
+
+@dataclass(frozen=True)
+class WPEntitiesMeanOnlyOtherCnf(WPEntitiesMeanCnf):
+    """Mean-pooled config keeping only other entities."""
+
+    emb: EmbeddingCnf = field(default_factory=lambda: _wp_entities_mean_only_type_emb(keep_type='other'))
 
 
 @dataclass(frozen=True)
@@ -2722,6 +2789,13 @@ class GoldOriginWPEntitiesMeanCnf(WPEntitiesMeanCnf):
 
 
 @dataclass(frozen=True)
+class GoldOriginWPEntitiesMeanNoLocationCnf(WPEntitiesMeanNoLocationCnf):
+    """Mean-pooled entity-enhanced config on gold-origin corpora without location entities."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesMeanNoLocationCnf))
+
+
+@dataclass(frozen=True)
 class GoldOriginWikipedia2VecEntitiesMeanCnf(Wikipedia2VecEntitiesMeanCnf):
     """Wikipedia2Vec mean-pooled entity-enhanced config on gold-origin corpora."""
 
@@ -2899,6 +2973,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'gold_origin_wikipedia_intro_entity_only_mean': GoldOriginWikipediaIntroEntityOnlyMeanCnf(),
         'gold_origin_wikipedia_article_entity_only_mean': GoldOriginWikipediaArticleEntityOnlyMeanCnf(),
         'gold_origin_wp_entities_mean': GoldOriginWPEntitiesMeanCnf(),
+        'gold_origin_wp_entities_mean_no_location': GoldOriginWPEntitiesMeanNoLocationCnf(),
         'gold_origin_wikipedia2vec_entities_mean': GoldOriginWikipedia2VecEntitiesMeanCnf(),
         'gold_origin_wikidata_description_entities_mean': GoldOriginWikidataDescriptionEntitiesMeanCnf(),
         'gold_origin_wikipedia_intro_entities_mean': GoldOriginWikipediaIntroEntitiesMeanCnf(),
@@ -2911,6 +2986,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'gold_origin_wpentities_mention_weighted_mean': GoldOriginWPEntitiesMentionWeightedMeanCnf(),
         'gold_origin_wpentities_weighted_mean': GoldOriginWPEntitiesWeightedMeanCnf(),
         'gold_origin_wpentities_mean': GoldOriginWPEntitiesMeanCnf(),
+        'gold_origin_wpentities_mean_no_location': GoldOriginWPEntitiesMeanNoLocationCnf(),
         'gold_origin_wpentities_pmm_attention': GoldOriginWPEntitiesPmmAttentionHPOCnf(),
 
         'gold_origin_wpentities_tuned_en_fallback': GoldOriginBWpEntitiesTunedEnFallbackCnf(),
@@ -2936,7 +3012,15 @@ def _config_map() -> dict[str, BaseCnf]:
         'wikipedia_article_entities_mean': WikipediaArticleEntitiesMeanCnf(),
         'wikidata_description_jina': WikidataDescriptionEntitiesMeanJinaCnf(),
         'wikidata_description_jina_all_langs_fallback': WikidataDescriptionEntitiesMeanJinaAllLangsFallbackCnf(),
-
+        ##type filtering
+        'wp_entities_mean_no_location': WPEntitiesMeanNoLocationCnf(),
+        'wp_entities_mean_only_event': WPEntitiesMeanOnlyEventCnf(),
+        'wp_entities_mean_only_general': WPEntitiesMeanOnlyGeneralCnf(),
+        'wp_entities_mean_only_location': WPEntitiesMeanOnlyLocationCnf(),
+        'wp_entities_mean_only_organization': WPEntitiesMeanOnlyOrganizationCnf(),
+        'wp_entities_mean_only_person': WPEntitiesMeanOnlyPersonCnf(),
+        'wp_entities_mean_only_product': WPEntitiesMeanOnlyProductCnf(),
+        'wp_entities_mean_only_other': WPEntitiesMeanOnlyOtherCnf(),
 
         # testing different embeddings
         'wpentities_jina_v3_cls': WpEntitiesJV3ClsTunedCnf(),
@@ -2981,6 +3065,14 @@ def _config_map() -> dict[str, BaseCnf]:
         'wikipedia_intro_mention_weighted_mean': WikiIntroMentionWeightedMeanCnf(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
         'wpentities_mean': WPEntitiesMeanCnf(),
+        'wpentities_mean_no_location': WPEntitiesMeanNoLocationCnf(),
+        'wpentities_mean_only_event': WPEntitiesMeanOnlyEventCnf(),
+        'wpentities_mean_only_general': WPEntitiesMeanOnlyGeneralCnf(),
+        'wpentities_mean_only_location': WPEntitiesMeanOnlyLocationCnf(),
+        'wpentities_mean_only_organization': WPEntitiesMeanOnlyOrganizationCnf(),
+        'wpentities_mean_only_person': WPEntitiesMeanOnlyPersonCnf(),
+        'wpentities_mean_only_product': WPEntitiesMeanOnlyProductCnf(),
+        'wpentities_mean_only_other': WPEntitiesMeanOnlyOtherCnf(),
         'wpentities_pmm_attention': WPEntitiesPmmAttentionHPOCnf(),
         'wikipedia_intro_attention': WikiIntroAttentionHPOCnf(),
         'w2vec_attention': W2VecAttentionHPOCnf(),

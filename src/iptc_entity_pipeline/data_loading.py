@@ -8,8 +8,10 @@ import json
 import logging
 import random
 import sys
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,28 @@ from geneea.catlib.data import Corpus, CorpusGroup, Doc  # type: ignore
 from geneea.mediacats import iptc  # type: ignore
 
 LOGGER = logging.getLogger(__name__)
+
+
+class EntityType(str, Enum):
+    """Canonical entity labels attached to linked corpus entities."""
+
+    EVENT = 'event'
+    GENERAL = 'general'
+    LOCATION = 'location'
+    ORGANIZATION = 'organization'
+    PERSON = 'person'
+    PRODUCT = 'product'
+    OTHER = 'other'
+
+    @classmethod
+    def from_label(cls, *, label: str | None) -> EntityType | None:
+        """Return enum member for a known label, excluding ``other``."""
+        if label is None or label == cls.OTHER.value:
+            return None
+        try:
+            return cls(label)
+        except ValueError:
+            return None
 
 
 class DocWithEntities(Doc):
@@ -37,7 +61,7 @@ class LinkedEntity:
     wd_ids: tuple[str, ...]
     relevance: float
     mention_count: int = 1
-    entity_type: str | None = None
+    entity_type: EntityType = EntityType.OTHER
     raw_entity: Mapping[str, Any] | None = None
 
 
@@ -334,12 +358,116 @@ def _resolve_entity_ids(
     return None
 
 
+def _normalize_entity_type_label(*, value: Any) -> str | None:
+    """Return stripped entity-type label when non-empty."""
+    if not isinstance(value, str):
+        return None
+    label = value.strip()
+    return label or None
+
+
+def _resolve_entity_type(*, ent: Mapping[str, Any]) -> EntityType:
+    """
+    Resolve canonical entity type from raw entity record.
+
+    Uses ``type`` when it is one of the known labels; otherwise falls back to
+    ``feats.detectedType``. Unknown or missing values map to ``other``.
+    """
+    type_label = _normalize_entity_type_label(value=ent.get('type'))
+    resolved = EntityType.from_label(label=type_label)
+    if resolved is not None:
+        return resolved
+
+    feats_raw = ent.get('feats')
+    detected_type = None
+    if isinstance(feats_raw, Mapping):
+        detected_type = _normalize_entity_type_label(value=feats_raw.get('detectedType'))
+    resolved = EntityType.from_label(label=detected_type)
+    if resolved is not None:
+        return resolved
+
+    return EntityType.OTHER
+
+
+def parse_remove_types(*, remove_types: Sequence[str]) -> frozenset[EntityType]:
+    """
+    Parse configured entity-type labels to remove.
+
+    :param remove_types: Raw type labels from config.
+    :return: Parsed labels; unknown values are skipped with a warning.
+    """
+    parsed: set[EntityType] = set()
+    for label in remove_types:
+        if not isinstance(label, str) or not label.strip():
+            continue
+        try:
+            parsed.add(EntityType(label.strip()))
+        except ValueError:
+            LOGGER.warning('Ignoring unknown remove_types label=%r', label)
+    return frozenset(parsed)
+
+
+def remove_types_except(*, keep_type: EntityType | str) -> tuple[str, ...]:
+    """
+    Build ``remove_types`` tuple that keeps only one entity type.
+
+    :param keep_type: Entity type label or enum member to retain.
+    :return: Labels for all other entity types.
+    """
+    keep_label = keep_type.value if isinstance(keep_type, EntityType) else keep_type
+    return tuple(entity_type.value for entity_type in EntityType if entity_type.value != keep_label)
+
+
+def filter_linked_entities_by_type(
+    *,
+    entities: Sequence[LinkedEntity],
+    remove_types: frozenset[EntityType],
+) -> list[LinkedEntity]:
+    """
+    Drop linked entities whose resolved type is in ``remove_types``.
+
+    :param entities: Linked entities attached to one article.
+    :param remove_types: Entity types to exclude.
+    :return: Filtered entity list; unchanged when ``remove_types`` is empty.
+    """
+    if not remove_types:
+        return list(entities)
+    return [entity for entity in entities if entity.entity_type not in remove_types]
+
+
+def log_entity_type_counts(
+    *,
+    entities: Iterable[LinkedEntity],
+    csv_path: str,
+    remove_types: frozenset[EntityType],
+) -> None:
+    """
+    Log per-type entity counts after type-based filtering.
+
+    :param entities: Linked entities remaining in the corpus.
+    :param csv_path: Source CSV path for log context.
+    :param remove_types: Types removed before counting.
+    """
+    counts = Counter(entity.entity_type for entity in entities)
+    total = sum(counts.values())
+    removed_labels = sorted(entity_type.value for entity_type in remove_types)
+    type_stats = ', '.join(f'{entity_type.value}={counts.get(entity_type, 0)}' for entity_type in EntityType)
+    LOGGER.info(
+        'Entity type counts after remove_types filter: csv_path=%s total=%s removed=%s %s',
+        csv_path,
+        total,
+        removed_labels,
+        type_stats,
+    )
+
+
 def attach_entities(
     *,
     corpus: Any,
     csv_path: str,
     wdid_mapping: Mapping[str, Sequence[str]],
     min_relevance: float = 0.0,
+    remove_types: Sequence[str] = (),
 ) -> None:
     """
     Parse entities from CSV and attach resolved :class:`LinkedEntity` objects to each doc.
@@ -351,8 +479,10 @@ def attach_entities(
     :param csv_path: Path to a corpus CSV containing an ``entities`` JSON column.
     :param wdid_mapping: Pre-loaded gkbId-to-wdId mapping from :func:`load_wdid_mapping`.
     :param min_relevance: Minimum entity relevance (inclusive) required for attachment.
+    :param remove_types: Entity types to drop after linking; default keeps all types.
     """
     _ensure_csv_field_limit()
+    remove_types_set = parse_remove_types(remove_types=remove_types)
     article_entities: dict[str, list[LinkedEntity]] = {}
     path = Path(csv_path)
     with path.open(mode='r', encoding='utf-8', newline='') as in_file:
@@ -399,20 +529,37 @@ def attach_entities(
                         relevance = 0.0
                     if relevance < min_relevance:
                         continue
-                    type_raw = ent.get('type')
-                    entity_type = type_raw.strip() if isinstance(type_raw, str) and type_raw.strip() else None
                     linked.append(
                         LinkedEntity(
                             gkb_id=gkb_id,
                             wd_ids=wd_ids,
                             relevance=relevance,
                             mention_count=mention_count,
-                            entity_type=entity_type,
+                            entity_type=_resolve_entity_type(ent=ent),
                             raw_entity=dict(ent),
                         )
                     )
             if linked:
                 article_entities[article_id] = linked
+
+    if remove_types_set:
+        removed_entities = 0
+        for article_id, linked in list(article_entities.items()):
+            before_count = len(linked)
+            filtered = filter_linked_entities_by_type(entities=linked, remove_types=remove_types_set)
+            removed_entities += before_count - len(filtered)
+            if filtered:
+                article_entities[article_id] = filtered
+            else:
+                del article_entities[article_id]
+        remaining_entities = [entity for linked in article_entities.values() for entity in linked]
+        log_entity_type_counts(entities=remaining_entities, csv_path=csv_path, remove_types=remove_types_set)
+        LOGGER.info(
+            'Removed entities by type: csv_path=%s removed_entities=%s remove_types=%s',
+            csv_path,
+            removed_entities,
+            sorted(entity_type.value for entity_type in remove_types_set),
+        )
 
     attached = 0
     for i, doc in enumerate(corpus.docs):
