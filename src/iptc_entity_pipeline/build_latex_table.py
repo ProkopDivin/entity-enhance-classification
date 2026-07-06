@@ -3,7 +3,7 @@
 For each subdirectory under the input comparison root the script extracts:
 
 - Test F1 / Precision / Recall from ``summary_comparison.csv`` (row
-  ``micro_over_labels``). The shared baseline row reuses the ``*_base``
+  ``micro``). The shared baseline row reuses the ``*_base``
   columns from any subdirectory.
 - CV F1 mean / std from the ``dev_cv_summary`` sheet of the latest matching
   ``final_evaluation_tables_*.xlsx`` in ``results/saved_models``.
@@ -58,7 +58,7 @@ SUMMARY_FILENAME = 'summary_comparison.csv'
 CORPORA_FILENAME = 'corpora_comparison.csv'
 TOP_IMPROVED_STATS_FILENAME = 'top_improved_stats.csv'
 TOP_DEGRADED_STATS_FILENAME = 'top_degraded_stats.csv'
-SUMMARY_KEY = 'micro_over_labels'
+SUMMARY_KEY = 'micro'
 DEV_CV_SHEET = 'dev_cv_summary'
 VS_SEPARATOR = '_vs_'
 SAVED_MODEL_SUFFIX_RE = re.compile(r'_\d{8}_\d{6}$')
@@ -178,7 +178,7 @@ def resolve_config_name(*, dir_name: str, overrides: Sequence[Override]) -> str 
 # ---------------------------------------------------------------------------
 
 def read_test_metrics(*, summary_csv: Path) -> Mapping[str, float] | None:
-    """Read the ``micro_over_labels`` row from a comparison summary CSV."""
+    """Read the ``micro`` row from a comparison summary CSV."""
     df = pd.read_csv(summary_csv)
     rows = df[df['summary_key'] == SUMMARY_KEY]
     if rows.empty:
@@ -583,10 +583,10 @@ def render_experiment_corpora_table(*, experiment: ExperimentEntry, corpora_df: 
 
 
 SUMMARY_GROUP_ROWS: tuple[tuple[str, str, str], ...] = (
-    ('support', 'Support 0--10', 'macro_over_classes_support_0-10'),
-    ('support', 'Support 10--100', 'macro_over_classes_support_10-100'),
-    ('support', 'Support 100--1000', 'macro_over_classes_support_100-1000'),
-    ('support', 'Support 1000--10000', 'macro_over_classes_support_1000-10000'),
+    ('support', 'Support 0--15', 'macro_support_0-15'),
+    ('support', 'Support 15--100', 'macro_support_15-100'),
+    ('support', 'Support 100--1000', 'macro_support_100-1000'),
+    ('support', 'Support 1000+', 'macro_support_1000+'),
     ('lang', 'EN', 'macro_over_corpora_prefix_en'),
     ('lang', 'ES', 'macro_over_corpora_prefix_es'),
     ('lang', 'NL', 'macro_over_corpora_prefix_nl'),
