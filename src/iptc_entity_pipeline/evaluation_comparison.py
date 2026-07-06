@@ -48,19 +48,30 @@ LOG = logging.getLogger(__name__)
 # saved by earlier versions of this pipeline before the rename.
 THRESHOLD_FILENAMES: tuple[str, ...] = ('custom_thresholds.json', 'thresholds.json')
 
-CLASS_MACRO_ROW = CLASS_RELEVANT_MACRO_ROW
-CLASS_TAIL_ROW = 'All_tail'
-AGG_CLASS_ROWS = frozenset({'All_micro', CLASS_RELEVANT_MACRO_ROW, CLASS_TAIL_ROW, 'All_datapoint'})
+# Output-facing aggregate row labels aligned with the thesis vocabulary. The
+# thesis "Macro Head" set (categories with >= 15 test samples) is exactly the
+# ``relevant_cats.yaml`` set produced by ``evaluate.py`` as
+# ``CLASS_RELEVANT_MACRO_ROW``; we relabel it to ``All_macro_head`` in the
+# comparison outputs. ``MATCH_HEAD_ROW`` is the label emitted by ``evaluate.py``
+# and is used only to locate that row before relabeling it.
+MATCH_HEAD_ROW = CLASS_RELEVANT_MACRO_ROW
+MACRO_HEAD_ROW = 'All_macro_head'
+MACRO_TAIL_ROW = 'All_macro_tail'
+CLASS_MACRO_ROW = MACRO_HEAD_ROW
+CLASS_TAIL_ROW = MACRO_TAIL_ROW
+AGG_CLASS_ROWS = frozenset({'All_micro', MACRO_HEAD_ROW, MACRO_TAIL_ROW, 'All_datapoint'})
 AGG_CORPUS_ROWS = frozenset({'All_macro_corpora', 'All_micro', 'All_datapoint'})
 SUMMARY_ROWS = {
-    'macro_over_classes_all': ('classes', CLASS_RELEVANT_MACRO_ROW),
-    'micro_over_labels': ('classes', 'All_micro'),
+    'micro': ('classes', 'All_micro'),
 }
+# Support buckets for binned macro metrics. The thesis splits classes at 15 test
+# samples (Tail < 15, Head >= 15) and further subdivides the Head into
+# 15-100, 100-1000, and 1000+. Bucketing uses ``low <= support < high``.
 SUPPORT_BUCKETS: tuple[tuple[int, int, str], ...] = (
-    (0, 10, '0-10'),
-    (10, 100, '10-100'),
+    (0, 15, '0-15'),
+    (15, 100, '15-100'),
     (100, 1000, '100-1000'),
-    (1000, 10000, '1000-10000'),
+    (1000, 10**9, '1000+'),
 )
 LANG_PREFIXES: tuple[str, ...] = ('en', 'es', 'nl', 'fr', 'de', 'cs')
 EUROSPORT_TOKEN = 'eurosport'
@@ -88,8 +99,10 @@ _CMP_METRICS_CLASSES: tuple[tuple[str, str], ...] = _CMP_METRICS_CORE + (
 _CMP_METRICS_CORPORA: tuple[tuple[str, str], ...] = _CMP_METRICS_CORE + (
     ('false_positive_rate', 'False Positive Rate'),
 )
+# Per-class diagnostics keep the absolute False Positive count for the current
+# run (thesis: monitor per-class FP volume); the base/diff FP columns are
+# dropped to keep ``classes_comparison`` compact.
 _CLASSES_COMPARISON_DROP_COLS: tuple[str, ...] = (
-    'False Positive Count_current',
     'False Positive Count_base',
     'False Positive Count_diff',
 )
@@ -110,7 +123,9 @@ _RESULT_SHEETS: tuple[tuple[str, str, bool], ...] = (
     ('entity_impact_improvers', 'entity_impact_improvers', False),
     ('entity_impact_decaders', 'entity_impact_decaders', False),
     ('entity_impact_random', 'entity_impact_random', False),
+    ('entity_impact_all', 'entity_impact_all', False),
     ('article_f1_diff_avg_stats', 'article_f1_diff_avg_stats', False),
+    ('article_confusion_diff', 'article_confusion_diff', False),
     ('current_corpora', 'current_corpora', True),
     ('current_classes', 'current_classes', True),
     ('base_corpora', 'base_corpora', True),
@@ -145,7 +160,9 @@ class ComparisonResult:
     entity_impact_improvers: pd.DataFrame
     entity_impact_decaders: pd.DataFrame
     entity_impact_random: pd.DataFrame
+    entity_impact_all: pd.DataFrame
     article_f1_diff_avg_stats: pd.DataFrame
+    article_confusion_diff: pd.DataFrame
     current_corpora: pd.DataFrame
     current_classes: pd.DataFrame
     base_corpora: pd.DataFrame
@@ -319,7 +336,7 @@ def compare_runs(
     current_run_dir: str | Path,
     base_run_dir: str | Path,
     threshold_eval: float,
-    averaging_type: str = 'datapoint',
+    averaging_type: str = 'micro',
     top_n: int = 20,
     only_diff: bool = False,
     top_changes_only: bool = False,
@@ -345,6 +362,8 @@ def compare_runs(
     :param threshold_eval: Default threshold for classes missing from a run's
         per-class map and for runs that have no thresholds file at all.
     :param averaging_type: One of ``'datapoint'``, ``'micro'``, ``'macro'``.
+        Defaults to ``'micro'`` so per-corpus rows report micro-averaged metrics,
+        matching the thesis per-corpus reporting.
     :param top_n: Preview size for improved/degraded categories logging.
     :param only_diff: Drop base metric columns from comparison sheets.
     :param top_changes_only: Persist only top improved/degraded category tables.
@@ -369,7 +388,7 @@ def compare_runs(
         current_corpus=current_corpus,
         base_corpus=base_corpus,
         subset_ids=relevant_cat_ids,
-        subset_name='relevant',
+        subset_name='head',
         require_all=False,
     )
 
@@ -397,15 +416,17 @@ def compare_runs(
         classes_df=current_run.classes_df,
         class_ids=relevant_cat_ids,
         row_label=CLASS_MACRO_ROW,
-        subset_name='relevant',
+        subset_name='head',
         require_all=False,
+        match_label=MATCH_HEAD_ROW,
     )
     base_classes_df = replace_macro_row_in_run_classes_df(
         classes_df=base_run.classes_df,
         class_ids=relevant_cat_ids,
         row_label=CLASS_MACRO_ROW,
-        subset_name='relevant',
+        subset_name='head',
         require_all=False,
+        match_label=MATCH_HEAD_ROW,
     )
     current_classes_df = replace_macro_row_in_run_classes_df(
         classes_df=current_classes_df,
@@ -537,7 +558,9 @@ def compare_runs(
             entity_impact_improvers=empty_df,
             entity_impact_decaders=empty_df,
             entity_impact_random=empty_df,
+            entity_impact_all=empty_df,
             article_f1_diff_avg_stats=empty_df,
+            article_confusion_diff=empty_df,
             current_corpora=current_run.corpora_df,
             current_classes=with_class_id_column(
                 df=current_classes_df,
@@ -611,13 +634,21 @@ def compare_runs(
         current_thr_vec=current_thr_vec,
         base_thr_vec=base_thr_vec,
     )
-    entity_improvers_df, entity_decaders_df, entity_random_df = build_entity_impact_tables(
+    entity_improvers_df, entity_decaders_df, entity_random_df, entity_all_df = build_entity_impact_tables(
         current_df=current_aligned_df,
         article_f1_df=article_f1_df,
         limit=ENTITY_TABLE_LIMIT,
         random_seed=ENTITY_RANDOM_SEED,
     )
     article_avg_stats_df = build_article_f1_diff_avg_stats(df=article_f1_df, limit=ENTITY_TABLE_LIMIT)
+    article_confusion_diff_df = build_article_confusion_diff_df(
+        current_df=current_aligned_df,
+        base_df=base_aligned_df,
+        gold_map=gold_map,
+        cat_ids=cat_ids,
+        current_thr_vec=current_thr_vec,
+        base_thr_vec=base_thr_vec,
+    )
 
     excel_path = Path(output_path) if output_path is not None else None
     result = ComparisonResult(
@@ -652,7 +683,9 @@ def compare_runs(
         entity_impact_improvers=entity_improvers_df,
         entity_impact_decaders=entity_decaders_df,
         entity_impact_random=entity_random_df,
+        entity_impact_all=entity_all_df,
         article_f1_diff_avg_stats=article_avg_stats_df,
+        article_confusion_diff=article_confusion_diff_df,
         current_corpora=current_run.corpora_df,
         current_classes=with_class_id_column(
             df=current_classes_df,
@@ -1069,8 +1102,18 @@ def replace_macro_row_in_run_classes_df(
     subset_name: str,
     require_all: bool,
     insert_after_label: str | None = None,
+    match_label: str | None = None,
 ) -> pd.DataFrame:
-    """Replace :data:`~iptc_entity_pipeline.evaluate.CLASS_RELEVANT_MACRO_ROW` in one run's classes table."""
+    """Rebuild one run's macro aggregate row as the mean of its per-class metrics.
+
+    The rebuilt row uses standard macro averaging (mean of per-class Precision,
+    Recall, F1 and False Positive Count over ``class_ids``). When ``match_label``
+    is given, an existing row with that label is located and relabeled to
+    ``row_label`` in place; this maps ``evaluate.py``'s ``All_macro_relevant``
+    row onto the thesis ``All_macro_head`` label. When no matching row exists the
+    row is inserted (optionally after ``insert_after_label``).
+    """
+    lookup_label = match_label if match_label is not None else row_label
     table = classes_df.reset_index().copy()
     classes_filtered = table[~table['IPTC Category'].isin(AGG_CLASS_ROWS)].copy()
     label_to_id = labels_for_cat_ids(cat_ids=class_ids)
@@ -1091,7 +1134,7 @@ def replace_macro_row_in_run_classes_df(
         if col in table.columns:
             row[col] = float(subset[col].mean())
 
-    mask = table['IPTC Category'] == row_label
+    mask = table['IPTC Category'] == lookup_label
     if mask.any():
         for key, value in row.items():
             table.loc[mask, key] = value
@@ -1310,16 +1353,16 @@ def build_summary_df(
         )
 
     classes_filtered = classes_cmp[~classes_cmp['IPTC Category'].isin(AGG_CLASS_ROWS)].copy()
-    classes_relevant = class_subset_by_ids(
+    classes_head = class_subset_by_ids(
         classes_cmp=classes_cmp,
         class_ids=relevant_cat_ids,
         require_all=False,
-        subset_name='relevant',
+        subset_name='head',
     )
     rows.append(
         _avg_metrics_row(
-            summary_key='macro_over_classes_relevant',
-            sub_df=classes_relevant,
+            summary_key='macro_head',
+            sub_df=classes_head,
             cmp_metrics=_CMP_METRICS_REPORT,
         )
     )
@@ -1331,7 +1374,7 @@ def build_summary_df(
     )
     rows.append(
         _avg_metrics_row(
-            summary_key='macro_over_classes_tail',
+            summary_key='macro_tail',
             sub_df=classes_tail,
             cmp_metrics=_CMP_METRICS_REPORT,
         )
@@ -1345,7 +1388,7 @@ def build_summary_df(
         sub = classes_filtered[mask]
         rows.append(
             _avg_metrics_row(
-                summary_key=f'macro_over_classes_support_{label}',
+                summary_key=f'macro_support_{label}',
                 sub_df=sub,
                 cmp_metrics=_CMP_METRICS_REPORT,
             )
@@ -2140,31 +2183,87 @@ def compute_article_f1(*, scores: np.ndarray, gold_matrix: np.ndarray, thr_vec: 
     return f1
 
 
+def build_article_confusion_diff_df(
+    *,
+    current_df: pd.DataFrame,
+    base_df: pd.DataFrame,
+    gold_map: GoldLabelMap,
+    cat_ids: Sequence[str],
+    current_thr_vec: np.ndarray,
+    base_thr_vec: np.ndarray,
+) -> pd.DataFrame:
+    """Build per-article TP/TN/FP/FN diff (current minus base).
+
+    :param current_thr_vec: Per-class threshold vector for the current run.
+    :param base_thr_vec: Per-class threshold vector for the base run.
+    """
+    article_ids = list(current_df['article_id'])
+    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
+    current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
+    base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
+    current_conf = compute_article_confusion(scores=current_scores, gold_matrix=gold_matrix, thr_vec=current_thr_vec)
+    base_conf = compute_article_confusion(scores=base_scores, gold_matrix=gold_matrix, thr_vec=base_thr_vec)
+    return pd.DataFrame(
+        {
+            'article_id': article_ids,
+            'corpus_name': current_df['corpus_name'].tolist(),
+            'tp_diff': (current_conf['tp'] - base_conf['tp']).astype(int),
+            'tn_diff': (current_conf['tn'] - base_conf['tn']).astype(int),
+            'fp_diff': (current_conf['fp'] - base_conf['fp']).astype(int),
+            'fn_diff': (current_conf['fn'] - base_conf['fn']).astype(int),
+        }
+    )
+
+
+def compute_article_confusion(
+    *, scores: np.ndarray, gold_matrix: np.ndarray, thr_vec: np.ndarray
+) -> Mapping[str, np.ndarray]:
+    """Compute per-article TP/TN/FP/FN counts from score and gold matrices.
+
+    :param thr_vec: Per-class threshold vector broadcast over rows.
+    """
+    pred_matrix = scores >= thr_vec
+    gold_bool = gold_matrix.astype(bool)
+    tp = np.logical_and(pred_matrix, gold_bool).sum(axis=1, dtype=np.int32)
+    fp = np.logical_and(pred_matrix, np.logical_not(gold_bool)).sum(axis=1, dtype=np.int32)
+    fn = np.logical_and(np.logical_not(pred_matrix), gold_bool).sum(axis=1, dtype=np.int32)
+    tn = np.int32(gold_matrix.shape[1]) - tp - fp - fn
+    return {'tp': tp, 'tn': tn, 'fp': fp, 'fn': fn}
+
+
 def build_entity_impact_tables(
     *,
     current_df: pd.DataFrame,
     article_f1_df: pd.DataFrame,
     limit: int,
     random_seed: int,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Build improvers/decaders/random entity impact tables."""
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Build improvers/decaders/random entity impact tables plus the full table.
+
+    :return: ``(improvers, decaders, random, all_entities)`` where ``all_entities``
+        is the complete, un-thresholded table sorted by entity score.
+    """
+    footer_ids = {'gkbid': 'AVG', 'stdform': 'AVG'}
     entity_df = build_entity_impact_df(current_df=current_df, article_f1_df=article_f1_df)
     if entity_df.empty:
         empty = entity_df.reindex(columns=entity_impact_columns())
         return (
-            append_avg_footer_row(df=empty, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'}),
-            append_avg_footer_row(df=empty, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'}),
-            append_avg_footer_row(df=empty, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'}),
+            append_avg_footer_row(df=empty, id_col_values=footer_ids),
+            append_avg_footer_row(df=empty, id_col_values=footer_ids),
+            append_avg_footer_row(df=empty, id_col_values=footer_ids),
+            append_avg_footer_row(df=empty, id_col_values=footer_ids),
         )
 
+    all_entities = entity_df.sort_values(by='entity_score', ascending=False)
     improvers = entity_df[entity_df['entity_score'] > 0].sort_values(by='entity_score', ascending=False).head(limit)
     decaders = entity_df[entity_df['entity_score'] < 0].sort_values(by='entity_score', ascending=True).head(limit)
     random_n = min(limit, len(entity_df))
     random_df = entity_df.sample(n=random_n, random_state=random_seed) if random_n > 0 else entity_df.iloc[0:0].copy()
-    improvers = append_avg_footer_row(df=improvers, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'})
-    decaders = append_avg_footer_row(df=decaders, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'})
-    random_df = append_avg_footer_row(df=random_df, id_col_values={'gkbid': 'AVG', 'stdform': 'AVG'})
-    return improvers, decaders, random_df
+    improvers = append_avg_footer_row(df=improvers, id_col_values=footer_ids)
+    decaders = append_avg_footer_row(df=decaders, id_col_values=footer_ids)
+    random_df = append_avg_footer_row(df=random_df, id_col_values=footer_ids)
+    all_entities = append_avg_footer_row(df=all_entities, id_col_values=footer_ids)
+    return improvers, decaders, random_df, all_entities
 
 
 def build_entity_impact_df(*, current_df: pd.DataFrame, article_f1_df: pd.DataFrame) -> pd.DataFrame:
@@ -2189,27 +2288,34 @@ def build_entity_impact_df(*, current_df: pd.DataFrame, article_f1_df: pd.DataFr
     mention_agg = mentions_per_article.groupby('gkbid', as_index=False).agg(
         avg_mentions_count=('mention_per_article', 'mean')
     )
-    stdform = choose_stdform_by_gkbid(df=exploded)
+    stdform = choose_mode_by_gkbid(df=exploded, value_col='stdform')
+    entity_type = choose_mode_by_gkbid(df=exploded, value_col='entity_type')
     entity_df = (
         score_agg.merge(relevance_agg, on='gkbid', how='left')
         .merge(mention_agg, on='gkbid', how='left')
         .merge(stdform, on='gkbid', how='left')
+        .merge(entity_type, on='gkbid', how='left')
     )
+    entity_df['normalized'] = entity_df['entity_score'] / entity_df['article_count'].replace(0, np.nan)
     entity_df = entity_df.reindex(columns=entity_impact_columns())
     return entity_df
 
 
 def explode_entities(*, df: pd.DataFrame) -> pd.DataFrame:
     """Explode article entities into one row per entity occurrence."""
+    empty_cols = ['article_id', 'gkbid', 'stdform', 'entity_type', 'relevance', 'mention_count']
     if 'entities' not in df.columns or 'article_id' not in df.columns:
-        return pd.DataFrame(columns=['article_id', 'gkbid', 'stdform', 'relevance', 'mention_count'])
+        return pd.DataFrame(columns=empty_cols)
     entity_rows = df[['article_id', 'entities']].copy()
     entity_rows = entity_rows.explode('entities')
     entity_rows = entity_rows.dropna(subset=['entities'])
     if entity_rows.empty:
-        return pd.DataFrame(columns=['article_id', 'gkbid', 'stdform', 'relevance', 'mention_count'])
+        return pd.DataFrame(columns=empty_cols)
     entity_rows['gkbid'] = entity_rows['entities'].map(lambda item: item.gkb_id if item is not None else None)
     entity_rows['stdform'] = entity_rows['entities'].map(lambda item: item.std_form if item is not None else None)
+    entity_rows['entity_type'] = entity_rows['entities'].map(
+        lambda item: item.entity_type if item is not None else None
+    )
     entity_rows['relevance'] = entity_rows['entities'].map(lambda item: item.relevance if item is not None else None)
     entity_rows['mention_count'] = entity_rows['entities'].map(
         lambda item: item.mention_count if item is not None else None
@@ -2222,16 +2328,19 @@ def explode_entities(*, df: pd.DataFrame) -> pd.DataFrame:
     return entity_rows
 
 
-def choose_stdform_by_gkbid(*, df: pd.DataFrame) -> pd.DataFrame:
-    """Select representative stdform per gkbid by most frequent non-empty value."""
-    names = df[['gkbid', 'stdform']].dropna(subset=['gkbid']).copy()
-    names['stdform'] = names['stdform'].fillna('').astype(str).str.strip()
-    names = names[names['stdform'] != '']
+def choose_mode_by_gkbid(*, df: pd.DataFrame, value_col: str) -> pd.DataFrame:
+    """Select representative value per gkbid by most frequent non-empty entry.
+
+    :param value_col: Column whose most frequent non-empty value is picked per gkbid.
+    """
+    names = df[['gkbid', value_col]].dropna(subset=['gkbid']).copy()
+    names[value_col] = names[value_col].fillna('').astype(str).str.strip()
+    names = names[names[value_col] != '']
     if names.empty:
-        return pd.DataFrame(columns=['gkbid', 'stdform'])
-    counts = names.groupby(['gkbid', 'stdform'], as_index=False).size()
-    counts = counts.sort_values(by=['gkbid', 'size', 'stdform'], ascending=[True, False, True])
-    return counts.drop_duplicates(subset=['gkbid'], keep='first')[['gkbid', 'stdform']]
+        return pd.DataFrame(columns=['gkbid', value_col])
+    counts = names.groupby(['gkbid', value_col], as_index=False).size()
+    counts = counts.sort_values(by=['gkbid', 'size', value_col], ascending=[True, False, True])
+    return counts.drop_duplicates(subset=['gkbid'], keep='first')[['gkbid', value_col]]
 
 
 def build_article_f1_diff_avg_stats(*, df: pd.DataFrame, limit: int) -> pd.DataFrame:
@@ -2268,7 +2377,16 @@ def append_avg_footer_row(*, df: pd.DataFrame, id_col_values: Mapping[str, str])
 
 def entity_impact_columns() -> list[str]:
     """Return output column order for entity impact tables."""
-    return ['gkbid', 'stdform', 'avg_relevance', 'avg_mentions_count', 'entity_score', 'article_count']
+    return [
+        'gkbid',
+        'stdform',
+        'entity_type',
+        'avg_relevance',
+        'avg_mentions_count',
+        'entity_score',
+        'article_count',
+        'normalized',
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -2383,7 +2501,7 @@ def build_pr_auc_summary_df(
 
     rows.append(
         _pr_auc_row(
-            aggregation='macro_over_classes_all',
+            aggregation='macro_all',
             current=_safe_mean(values=pr_auc_df['pr_auc_current']),
             base=_safe_mean(values=pr_auc_df['pr_auc_base']),
         )
@@ -2401,7 +2519,7 @@ def build_pr_auc_summary_df(
         sub = pr_auc_df[mask]
         rows.append(
             _pr_auc_row(
-                aggregation=f'macro_over_classes_support_{label}',
+                aggregation=f'macro_support_{label}',
                 current=_safe_mean(values=sub['pr_auc_current']),
                 base=_safe_mean(values=sub['pr_auc_base']),
             )
