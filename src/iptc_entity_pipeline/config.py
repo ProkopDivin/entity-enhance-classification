@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Any, Literal, Mapping
 
 DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
-ALL_ENTITY_LANGS = ('en', 'de', 'es', 'nl', 'fr', 'cs')
+ALL_ENTITY_LANGS = ('en', 'de','fr' , 'nl', 'es' , 'cs')
+GOLD_ORIGIN_TRAIN_CSV = f'{DATA_ROOT}/gold-origin/all-corpora-train-entities.csv'
+GOLD_ORIGIN_TEST_CSV = f'{DATA_ROOT}/gold-origin/all-corpora-test-entities.csv'
 
 
 def conf_from_dict(cls, d: Mapping[str, Any]):
@@ -27,6 +29,16 @@ class PathsCnf:
     removed_cat_ids: list[str] = field(default_factory=lambda: ['20000419'])
 
 
+def _gold_origin_paths(**overrides: Any) -> PathsCnf:
+    """Build :class:`PathsCnf` pointing at gold-origin train/test entity CSVs."""
+    return replace(
+        PathsCnf(),
+        train_csv=GOLD_ORIGIN_TRAIN_CSV,
+        test_csv=GOLD_ORIGIN_TEST_CSV,
+        **overrides,
+    )
+
+
 @dataclass(frozen=True)
 class EmbeddingCnf:
     """Embedding loading and fallback-computation parameters."""
@@ -36,11 +48,12 @@ class EmbeddingCnf:
     embed_svc_url: str = 'http://tau.g:5533'
     entity_lang: str = 'en'
     entity_langs: tuple[str, ...] = ()
+    entity_lang_mode: Literal['average', 'fallback'] = 'average'
     entity_relevance_threshold: float = 0.0
     use_entity_relevance_weights: bool = False
     use_article_embeddings: bool = True
     use_entity_embeddings: bool = True
-    combine_method: str = 'concat'
+    combine_method: Literal['concat', 'sum'] = 'concat'
     entity_pooling: Literal[
         'sum',
         'mean',
@@ -49,7 +62,7 @@ class EmbeddingCnf:
         'weighted_mean_relevance',
         'weighted_sum_relevance',
         'no_pooling',
-    ] = 'sum'
+    ] = 'mean'
 
 
 @dataclass(frozen=True)
@@ -279,6 +292,7 @@ class BaseCnfWithHPO(PreBaseCnfWithHPO):
     train: TrainingCnf = field(
         default_factory=lambda: replace(TrainingCnf(), train_validation=False)
     )
+
 
 
 @dataclass(frozen=True)
@@ -859,9 +873,11 @@ class WpEntitiesTunedCnf(PreBaseCnfWithHPO):
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
     
+    
+    
 
 @dataclass(frozen=True)
-class BestWpEntitiesTunedCnf(WpEntitiesTunedCnf):
+class BestWpEntitiesTunedCnf(BaseCnfWithHPO):
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -940,17 +956,13 @@ class WpEntitiesJV5ClsTunedCnf(WpEntitiesTunedCnf):
     
 
 @dataclass(frozen=True)
-class WpEntitiesPmmTunedCnf(WpEntitiesTunedCnf):
+class WpEntitiesPmmTunedCnf(BaseCnfWithHPO):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
     The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
     and per-class thresholds are aggregated by mean across folds, then reused
     when evaluating the final model on test.
     """
-
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
-    )
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
@@ -1048,9 +1060,43 @@ class BestWpEntitiesMhaAttention2Cnf(WpEntitiesTunedCnf):
         )
     )
 
+@dataclass(frozen=True)
+class   WikiIntroAttentionHPOCnf(WpEntitiesTunedCnf):
+    """Entity-enhanced configuration with explicit attention over entities."""
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/cuted-article-embeddings',
+        )
+    )
+    
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(4096,),
+            dropouts1=(0.1,),
+            dropouts2=(0.5,),
+            attention_hidden_dims=(64, 128, 256, 512),  
+            attention_dropouts=(0.0, 0.3,),
+
+        )
+    )
 
 @dataclass(frozen=True)
-class  WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
+class   WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
     """Entity-enhanced configuration with explicit attention over entities."""
 
     emb: EmbeddingCnf = field(
@@ -1078,6 +1124,35 @@ class  WPEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
         )
     )
     
+    
+@dataclass(frozen=True)
+class BestWpEntitiesAttentionHPOCnf(WpEntitiesTunedCnf):
+    """Entity-enhanced configuration with explicit attention over entities."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=512,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(4096,),
+            dropouts1=(0.0,),
+            dropouts2=(0.5,),
+            attention_hidden_dims=(512,),
+            attention_dropouts=(0.3,),
+
+        )
+    )
 @dataclass(frozen=True)
 class WPEntitiesPmmAttentionHPOCnf(WpEntitiesPmmTunedCnf):
     """Entity-enhanced configuration with explicit attention over entities."""
@@ -1633,6 +1708,20 @@ class ArticleOnlyTunedCnf(ArticleOnlyCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
+    
+@dataclass(frozen=True)
+class BestArticleOnlyTunedCnf(ArticleOnlyTunedCnf):
+    tuning: ThresholdTuningCnf = field(
+        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
+    )
+    hparam: HyperparamSpace = field(default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(4096,),
+            dropouts1=(0.0,),
+            dropouts2=(0.5, ),
+            learning_rates=(0.00037,),
+        )
+    )
 
 @dataclass(frozen=True)
 class BestArticleOnlyTunedF1Cnf(BestArticleOnlyCnf):
@@ -1799,6 +1888,136 @@ class WikipediaArticleEntityOnlyCnf(WikipediaArticleEntitiesCnf):
     )
 
 
+#### Entity-source comparison configs on gold-origin train/test corpora ####
+
+
+@dataclass(frozen=True)
+class GoldOriginEntityOnlyCnf(EntityOnlyCnf):
+    """WikidataProject entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=_gold_origin_paths)
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipedia2VecEntityOnlyCnf(Wikipedia2VecEntityOnlyCnf):
+    """Wikipedia2Vec entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWikidataDescriptionEntityOnlyCnf(WikidataDescriptionEntityOnlyCnf):
+    """Wikidata description entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/WikidataDescription',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaIntroEntityOnlyCnf(WikipediaIntroEntityOnlyCnf):
+    """Cuted-article entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/cuted-article-embeddings',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaArticleEntityOnlyCnf(WikipediaArticleEntityOnlyCnf):
+    """Selected-article entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/selected-article-embeddings',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesPmmTunedOnlyCnf(WpEntitiesPmmTunedOnlyCnf):
+    """PMM entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesPmmTunedCnf(WpEntitiesPmmTunedCnf):
+    """PMM entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/entity_embeddings_pmm',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesTunedCnf(WpEntitiesTunedCnf):
+    """PMM entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/WikidataProject',
+        )
+    )
+
+@dataclass(frozen=True)
+class GoldOriginWikipedia2VecEntitiesCnf(Wikipedia2VecEntitiesCnf):
+    """Wikipedia2Vec entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWikidataDescriptionEntitiesCnf(WikidataDescriptionEntitiesCnf):
+    """Wikidata description entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/WikidataDescription',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaIntroEntitiesCnf(WikipediaIntroEntitiesCnf):
+    """Cuted-article entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/cuted-article-embeddings',
+        )
+    )
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaArticleEntitiesCnf(WikipediaArticleEntitiesCnf):
+    """Selected-article entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(
+        default_factory=lambda: _gold_origin_paths(
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/selected-article-embeddings',
+        )
+    )
+
+
 @dataclass(frozen=True)
 class WPEntityOnlyMeanCnf(EntityOnlyCnf):
     """Entity-only configuration with mean entity pooling."""
@@ -1860,6 +2079,63 @@ class WikidataDescriptionEntitiesMeanCnf(WikidataDescriptionEntitiesCnf):
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
     )
+    
+    
+@dataclass(frozen=True)
+class WikidataDescriptionEntitiesMeanJinaCnf(WikidataDescriptionEntitiesCnf):
+    """Wikidata description entity-enhanced configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
+    )
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/WikidataDescription_jina',
+        )
+    )
+@dataclass(frozen=True)
+class WikidataDescriptionEntitiesMeanJinaAllLangsFallbackCnf(WikidataDescriptionEntitiesCnf):
+    """Wikidata description entity-enhanced configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean',entity_langs=ALL_ENTITY_LANGS, entity_lang_mode='fallback')
+    )
+    paths: PathsCnf = field(
+        default_factory=lambda: replace(
+            PathsCnf(),
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/WikidataDescription_jina',
+        )
+    )
+
+@dataclass(frozen=True)
+class WikidataDescriptionAttentionCnf(WikidataDescriptionEntitiesCnf):
+    """Wikidata description entity-enhanced configuration with mean entity pooling."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(
+            EmbeddingCnf(),
+            entity_pooling='no_pooling',
+        )
+    )
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(4096,),
+            dropouts1=(0.0,),
+            dropouts2=(0.5,),
+            attention_hidden_dims=(64, 128, 256, 512),
+            attention_dropouts=(0.0,0.3,),
+
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -1872,11 +2148,75 @@ class WikipediaIntroEntitiesMeanCnf(WikipediaIntroEntitiesCnf):
 
 
 @dataclass(frozen=True)
+class W2VecRelevanceWeightedMeanCnf(WPEntitiesRelevanceWeightedMeanCnf):
+    """Wikipedia2Vec embeddings with relevance-weighted mean pooling."""
+
+    paths: PathsCnf = field(default_factory=lambda: replace(Wikipedia2VecEntitiesCnf().paths))
+
+
+@dataclass(frozen=True)
+class W2VecMentionWeightedMeanCnf(WPEntitiesMentionWeightedMeanCnf):
+    """Wikipedia2Vec embeddings with mention-weighted mean pooling."""
+
+    paths: PathsCnf = field(default_factory=lambda: replace(Wikipedia2VecEntitiesCnf().paths))
+
+
+@dataclass(frozen=True)
+class WikiIntroRelevanceWeightedMeanCnf(WPEntitiesRelevanceWeightedMeanCnf):
+    """Wikipedia intro embeddings with relevance-weighted mean pooling."""
+
+    paths: PathsCnf = field(default_factory=lambda: replace(WikiIntroAttentionHPOCnf().paths))
+
+
+@dataclass(frozen=True)
+class WikiIntroMentionWeightedMeanCnf(WPEntitiesMentionWeightedMeanCnf):
+    """Wikipedia intro embeddings with mention-weighted mean pooling."""
+
+    paths: PathsCnf = field(default_factory=lambda: replace(WikiIntroAttentionHPOCnf().paths))
+
+
+@dataclass(frozen=True)
 class WikipediaArticleEntitiesMeanCnf(WikipediaArticleEntitiesCnf):
     """Wikipedia article entity-enhanced configuration with mean entity pooling."""
 
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_pooling='mean')
+    )
+
+
+@dataclass(frozen=True)
+class WpEntitiesPmmTunedSumCnf(WpEntitiesPmmTunedCnf):
+    """PMM entity-enhanced configuration with sum feature fusion."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), combine_method='sum')
+    )
+
+
+@dataclass(frozen=True)
+class WikidataDescriptionEntitiesSumCnf(WikidataDescriptionEntitiesCnf):
+    """Wikidata description entity-enhanced configuration with sum feature fusion."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), combine_method='sum')
+    )
+
+
+@dataclass(frozen=True)
+class WikipediaIntroEntitiesSumCnf(WikipediaIntroEntitiesCnf):
+    """Wikipedia intro entity-enhanced configuration with sum feature fusion."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), combine_method='sum')
+    )
+
+
+@dataclass(frozen=True)
+class WikipediaArticleEntitiesSumCnf(WikipediaArticleEntitiesCnf):
+    """Wikipedia article entity-enhanced configuration with sum feature fusion."""
+
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), combine_method='sum')
     )
 
 
@@ -2084,7 +2424,403 @@ class DebugMhaAttention2Cnf(DebugCnf):
 class TunningLearningRateF1Cnf(BaseCnfWithHPO3):
     """  """
     train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1'))
+
+#### Best entity-enhanced configs with per-class threshold tuning enabled and specific languages ####
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedAllLangsCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS)
+    )
     
+@dataclass(frozen=True)
+class BWpEntitiesTunedCsCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('cs',))
+    )
+    
+@dataclass(frozen=True)
+class BWpEntitiesTunedDeCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('de',))
+    )
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedNlCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('nl',))
+    )
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedFrCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('fr',))
+    )
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedEsCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('es',))
+    )
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedEnCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en',))
+    )
+    
+@dataclass(frozen=True)
+class BWpEntitiesTunedEnDeCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('de','en'))
+    )
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedEnNlCnf(BestWpEntitiesTunedCnf):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('nl','en'))
+    )  
+    
+#### Best entity-enhanced configs with per-class threshold tuning enabled and specific languages fallback mode ####
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedAllLangsFallbackCnf(BaseCnfWithHPO):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS, entity_lang_mode='fallback')
+    )
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedAllLangsFallbackAttentionCnf(BaseCnfWithHPO):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS, entity_lang_mode='fallback', entity_pooling='no_pooling')
+    )
+    
+    model: ModelCnf = field(
+        default_factory=lambda: replace(
+            ModelCnf(),
+            nn_type='entity_attention_mlp',
+            attention_hidden_dim=128,
+        )
+    )
+    hparam: HyperparamSpace = field(
+        default_factory=lambda: replace(
+            HyperparamSpace(),
+            hidden_dims=(2048,),
+            dropouts1=(0.1,),
+            dropouts2=(0.5,),
+            attention_hidden_dims=(64, 256, 512), # 128, #TODO: return this back 
+            attention_dropouts=(0.0, 0.3,),
+
+        )
+    )
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedEnFallbackCnf(BaseCnfWithHPO):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en',), entity_lang_mode='fallback')
+    )
+    
+@dataclass(frozen=True)
+class BWpEntitiesTunedEnDeFallbackCnf(BaseCnfWithHPO):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'de'), entity_lang_mode='fallback')
+    )
+
+@dataclass(frozen=True)
+class BWpEntitiesTunedNlEnFallbackCnf(BaseCnfWithHPO):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('nl','en'), entity_lang_mode='fallback')
+    )  
+    
+@dataclass(frozen=True)
+class BWpEntitiesTunedEnNlFallbackCnf(BaseCnfWithHPO):
+    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    emb: EmbeddingCnf = field(
+        default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en','nl'), entity_lang_mode='fallback')
+    )  
+    
+#### Gold-origin twins of the article-only, entity-pooling and language configs ####
+
+
+def _gold_origin_paths_from(parent: type[BaseCnf]) -> PathsCnf:
+    """Build gold-origin paths from a parent config, swapping only the train/test CSVs.
+
+    :param parent: config class whose ``paths`` (entity embeddings dir, etc.) should be preserved
+    :return: paths pointing at the gold-origin train/test entity CSVs
+    """
+    return replace(
+        parent().paths,
+        train_csv=GOLD_ORIGIN_TRAIN_CSV,
+        test_csv=GOLD_ORIGIN_TEST_CSV,
+    )
+
+
+# article-only family
+@dataclass(frozen=True)
+class GoldOriginArticleOnlyCnf(ArticleOnlyCnf):
+    """Article-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(ArticleOnlyCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginArticleOnlyGeluCnf(ArticleOnlyGeluCnf):
+    """Article-only gelu config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(ArticleOnlyGeluCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginArticleOnlySkipCnf(ArticleOnlySkipCnf):
+    """Article-only skip config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(ArticleOnlySkipCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginArticleOnlyLeakyCnf(ArticleOnlyLeakyCnf):
+    """Article-only leaky config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(ArticleOnlyLeakyCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginArticleOnlyPriorCnf(ArticleOnlyPriorCnf):
+    """Article-only prior config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(ArticleOnlyPriorCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginArticleOnlyTunedCnf(ArticleOnlyTunedCnf):
+    """Article-only tuned config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(ArticleOnlyTunedCnf))
+
+
+# wpentities family
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesBaseCnf(WpEntitiesCnf):
+    """WpEntities base config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WpEntitiesCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesGeluCnf(WpEntitiesGeluCnf):
+    """WpEntities gelu config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WpEntitiesGeluCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesSkipCnf(WpEntitiesSkipCnf):
+    """WpEntities skip config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WpEntitiesSkipCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesLeakyCnf(WpEntitiesLeakyCnf):
+    """WpEntities leaky config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WpEntitiesLeakyCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesPriorCnf(WpEntitiesPriorCnf):
+    """WpEntities prior config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WpEntitiesPriorCnf))
+
+
+# sum-method family
+@dataclass(frozen=True)
+class GoldOriginWpEntitiesPmmTunedSumCnf(WpEntitiesPmmTunedSumCnf):
+    """PMM sum-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WpEntitiesPmmTunedSumCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikidataDescriptionEntitiesSumCnf(WikidataDescriptionEntitiesSumCnf):
+    """Wikidata description sum-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikidataDescriptionEntitiesSumCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaIntroEntitiesSumCnf(WikipediaIntroEntitiesSumCnf):
+    """Cuted-article sum-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikipediaIntroEntitiesSumCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaArticleEntitiesSumCnf(WikipediaArticleEntitiesSumCnf):
+    """Selected-article sum-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikipediaArticleEntitiesSumCnf))
+
+
+# entity-pooling with mean - entity-only
+@dataclass(frozen=True)
+class GoldOriginWPEntityOnlyMeanCnf(WPEntityOnlyMeanCnf):
+    """Mean-pooled entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntityOnlyMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipedia2VecEntityOnlyMeanCnf(Wikipedia2VecEntityOnlyMeanCnf):
+    """Wikipedia2Vec mean-pooled entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(Wikipedia2VecEntityOnlyMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikidataDescriptionEntityOnlyMeanCnf(WikidataDescriptionEntityOnlyMeanCnf):
+    """Wikidata description mean-pooled entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikidataDescriptionEntityOnlyMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaIntroEntityOnlyMeanCnf(WikipediaIntroEntityOnlyMeanCnf):
+    """Cuted-article mean-pooled entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikipediaIntroEntityOnlyMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaArticleEntityOnlyMeanCnf(WikipediaArticleEntityOnlyMeanCnf):
+    """Selected-article mean-pooled entity-only config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikipediaArticleEntityOnlyMeanCnf))
+
+
+# entity-pooling with mean - entity-enhanced
+@dataclass(frozen=True)
+class GoldOriginWPEntitiesMeanCnf(WPEntitiesMeanCnf):
+    """Mean-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipedia2VecEntitiesMeanCnf(Wikipedia2VecEntitiesMeanCnf):
+    """Wikipedia2Vec mean-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(Wikipedia2VecEntitiesMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikidataDescriptionEntitiesMeanCnf(WikidataDescriptionEntitiesMeanCnf):
+    """Wikidata description mean-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikidataDescriptionEntitiesMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaIntroEntitiesMeanCnf(WikipediaIntroEntitiesMeanCnf):
+    """Cuted-article mean-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikipediaIntroEntitiesMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWikipediaArticleEntitiesMeanCnf(WikipediaArticleEntitiesMeanCnf):
+    """Selected-article mean-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WikipediaArticleEntitiesMeanCnf))
+
+
+# attention and weighted-pooling family
+@dataclass(frozen=True)
+class GoldOriginWPEntitiesAttentionHPOCnf(WPEntitiesAttentionHPOCnf):
+    """Attention-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesAttentionHPOCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWPEntitiesRelevanceWeightedSumCnf(WPEntitiesRelevanceWeightedSumCnf):
+    """Relevance-weighted sum entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesRelevanceWeightedSumCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWPEntitiesMentionWeightedSumCnf(WPEntitiesMentionWeightedSumCnf):
+    """Mention-weighted sum entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesMentionWeightedSumCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWPEntitiesRelevanceWeightedMeanCnf(WPEntitiesRelevanceWeightedMeanCnf):
+    """Relevance-weighted mean entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesRelevanceWeightedMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWPEntitiesMentionWeightedMeanCnf(WPEntitiesMentionWeightedMeanCnf):
+    """Mention-weighted mean entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesMentionWeightedMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWPEntitiesWeightedMeanCnf(WPEntitiesWeightedMeanCnf):
+    """Weighted mean entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesWeightedMeanCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginWPEntitiesPmmAttentionHPOCnf(WPEntitiesPmmAttentionHPOCnf):
+    """PMM attention-pooled entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(WPEntitiesPmmAttentionHPOCnf))
+
+
+# language fallback family
+@dataclass(frozen=True)
+class GoldOriginBWpEntitiesTunedEnFallbackCnf(BWpEntitiesTunedEnFallbackCnf):
+    """Best tuned en-fallback entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(BWpEntitiesTunedEnFallbackCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginBWpEntitiesTunedEnDeFallbackCnf(BWpEntitiesTunedEnDeFallbackCnf):
+    """Best tuned en-de-fallback entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(BWpEntitiesTunedEnDeFallbackCnf))
+
+
+@dataclass(frozen=True)
+class GoldOriginBWpEntitiesTunedEnNlFallbackCnf(BWpEntitiesTunedEnNlFallbackCnf):
+    """Best tuned en-nl-fallback entity-enhanced config on gold-origin corpora."""
+
+    paths: PathsCnf = field(default_factory=lambda: _gold_origin_paths_from(BWpEntitiesTunedEnNlFallbackCnf))
+
+
 def _config_map() -> dict[str, BaseCnf]:
     """Return supported config instances."""
     return {
@@ -2095,6 +2831,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'article_only_leaky': ArticleOnlyLeakyCnf(),
         'article_only_prior': ArticleOnlyPriorCnf(),
         'article_only_tuned': ArticleOnlyTunedCnf(),
+        'best_article_only_tuned': BestArticleOnlyTunedCnf(),
         #'article_only_tuned_f1': ArticleOnlyTunedF1Cnf(),
         
         'wpentities': WpEntitiesCnf(),
@@ -2105,17 +2842,87 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_tuned': WpEntitiesTunedCnf(),
         #'wpentities_tuned_f1': WpEntitiesTunedF1Cnf(),
         
-        # comparing entity entity description aproaches 
+        # comparing entity entitysources 
         'wp_entity_only': EntityOnlyCnf(),
         'wikipedia2vec_entity_only': Wikipedia2VecEntityOnlyCnf(),
         'wikidata_description_entity_only': WikidataDescriptionEntityOnlyCnf(),
         'wikipedia_intro_entity_only': WikipediaIntroEntityOnlyCnf(),
         'wikipedia_article_entity_only': WikipediaArticleEntityOnlyCnf(),
+        'wpentities_pmm_tuned_only': WpEntitiesPmmTunedOnlyCnf(),
         
+        'wpentities_pmm': WpEntitiesPmmTunedCnf(),
         'wikipedia2vec_entities': Wikipedia2VecEntitiesCnf(),
         'wikidata_description_entities': WikidataDescriptionEntitiesCnf(),
         'wikipedia_intro_entities': WikipediaIntroEntitiesCnf(),
         'wikipedia_article_entities': WikipediaArticleEntitiesCnf(),
+        
+        
+        # comparing entity entitysources on original gold dataset
+        'gold_origin_wp_entity_only': GoldOriginEntityOnlyCnf(),
+        'gold_origin_wpentities_pmm': GoldOriginWpEntitiesPmmTunedCnf(),
+        'gold_origin_wpentities': GoldOriginWpEntitiesTunedCnf(),
+        
+        'gold_origin_wikipedia2vec_entity_only': GoldOriginWikipedia2VecEntityOnlyCnf(),
+        'gold_origin_wikidata_description_entity_only': GoldOriginWikidataDescriptionEntityOnlyCnf(),
+        'gold_origin_wikipedia_intro_entity_only': GoldOriginWikipediaIntroEntityOnlyCnf(),
+        'gold_origin_wikipedia_article_entity_only': GoldOriginWikipediaArticleEntityOnlyCnf(),
+        'gold_origin_wpentities_pmm_tuned_only': GoldOriginWpEntitiesPmmTunedOnlyCnf(),
+        
+        'gold_origin_wikipedia2vec_entities': GoldOriginWikipedia2VecEntitiesCnf(),
+        'gold_origin_wikidata_description_entities': GoldOriginWikidataDescriptionEntitiesCnf(),
+        'gold_origin_wikipedia_intro_entities': GoldOriginWikipediaIntroEntitiesCnf(),
+        'gold_origin_wikipedia_article_entities': GoldOriginWikipediaArticleEntitiesCnf(),
+
+        # gold-origin twins of article-only, wpentities, pooling, attention and language configs
+        'gold_origin_article_only': GoldOriginArticleOnlyCnf(),
+        'gold_origin_article_only_gelu': GoldOriginArticleOnlyGeluCnf(),
+        'gold_origin_article_only_skip': GoldOriginArticleOnlySkipCnf(),
+        'gold_origin_article_only_leaky': GoldOriginArticleOnlyLeakyCnf(),
+        'gold_origin_article_only_prior': GoldOriginArticleOnlyPriorCnf(),
+        'gold_origin_article_only_tuned': GoldOriginArticleOnlyTunedCnf(),
+
+        'gold_origin_wpentities_base': GoldOriginWpEntitiesBaseCnf(),
+        'gold_origin_wpentities_gelu': GoldOriginWpEntitiesGeluCnf(),
+        'gold_origin_wpentities_skip': GoldOriginWpEntitiesSkipCnf(),
+        'gold_origin_wpentities_leaky': GoldOriginWpEntitiesLeakyCnf(),
+        'gold_origin_wpentities_prior': GoldOriginWpEntitiesPriorCnf(),
+        'gold_origin_wpentities_tuned': GoldOriginWpEntitiesTunedCnf(),
+
+        'gold_origin_wpentities_pmm_sum': GoldOriginWpEntitiesPmmTunedSumCnf(),
+        'gold_origin_wikidata_description_entities_sum': GoldOriginWikidataDescriptionEntitiesSumCnf(),
+        'gold_origin_wikipedia_intro_entities_sum': GoldOriginWikipediaIntroEntitiesSumCnf(),
+        'gold_origin_wikipedia_article_entities_sum': GoldOriginWikipediaArticleEntitiesSumCnf(),
+
+        'gold_origin_wp_entity_only_mean': GoldOriginWPEntityOnlyMeanCnf(),
+        'gold_origin_wikipedia2vec_entity_only_mean': GoldOriginWikipedia2VecEntityOnlyMeanCnf(),
+        'gold_origin_wikidata_description_entity_only_mean': GoldOriginWikidataDescriptionEntityOnlyMeanCnf(),
+        'gold_origin_wikipedia_intro_entity_only_mean': GoldOriginWikipediaIntroEntityOnlyMeanCnf(),
+        'gold_origin_wikipedia_article_entity_only_mean': GoldOriginWikipediaArticleEntityOnlyMeanCnf(),
+        'gold_origin_wp_entities_mean': GoldOriginWPEntitiesMeanCnf(),
+        'gold_origin_wikipedia2vec_entities_mean': GoldOriginWikipedia2VecEntitiesMeanCnf(),
+        'gold_origin_wikidata_description_entities_mean': GoldOriginWikidataDescriptionEntitiesMeanCnf(),
+        'gold_origin_wikipedia_intro_entities_mean': GoldOriginWikipediaIntroEntitiesMeanCnf(),
+        'gold_origin_wikipedia_article_entities_mean': GoldOriginWikipediaArticleEntitiesMeanCnf(),
+
+        'gold_origin_wpentities_attention_hpo': GoldOriginWPEntitiesAttentionHPOCnf(),
+        'gold_origin_wpentities_relevance_weighted_sum': GoldOriginWPEntitiesRelevanceWeightedSumCnf(),
+        'gold_origin_wpentities_mention_weighted_sum': GoldOriginWPEntitiesMentionWeightedSumCnf(),
+        'gold_origin_wpentities_relevance_weighted_mean': GoldOriginWPEntitiesRelevanceWeightedMeanCnf(),
+        'gold_origin_wpentities_mention_weighted_mean': GoldOriginWPEntitiesMentionWeightedMeanCnf(),
+        'gold_origin_wpentities_weighted_mean': GoldOriginWPEntitiesWeightedMeanCnf(),
+        'gold_origin_wpentities_mean': GoldOriginWPEntitiesMeanCnf(),
+        'gold_origin_wpentities_pmm_attention': GoldOriginWPEntitiesPmmAttentionHPOCnf(),
+
+        'gold_origin_wpentities_tuned_en_fallback': GoldOriginBWpEntitiesTunedEnFallbackCnf(),
+        'gold_origin_wpentities_tuned_en_de_fallback': GoldOriginBWpEntitiesTunedEnDeFallbackCnf(),
+        'gold_origin_wpentities_tuned_en_nl_fallback': GoldOriginBWpEntitiesTunedEnNlFallbackCnf(),
+
+        # sum method
+        'wpentities_pmm_sum': WpEntitiesPmmTunedSumCnf(),
+        'wikidata_description_entities_sum': WikidataDescriptionEntitiesSumCnf(),
+        'wikipedia_intro_entities_sum': WikipediaIntroEntitiesSumCnf(),
+        'wikipedia_article_entities_sum': WikipediaArticleEntitiesSumCnf(),
+        
         # entity-pooling with mean
         'wp_entity_only_mean': WPEntityOnlyMeanCnf(),
         'wikipedia2vec_entity_only_mean': Wikipedia2VecEntityOnlyMeanCnf(),
@@ -2127,14 +2934,14 @@ def _config_map() -> dict[str, BaseCnf]:
         'wikidata_description_entities_mean': WikidataDescriptionEntitiesMeanCnf(),
         'wikipedia_intro_entities_mean': WikipediaIntroEntitiesMeanCnf(),
         'wikipedia_article_entities_mean': WikipediaArticleEntitiesMeanCnf(),
-        
+        'wikidata_description_jina': WikidataDescriptionEntitiesMeanJinaCnf(),
+        'wikidata_description_jina_all_langs_fallback': WikidataDescriptionEntitiesMeanJinaAllLangsFallbackCnf(),
 
 
         # testing different embeddings
         'wpentities_jina_v3_cls': WpEntitiesJV3ClsTunedCnf(),
         'wpentities_jina_v5_cls': WpEntitiesJV5ClsTunedCnf(),
-        'wpentities_pmm': WpEntitiesPmmTunedCnf(),
-        'wpentities_pmm_tuned_only': WpEntitiesPmmTunedOnlyCnf(),
+        
         
     
         'article_only_tuned_diff_thresholds': ArticleOnlyTunedDiffThresholdsCnf(),
@@ -2161,16 +2968,24 @@ def _config_map() -> dict[str, BaseCnf]:
         'debug_mha_attention': DebugMhaAttentionCnf(),
         'debug_mha_attention2': DebugMhaAttention2Cnf(),
         'wpentities_attention_hpo': WPEntitiesAttentionHPOCnf(),
+        'best_wpentities_attention_hpo': BestWpEntitiesAttentionHPOCnf(),
+        
         
         'wpentities_relevance_weighted_sum': WPEntitiesRelevanceWeightedSumCnf(),
         'wpentities_mention_weighted_sum': WPEntitiesMentionWeightedSumCnf(),
         'wpentities_relevance_weighted_mean': WPEntitiesRelevanceWeightedMeanCnf(),
         'wpentities_mention_weighted_mean': WPEntitiesMentionWeightedMeanCnf(),
+        'w2vec_relevance_weighted_mean': W2VecRelevanceWeightedMeanCnf(),
+        'w2vec_mention_weighted_mean': W2VecMentionWeightedMeanCnf(),
+        'wikipedia_intro_relevance_weighted_mean': WikiIntroRelevanceWeightedMeanCnf(),
+        'wikipedia_intro_mention_weighted_mean': WikiIntroMentionWeightedMeanCnf(),
         'wpentities_weighted_mean': WPEntitiesWeightedMeanCnf(),
         'wpentities_mean': WPEntitiesMeanCnf(),
         'wpentities_pmm_attention': WPEntitiesPmmAttentionHPOCnf(),
+        'wikipedia_intro_attention': WikiIntroAttentionHPOCnf(),
         'w2vec_attention': W2VecAttentionHPOCnf(),
         'wikipedia_article_entities_attention': WArticleAtentionCnf(),
+        'wikidata_description_attention': WikidataDescriptionAttentionCnf(),
         
         
         # entity-pooling with mean
@@ -2193,6 +3008,28 @@ def _config_map() -> dict[str, BaseCnf]:
         'wpentities_rel_th_15': WPEntitiesRelTH15(),
         'wpentities_rel_th_20': WPEntitiesRelTH20(),
         'wpentities_rel_th_25': WPEntitiesRelTH25(),
+        
+        # languages tests
+      
+        'wpentities_tuned_en_fallback': BWpEntitiesTunedEnFallbackCnf(),
+        'wpentities_tuned_en_de_fallback': BWpEntitiesTunedEnDeFallbackCnf(),
+        'wpentities_tuned_en_nl_fallback': BWpEntitiesTunedEnNlFallbackCnf(),
+        'wpentities_tuned_nl_en_fallback': BWpEntitiesTunedNlEnFallbackCnf(),
+        'wpentities_tuned_all_langs_fallback': BWpEntitiesTunedAllLangsFallbackCnf(),
+        
+        'wpentities_tuned_cs': BWpEntitiesTunedCsCnf(),
+        'wpentities_tuned_de': BWpEntitiesTunedDeCnf(),
+        'wpentities_tuned_nl': BWpEntitiesTunedNlCnf(),
+        'wpentities_tuned_fr': BWpEntitiesTunedFrCnf(),
+        'wpentities_tuned_es': BWpEntitiesTunedEsCnf(),
+        'wpentities_tuned_en': BWpEntitiesTunedEnCnf(),
+        'wpentities_tuned_en_de': BWpEntitiesTunedEnDeCnf(),
+        'wpentities_tuned_en_nl': BWpEntitiesTunedEnNlCnf(),
+        'wpentities_tuned_all_langs': BWpEntitiesTunedAllLangsCnf(),
+        
+        # all the best
+        'wpentities_all_langs_fallback_attention': BWpEntitiesTunedAllLangsFallbackAttentionCnf(),
+        
         
         # rozběhnout ještě hpo na tunning a normal article_only a wpentities
         'debug': DebugCnf(),
@@ -2282,3 +3119,5 @@ def list_config_names() -> tuple[str, ...]:
 # Backward compatibility alias for older imports.
 _validate_config_dataclass_decorators()
 PipelineCnf = BaseCnf
+
+
