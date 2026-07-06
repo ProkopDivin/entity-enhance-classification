@@ -1,4 +1,4 @@
-geneea.catlib
+-e ..
 geneea.corpora.tools
 geneea.mediacats
 pandas>=2.0.0
