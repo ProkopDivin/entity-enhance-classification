@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 
 from iptc_entity_pipeline.config import ThresholdTuningCnf
-from iptc_entity_pipeline.evaluation.evaluate import (
+from iptc_entity_pipeline.evaluate import (
     filter_and_normalize,
     get_cat_name,
     normalize_pred_cats,

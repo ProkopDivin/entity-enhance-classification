@@ -31,7 +31,7 @@ import pandas as pd
 from iptc_entity_pipeline.category_sets import load_relevant_cat_ids, load_tail_cat_ids
 from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.data_loading import sanitize_name
-from iptc_entity_pipeline.evaluation.evaluate import (
+from iptc_entity_pipeline.evaluate import (
     CLASS_RELEVANT_MACRO_ROW,
     REMOVED_CAT_IDS,
     evaluate_predictions,
@@ -840,10 +840,12 @@ def _parse_entity(*, item: Any) -> ArticleEntity | None:
         wdids_raw = getattr(item, 'wd_ids', None)
         relevance_raw = getattr(item, 'relevance', None)
         mentions_raw = getattr(item, 'mention_count', None)
+        entity_type_raw = getattr(item, 'entity_type', None)
         raw_maybe = getattr(item, 'raw_entity', None)
         if isinstance(raw_maybe, Mapping):
             raw_payload = raw_maybe
-        entity_type_raw = raw_payload.get('type') if raw_payload is not None else None
+        if entity_type_raw is None and raw_payload is not None:
+            entity_type_raw = raw_payload.get('type')
         std_form_raw = raw_payload.get('stdForm') if raw_payload is not None else None
 
     if relevance_raw is None and raw_payload is not None:
