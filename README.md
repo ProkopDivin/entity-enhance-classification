@@ -173,4 +173,8 @@ Run new worker(agent)
    ```
 
 
+
 python3 -m iptc_entity_pipeline.run_pipeline --local --config entity_only
+
+### entity embeding preparation
+for wikiprojec entities, follow this README instructions at: [Wikidata Embedding Project](https://github.com/ProkopDivin/WikidataTextEmbedding)
