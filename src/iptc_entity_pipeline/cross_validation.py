@@ -25,7 +25,7 @@ from iptc_entity_pipeline.dataset_builder import (
     slice_dataset,
     to_numpy_array,
 )
-from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW, aggregate_fold_dfs
+from iptc_entity_pipeline.evaluation.evaluate import CLASS_RELEVANT_MACRO_ROW, aggregate_fold_dfs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.seeding import fold_seed, set_global_seed
 from iptc_entity_pipeline.threshold_tuning import (

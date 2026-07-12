@@ -71,7 +71,7 @@ def save_outputs(
     """
     import yaml
 
-    from iptc_entity_pipeline.evaluate import get_iptc_topics
+    from iptc_entity_pipeline.evaluation.evaluate import get_iptc_topics
 
     def get_cat_name(*, cat_id: str) -> str:
         try:

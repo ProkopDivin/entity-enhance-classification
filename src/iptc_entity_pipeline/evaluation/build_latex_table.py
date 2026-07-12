@@ -58,14 +58,14 @@ SUMMARY_FILENAME = 'summary_comparison.csv'
 CORPORA_FILENAME = 'corpora_comparison.csv'
 TOP_IMPROVED_STATS_FILENAME = 'top_improved_stats.csv'
 TOP_DEGRADED_STATS_FILENAME = 'top_degraded_stats.csv'
+TOP_IMPROVED_FILENAME = 'top_improved.csv'
+TOP_DEGRADED_FILENAME = 'top_degraded.csv'
 SUMMARY_KEY = 'micro'
 DEV_CV_SHEET = 'dev_cv_summary'
 VS_SEPARATOR = '_vs_'
 SAVED_MODEL_SUFFIX_RE = re.compile(r'_\d{8}_\d{6}$')
-CV_F1_DECIMALS = 4
-TEST_DECIMALS = 3
-DELTA_DECIMALS = 2
-CURRENT_DECIMALS = 2
+PERCENT_SCALE = 100.0
+METRIC_DECIMALS = 1
 
 
 @dataclass(frozen=True)
@@ -307,13 +307,11 @@ def collect_experiments(
     else:
         cn = resolve_config_name(dir_name=comparison_dir.name, overrides=config.overrides)
     if cn is None:
-        LOG.warning(
-            f'Found {SUMMARY_FILENAME} at comparison root {comparison_dir} but could not '
-            f'derive config_name from directory name {comparison_dir.name!r}. '
-            'Use --flat-config-name (saved-model prefix, e.g. best_wpentities_all_langs) '
-            'or rename the directory to <config>_vs_<baseline>_...'
+        cn = comparison_dir.name
+        LOG.info(
+            f'Using directory name {cn!r} as config_name for flat bundle at {comparison_dir}. '
+            'Pass --flat-config-name for saved-model CV metric lookup.'
         )
-        return experiments
 
     display_tag = apply_aliases(name=cn, aliases=config.aliases)
     experiments.append(
@@ -414,25 +412,33 @@ def order_rows(
 # LaTeX rendering
 # ---------------------------------------------------------------------------
 
+def to_pct(*, value: float) -> float:
+    """Convert a unit-interval metric to a percentage."""
+    return value * PERCENT_SCALE
+
+
 def find_max_indices(*, values: Sequence[float | None], decimals: int) -> set[int]:
     """Return indices of the maximum value rounded to ``decimals`` places.
 
-    Comparison happens on the displayed (rounded) value so that ties visible in
-    the output table all receive the bold treatment.
+    Comparison happens on the displayed (rounded) percentage so that ties visible
+    in the output table all receive the bold treatment.
     """
-    valid = [(idx, round(value, decimals)) for idx, value in enumerate(values) if value is not None]
+    valid = [
+        (idx, round(to_pct(value=value), decimals))
+        for idx, value in enumerate(values)
+        if value is not None and not pd.isna(value)
+    ]
     if not valid:
         return set()
     max_val = max(value for _, value in valid)
     return {idx for idx, value in valid if value == max_val}
 
 
-def fmt_value(*, value: float | None, decimals: int, bold: bool) -> str:
-    """Format ``value`` to ``decimals`` and optionally wrap in ``\\textbf{}``."""
-    if value is None:
+def fmt_value(*, value: float | None, decimals: int = METRIC_DECIMALS, bold: bool) -> str:
+    """Format a unit-interval metric as a percentage."""
+    if value is None or pd.isna(value):
         return '--'
-    text = format(value, f'.{decimals}f')
-    return f'\\textbf{{{text}}}' if bold else text
+    return fmt_number(value=to_pct(value=value), decimals=decimals, bold=bold)
 
 
 def escape_tag(*, tag: str) -> str:
@@ -442,10 +448,10 @@ def escape_tag(*, tag: str) -> str:
 
 def render_latex(*, rows: Sequence[TableRow], label: str, caption: str) -> str:
     """Render the assembled rows as a resizable LaTeX table."""
-    cv_f1_max = find_max_indices(values=[r.cv_f1 for r in rows], decimals=CV_F1_DECIMALS)
-    test_f1_max = find_max_indices(values=[r.test_f1 for r in rows], decimals=TEST_DECIMALS)
-    test_prec_max = find_max_indices(values=[r.test_prec for r in rows], decimals=TEST_DECIMALS)
-    test_rec_max = find_max_indices(values=[r.test_rec for r in rows], decimals=TEST_DECIMALS)
+    cv_f1_max = find_max_indices(values=[r.cv_f1 for r in rows], decimals=METRIC_DECIMALS)
+    test_f1_max = find_max_indices(values=[r.test_f1 for r in rows], decimals=METRIC_DECIMALS)
+    test_prec_max = find_max_indices(values=[r.test_prec for r in rows], decimals=METRIC_DECIMALS)
+    test_rec_max = find_max_indices(values=[r.test_rec for r in rows], decimals=METRIC_DECIMALS)
 
     lines: list[str] = [
         '\\begin{table}[h!]',
@@ -453,17 +459,17 @@ def render_latex(*, rows: Sequence[TableRow], label: str, caption: str) -> str:
         '\\resizebox{\\textwidth}{!}{%',
         '\\begin{tabular}{lccccc}',
         '\\hline',
-        'Tag & CV F1 & CV F1 Std & Test F1 & Test Prec & Test Rec \\\\',
+        'Tag & CV F1 (\\%) & CV F1 Std (\\%) & Test F1 (\\%) & Test Prec (\\%) & Test Rec (\\%) \\\\',
         '\\hline',
     ]
     for idx, row in enumerate(rows):
         cells = (
             escape_tag(tag=row.tag),
-            fmt_value(value=row.cv_f1, decimals=CV_F1_DECIMALS, bold=idx in cv_f1_max),
-            fmt_value(value=row.cv_f1_std, decimals=CV_F1_DECIMALS, bold=False),
-            fmt_value(value=row.test_f1, decimals=TEST_DECIMALS, bold=idx in test_f1_max),
-            fmt_value(value=row.test_prec, decimals=TEST_DECIMALS, bold=idx in test_prec_max),
-            fmt_value(value=row.test_rec, decimals=TEST_DECIMALS, bold=idx in test_rec_max),
+            fmt_value(value=row.cv_f1, bold=idx in cv_f1_max),
+            fmt_value(value=row.cv_f1_std, bold=False),
+            fmt_value(value=row.test_f1, bold=idx in test_f1_max),
+            fmt_value(value=row.test_prec, bold=idx in test_prec_max),
+            fmt_value(value=row.test_rec, bold=idx in test_rec_max),
         )
         lines.append(' & '.join(cells) + ' \\\\')
     lines.extend(
@@ -491,19 +497,24 @@ def as_float(*, value: Any) -> float:
         return float('nan')
 
 
-def fmt_plain(*, value: float, decimals: int = CURRENT_DECIMALS) -> str:
-    """Format numeric value with fixed decimals."""
-    if abs(value) < (0.5 * (10 ** -decimals)):
-        value = 0.0
-    return format(value, f'.{decimals}f')
-
-
-def fmt_delta(*, value: float, bold: bool, decimals: int = DELTA_DECIMALS) -> str:
-    """Format delta value and optionally apply bold style."""
+def fmt_number(*, value: float, decimals: int = METRIC_DECIMALS, bold: bool = False) -> str:
+    """Format a percentage value with fixed decimals."""
+    if pd.isna(value):
+        return '--'
     if abs(value) < (0.5 * (10 ** -decimals)):
         value = 0.0
     text = format(value, f'.{decimals}f')
     return f'\\textbf{{{text}}}' if bold else text
+
+
+def fmt_plain(*, value: float, decimals: int = METRIC_DECIMALS) -> str:
+    """Format a unit-interval metric as a percentage."""
+    return fmt_number(value=to_pct(value=value), decimals=decimals)
+
+
+def fmt_delta(*, value: float, bold: bool, decimals: int = METRIC_DECIMALS) -> str:
+    """Format a unit-interval metric delta as a percentage point change."""
+    return fmt_number(value=to_pct(value=value), decimals=decimals, bold=bold)
 
 
 def sanitize_token(*, text: str) -> str:
@@ -541,9 +552,9 @@ def render_experiment_corpora_table(*, experiment: ExperimentEntry, corpora_df: 
         '\\begin{tabular}{lrrrrrr}',
         '\\toprule',
         '\\multirow{2}{*}{\\textbf{Corpus}}',
-        '& \\multicolumn{2}{c}{\\textbf{Precision}}',
-        '& \\multicolumn{2}{c}{\\textbf{Recall}}',
-        '& \\multicolumn{2}{c}{\\textbf{F1 Score}} \\\\',
+        '& \\multicolumn{2}{c}{\\textbf{Precision (\\%)}}',
+        '& \\multicolumn{2}{c}{\\textbf{Recall (\\%)}}',
+        '& \\multicolumn{2}{c}{\\textbf{F1 Score (\\%)}} \\\\',
         '\\cmidrule(lr){2-3} \\cmidrule(lr){4-5} \\cmidrule(lr){6-7}',
         '& \\textbf{Current} & \\textbf{$\\Delta$ vs Base}',
         '& \\textbf{Current} & \\textbf{$\\Delta$ vs Base}',
@@ -635,9 +646,9 @@ def render_experiment_group_summary_table(*, experiment: ExperimentEntry, summar
         '\\begin{tabular}{lrrrrrr}',
         '\\toprule',
         '\\multirow{2}{*}{\\textbf{Group}}',
-        '& \\multicolumn{2}{c}{\\textbf{Precision}}',
-        '& \\multicolumn{2}{c}{\\textbf{Recall}}',
-        '& \\multicolumn{2}{c}{\\textbf{F1 Score}} \\\\',
+        '& \\multicolumn{2}{c}{\\textbf{Precision (\\%)}}',
+        '& \\multicolumn{2}{c}{\\textbf{Recall (\\%)}}',
+        '& \\multicolumn{2}{c}{\\textbf{F1 Score (\\%)}} \\\\',
         '\\cmidrule(lr){2-3} \\cmidrule(lr){4-5} \\cmidrule(lr){6-7}',
         '& \\textbf{Current} & \\textbf{$\\Delta$ vs Base}',
         '& \\textbf{Current} & \\textbf{$\\Delta$ vs Base}',
@@ -688,121 +699,72 @@ def render_experiment_group_summary_table(*, experiment: ExperimentEntry, summar
     return '\n'.join(lines)
 
 
-def read_stats_csv(*, path: Path) -> dict[str, float]:
-    """Read metric-value stats CSV into a dict."""
-    df = pd.read_csv(path)
-    result: dict[str, float] = {}
-    for row in df.itertuples(index=False):
-        result[str(row.metric)] = as_float(value=row.value)
-    return result
+
+def clean_category_name(*, raw: str) -> str:
+    """Strip surrounding quotes, normalise whitespace, and wrap hierarchy arrows in math mode."""
+    text = str(raw).strip().strip('"')
+    text = re.sub(r'>{2,}', lambda m: f'${m.group()}$', text)
+    return text
 
 
-def title_case_category(*, name: str) -> str:
-    """Convert lower-case top-level category label to display form."""
-    text = name.strip()
-    if not text:
-        return text
-    return text[0].upper() + text[1:]
-
-
-def render_improvement_degradation_table(
+def render_mcnemar_significant_table(
     *,
     experiment: ExperimentEntry,
-    improved_stats: Mapping[str, float],
-    degraded_stats: Mapping[str, float],
+    df: pd.DataFrame,
+    direction: str,
 ) -> str:
-    """Render improvement vs degradation table from stats files."""
-    summary_rows: list[tuple[str, str, str]] = [
-        (
-            'Number of categories',
-            str(int(improved_stats.get('count_improved', 0))),
-            str(int(degraded_stats.get('count_degraded', 0))),
-        ),
-        (
-            'Categories with $\\Delta$F1 $> 0.1$ / $< -0.1$',
-            str(int(improved_stats.get('count_improved_f1_diff_gt_0.1', 0))),
-            str(int(degraded_stats.get('count_degraded_f1_diff_gt_0.1', 0))),
-        ),
-        (
-            'Categories with $|\\Delta$F1$| > 0.3$',
-            str(int(improved_stats.get('count_improved_f1_diff_gt_0.3', 0))),
-            str(int(degraded_stats.get('count_degraded_f1_diff_gt_0.3', 0))),
-        ),
-        (
-            'Categories with $|\\Delta$F1$| > 0.5$',
-            str(int(improved_stats.get('count_improved_f1_diff_gt_0.5', 0))),
-            str(int(degraded_stats.get('count_degraded_f1_diff_gt_0.5', 0))),
-        ),
-        (
-            'Categories with $|\\Delta$F1$| > 0.7$',
-            str(int(improved_stats.get('count_improved_f1_diff_gt_0.7', 0))),
-            str(int(degraded_stats.get('count_degraded_f1_diff_gt_0.7', 0))),
-        ),
-        (
-            'Average $\\Delta$F1 (top 100)',
-            format(as_float(value=improved_stats.get('avg_f1_diff_top_100', 0.0)), '.4f'),
-            format(as_float(value=degraded_stats.get('avg_f1_diff_top_100', 0.0)), '.4f'),
-        ),
-        (
-            'Average article frequency (top 100)',
-            format(as_float(value=improved_stats.get('avg_article_frequency_top_100', 0.0)), '.2f'),
-            format(as_float(value=degraded_stats.get('avg_article_frequency_top_100', 0.0)), '.2f'),
-        ),
-    ]
-    prefix = 'top_level_top_100::'
-    improved_levels = {k.removeprefix(prefix): v for k, v in improved_stats.items() if k.startswith(prefix)}
-    degraded_levels = {k.removeprefix(prefix): v for k, v in degraded_stats.items() if k.startswith(prefix)}
-    all_level_names = sorted(set(improved_levels) | set(degraded_levels))
-    level_rows = sorted(
-        [
-            (
-                title_case_category(name=name),
-                int(as_float(value=improved_levels.get(name, 0.0))),
-                int(as_float(value=degraded_levels.get(name, 0.0))),
-            )
-            for name in all_level_names
-        ],
-        key=lambda item: (-(item[1] + item[2]), item[0]),
-    )
+    """Render a table listing all categories that passed the McNemar test.
+
+    :param experiment: experiment metadata
+    :param df: dataframe already filtered to ``mcnemar_pass == 1``
+    :param direction: ``'improved'`` or ``'degraded'``
+    :return: LaTeX table string
+    """
+    ascending = direction == 'degraded'
+    df = df.sort_values('F1_diff', ascending=ascending).reset_index(drop=True)
+
     lines: list[str] = [
-        '\\begin{table}[t]',
+        '\\begin{table*}[t]',
         '\\centering',
         '\\small',
         '\\resizebox{\\textwidth}{!}{%',
-        '\\begin{tabular}{lrr}',
+        '\\begin{tabular}{lrrrrr}',
         '\\toprule',
-        '\\textbf{Metric} & \\textbf{Improvement} & \\textbf{Degradation} \\\\',
+        '\\textbf{IPTC Category}',
+        '& \\textbf{Support}',
+        '& \\textbf{F1 Base (\\%)}',
+        '& \\textbf{F1 Current (\\%)}',
+        '& \\textbf{$\\Delta$F1 (\\%)}',
+        '& \\textbf{p-value (FDR)} \\\\',
         '\\midrule',
-        '',
-        '\\multicolumn{3}{l}{\\textbf{Summary}} \\\\',
     ]
-    for metric, improved, degraded in summary_rows:
-        lines.append(f'{metric} & {improved} & {degraded} \\\\')
-    lines.extend(
-        [
-            '',
-            '\\midrule',
-            '\\multicolumn{3}{l}{\\textbf{Top-level category composition (top 100)}} \\\\',
-        ]
-    )
-    for name, improved_count, degraded_count in level_rows:
-        lines.append(f'{name} & {improved_count} & {degraded_count} \\\\')
+
+    for _, row in df.iterrows():
+        category = escape_tag(tag=clean_category_name(raw=row['IPTC Category']))
+        support = int(as_float(value=row['article_frequency']))
+        f1_base = fmt_plain(value=as_float(value=row['F1_base']))
+        f1_cur = fmt_plain(value=as_float(value=row['F1_current']))
+        f1_diff = fmt_delta(value=as_float(value=row['F1_diff']), bold=True)
+        p_val = as_float(value=row['mcnemar_p_value_fdr'])
+        p_str = f'{p_val:.4f}' if pd.notna(p_val) else '--'
+        lines.append(f'{category} & {support} & {f1_base} & {f1_cur} & {f1_diff} & {p_str} \\\\')
+
+    dir_label = 'improved' if direction == 'improved' else 'degraded'
     caption = (
-        'Comparison of categories with the largest improvements and degradations relative to the base model. '
-        'The table reports the number of affected categories, thresholded counts based on F1 change, average F1 '
-        'improvement and article frequency among the top 100 categories, and the distribution of top-level '
-        'categories within the top 100 improved and degraded groups.'
+        f'All statistically significant {dir_label} categories for '
+        f'\\textit{{{escape_tag(tag=experiment.display_tag)}}} vs.\\ the base model '
+        f'(McNemar test, FDR-corrected $p < 0.05$). '
+        f'Categories are sorted by $\\Delta$F1 in {"descending" if direction == "improved" else "ascending"} order.'
     )
-    label = f'tab:{sanitize_token(text=experiment.display_tag)}-improvement-vs-degradation'
+    label = f'tab:{sanitize_token(text=experiment.display_tag)}-mcnemar-{dir_label}'
     lines.extend(
         [
-            '',
             '\\bottomrule',
             '\\end{tabular}%',
             '}',
             f'\\caption{{{caption}}}',
             f'\\label{{{label}}}',
-            '\\end{table}',
+            '\\end{table*}',
             '',
         ]
     )
@@ -810,13 +772,16 @@ def render_improvement_degradation_table(
 
 
 def write_per_experiment_tables(*, experiments: Sequence[ExperimentEntry], output_dir: Path) -> int:
-    """Generate and write 3 LaTeX tables for each experiment."""
+    """Generate and write per-experiment LaTeX tables.
+
+    Produces corpora, group summary, and McNemar-significant improved/degraded tables.
+    """
     written = 0
     for experiment in experiments:
         corpora_path = experiment.subdir / CORPORA_FILENAME
         summary_path = experiment.subdir / SUMMARY_FILENAME
-        improved_path = experiment.subdir / TOP_IMPROVED_STATS_FILENAME
-        degraded_path = experiment.subdir / TOP_DEGRADED_STATS_FILENAME
+        improved_path = experiment.subdir / TOP_IMPROVED_FILENAME
+        degraded_path = experiment.subdir / TOP_DEGRADED_FILENAME
         required_paths = (corpora_path, summary_path, improved_path, degraded_path)
         if not all(path.is_file() for path in required_paths):
             LOG.warning(
@@ -824,22 +789,43 @@ def write_per_experiment_tables(*, experiments: Sequence[ExperimentEntry], outpu
                 'required CSV files are missing.'
             )
             continue
+
         corpora_df = pd.read_csv(corpora_path)
         summary_df = pd.read_csv(summary_path)
-        improved_stats = read_stats_csv(path=improved_path)
-        degraded_stats = read_stats_csv(path=degraded_path)
+        improved_df = pd.read_csv(improved_path)
+        degraded_df = pd.read_csv(degraded_path)
+
+        improved_sig = improved_df[improved_df['mcnemar_pass'] == 1]
+        degraded_sig = degraded_df[degraded_df['mcnemar_pass'] == 1]
+
         file_stem = sanitize_token(text=experiment.subdir.name)
+
         corpora_tex = render_experiment_corpora_table(experiment=experiment, corpora_df=corpora_df)
         summary_tex = render_experiment_group_summary_table(experiment=experiment, summary_df=summary_df)
-        imp_deg_tex = render_improvement_degradation_table(
-            experiment=experiment,
-            improved_stats=improved_stats,
-            degraded_stats=degraded_stats,
-        )
         (output_dir / f'{file_stem}_corpora.tex').write_text(corpora_tex, encoding='utf-8')
         (output_dir / f'{file_stem}_summary_groups.tex').write_text(summary_tex, encoding='utf-8')
-        (output_dir / f'{file_stem}_improvement_vs_degradation.tex').write_text(imp_deg_tex, encoding='utf-8')
-        written += 3
+        written += 2
+
+        if not improved_sig.empty:
+            improved_tex = render_mcnemar_significant_table(
+                experiment=experiment, df=improved_sig, direction='improved',
+            )
+            (output_dir / f'{file_stem}_mcnemar_improved.tex').write_text(improved_tex, encoding='utf-8')
+            written += 1
+            LOG.info(f'{experiment.display_tag}: {len(improved_sig)} McNemar-significant improved categories')
+        else:
+            LOG.info(f'{experiment.display_tag}: no McNemar-significant improved categories')
+
+        if not degraded_sig.empty:
+            degraded_tex = render_mcnemar_significant_table(
+                experiment=experiment, df=degraded_sig, direction='degraded',
+            )
+            (output_dir / f'{file_stem}_mcnemar_degraded.tex').write_text(degraded_tex, encoding='utf-8')
+            written += 1
+            LOG.info(f'{experiment.display_tag}: {len(degraded_sig)} McNemar-significant degraded categories')
+        else:
+            LOG.info(f'{experiment.display_tag}: no McNemar-significant degraded categories')
+
     return written
 
 

@@ -442,21 +442,29 @@ def log_entity_type_counts(
     remove_types: frozenset[EntityType],
 ) -> None:
     """
-    Log per-type entity counts after type-based filtering.
+    Log per-type entity counts for entities attached to the corpus.
 
-    :param entities: Linked entities remaining in the corpus.
+    :param entities: Linked entities remaining after optional type filtering.
     :param csv_path: Source CSV path for log context.
-    :param remove_types: Types removed before counting.
+    :param remove_types: Types removed before counting; empty when all types are kept.
     """
     counts = Counter(entity.entity_type for entity in entities)
     total = sum(counts.values())
     removed_labels = sorted(entity_type.value for entity_type in remove_types)
     type_stats = ', '.join(f'{entity_type.value}={counts.get(entity_type, 0)}' for entity_type in EntityType)
+    if removed_labels:
+        LOGGER.info(
+            'Entity type counts after remove_types filter: csv_path=%s total=%s removed=%s %s',
+            csv_path,
+            total,
+            removed_labels,
+            type_stats,
+        )
+        return
     LOGGER.info(
-        'Entity type counts after remove_types filter: csv_path=%s total=%s removed=%s %s',
+        'Entity type counts: csv_path=%s total=%s %s',
         csv_path,
         total,
-        removed_labels,
         type_stats,
     )
 
@@ -552,14 +560,15 @@ def attach_entities(
                 article_entities[article_id] = filtered
             else:
                 del article_entities[article_id]
-        remaining_entities = [entity for linked in article_entities.values() for entity in linked]
-        log_entity_type_counts(entities=remaining_entities, csv_path=csv_path, remove_types=remove_types_set)
         LOGGER.info(
             'Removed entities by type: csv_path=%s removed_entities=%s remove_types=%s',
             csv_path,
             removed_entities,
             sorted(entity_type.value for entity_type in remove_types_set),
         )
+
+    remaining_entities = [entity for linked in article_entities.values() for entity in linked]
+    log_entity_type_counts(entities=remaining_entities, csv_path=csv_path, remove_types=remove_types_set)
 
     attached = 0
     for i, doc in enumerate(corpus.docs):
