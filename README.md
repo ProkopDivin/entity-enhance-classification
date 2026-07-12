@@ -176,5 +176,99 @@ Run new worker(agent)
 
 python3 -m iptc_entity_pipeline.run_pipeline --local --config entity_only
 
-### entity embeding preparation
-for wikiprojec entities, follow this README instructions at: [Wikidata Embedding Project](https://github.com/ProkopDivin/WikidataTextEmbedding)
+### Entity embedding preparation
+
+Every entity-enhanced config reads pre-computed entity vectors from a directory of
+`.npy` files (one per entity/language/chunk) plus JSON metadata sidecars. The loader
+(`EntityEmbeddingStore`) expects the filename convention:
+
+```
+{QID}_{lang}_{chunk}.npy      # e.g. Q42_en_1.npy
+{QID}_{lang}_{chunk}.json     # sidecar with model/metadata
+```
+
+Which directory a run reads is set per config via `PathsCnf.entity_embeddings_dir`
+(see `src/iptc_entity_pipeline/config.py`). The table below maps each entity source to
+the directory the configs expect and how to produce it.
+
+| Entity source | Config default dir (`data/entity_embeddings/...`) | How to produce |
+|---------------|---------------------------------------------------|----------------|
+| WikiProject (Wikidata graph text) | `WikidataProject` | External repo (below) |
+| Wikipedia2Vec | `wikipedia2vec` | `entity_embeddings.wikipedia2vec` (below) |
+| Wikidata description | `WikidataDescription_jina`, `WikidataDescription` | `entity_embeddings` (`--input-source wikidata`) |
+| Wikipedia intro | `cuted-article-embeddings` | `entity_embeddings` (`--input-source files`) |
+| Whole Wikipedia article | `selected-article-embeddings` | `entity_embeddings` (`--input-source files`) |
+| Shared MiniLM space (PMM) | `entity_embeddings_pmm` | `entity_embeddings` (`--embed-backend svc`) |
+
+The QID list consumed by all generators is `data/gold-chrono-per-dataset/wdId_ids.txt`
+(one Wikidata QID per line).
+
+#### Prerequisites
+
+Install the preprocessing dependencies (includes `wikipedia2vec`, which is **not** part
+of the main pipeline install):
+
+```bash
+pip install -r data-preprocessing/requirements.txt
+```
+
+All generators are run as modules with the preprocessing sources on `PYTHONPATH`:
+
+```bash
+export PYTHONPATH=data-preprocessing/src:src
+```
+
+#### 1. WikiProject entities
+
+These are produced by a separate project. Follow its instructions and place the output
+under `data/entity_embeddings/WikidataProject/`:
+[Wikidata Embedding Project](https://github.com/ProkopDivin/WikidataTextEmbedding).
+
+#### 2. Wikipedia2Vec entities
+
+This generator downloads the pretrained Wikipedia2Vec model automatically on first run
+(`enwiki_20180420_win10_500d.pkl.bz2`, ~2 GB, from `wikipedia2vec.s3.amazonaws.com`) into
+`data/wikipedia2vec_models/`, decompresses it once, then writes one vector per entity:
+
+```bash
+PYTHONPATH=data-preprocessing/src:src python -m entity_embeddings.wikipedia2vec \
+  --lang en \
+  --out-dir data/entity_embeddings/wikipedia2vec
+```
+
+Requires internet access and several GB of free disk. Use `--skip-download` if the model
+is already present, and `--titles-only` to resolve Wikidata titles without computing
+vectors. For multiple languages, provide per-language model URLs/names/dump dates via
+`--model-url-map`, `--model-name-map`, and `--dump-date-map` (see
+`docs/wikipedia2vec_entity_embeddings.md`).
+
+#### 3. Text-based entities (Jina / embedding service)
+
+`entity_embeddings` embeds entity *text* — either Wikidata descriptions fetched over
+SPARQL, or local text files (Wikipedia intros / full articles). Backend defaults to a
+local Jina model; use `--embed-backend svc` for the Geneea embedding service (needed for
+the shared-MiniLM `entity_embeddings_pmm` variant).
+
+Wikidata descriptions (Jina v3):
+
+```bash
+PYTHONPATH=data-preprocessing/src:src python -m entity_embeddings \
+  --input-source wikidata \
+  --ids data/gold-chrono-per-dataset/wdId_ids.txt \
+  --out-dir data/entity_embeddings/WikidataDescription_jina \
+  --variant jina-v3 --task passage --langs en,cs,de
+```
+
+Wikipedia intros from local cut-text files:
+
+```bash
+PYTHONPATH=data-preprocessing/src:src python -m entity_embeddings \
+  --input-source files \
+  --text-dir data/cuted-articles \
+  --out-dir data/entity_embeddings/cuted-article-embeddings \
+  --variant jina-v3 --task passage --langs en --skip-existing
+```
+
+Run `python -m entity_embeddings --help` for the full list of backends, variants, and
+tasks. All generators emit the same `{QID}_{lang}_{chunk}.npy` + `.json` layout consumed
+by the pipeline.
