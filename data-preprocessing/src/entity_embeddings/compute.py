@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Literal, Protocol, Sequence
+from typing import Any, Iterator, Literal, Protocol, Sequence
 
 import numpy as np
 from geneea.catlib.vec.vectorizer import SvcTextVectorizer
 from geneea.core import logutil
-from geneea.kb.tools.rdfutil import UrlSparqlService
+
+try:
+    from geneea.kb.tools.rdfutil import UrlSparqlService
+except ModuleNotFoundError:
+    UrlSparqlService = Any
 
 from entity_embeddings.constants import (
     DEFAULT_EMBED_BATCH_SIZE,
