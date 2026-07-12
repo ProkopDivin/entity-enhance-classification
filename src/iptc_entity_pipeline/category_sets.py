@@ -1,4 +1,4 @@
-"""Shared loaders for category-id subsets defined in YAML files."""
+"""Shared loaders for category-id subsets defined in YAML resource files."""
 
 from __future__ import annotations
 
@@ -8,13 +8,19 @@ from typing import Mapping, Sequence
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RELEVANT_CATS_PATH = REPO_ROOT / 'relevant_cats.yaml'
-TAIL_CATS_PATH = REPO_ROOT / 'tail_cats.yaml'
+RESOURCES_DIR = Path(__file__).resolve().parent / 'resources'
+RELEVANT_CATS_PATH = RESOURCES_DIR / 'relevant_cats.yaml'
+TAIL_CATS_PATH = RESOURCES_DIR / 'tail_cats.yaml'
+ZERO_CATS_PATH = RESOURCES_DIR / 'zero-cats.yaml'
 
 
 def load_category_ids_from_yaml(*, path: Path) -> set[str]:
-    """Load category ids from a YAML file under ``categories: [{id: ...}, ...]``."""
+    """
+    Load category ids from a YAML file under ``categories: [{id: ...}, ...]``.
+
+    :param path: Path to the category YAML file.
+    :return: Set of category ids.
+    """
     if not path.is_file():
         raise FileNotFoundError(f'Category YAML file not found: {path}')
     with open(path, encoding='utf-8') as f:
@@ -39,11 +45,17 @@ def load_category_ids_from_yaml(*, path: Path) -> set[str]:
 
 @lru_cache(maxsize=1)
 def load_relevant_cat_ids() -> set[str]:
-    """Load relevant category ids from ``relevant_cats.yaml``."""
+    """Load relevant category ids from ``resources/relevant_cats.yaml``."""
     return load_category_ids_from_yaml(path=RELEVANT_CATS_PATH)
 
 
 @lru_cache(maxsize=1)
 def load_tail_cat_ids() -> set[str]:
-    """Load tail category ids from ``tail_cats.yaml``."""
+    """Load tail category ids from ``resources/tail_cats.yaml``."""
     return load_category_ids_from_yaml(path=TAIL_CATS_PATH)
+
+
+@lru_cache(maxsize=1)
+def load_zero_cat_ids() -> set[str]:
+    """Load zero-support category ids from ``resources/zero-cats.yaml``."""
+    return load_category_ids_from_yaml(path=ZERO_CATS_PATH)
