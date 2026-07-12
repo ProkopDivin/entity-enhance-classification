@@ -19,6 +19,7 @@ import logging
 import pickle
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from scipy import stats as scipy_stats
@@ -31,7 +32,7 @@ import pandas as pd
 from iptc_entity_pipeline.category_sets import load_relevant_cat_ids, load_tail_cat_ids
 from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.data_loading import sanitize_name
-from iptc_entity_pipeline.evaluate import (
+from iptc_entity_pipeline.evaluation.evaluate import (
     CLASS_RELEVANT_MACRO_ROW,
     REMOVED_CAT_IDS,
     evaluate_predictions,
@@ -73,6 +74,7 @@ SUPPORT_BUCKETS: tuple[tuple[int, int, str], ...] = (
     (100, 1000, '100-1000'),
     (1000, 10**9, '1000+'),
 )
+MACRO_HEAD_MIN_SUPPORT = 15
 LANG_PREFIXES: tuple[str, ...] = ('en', 'es', 'nl', 'fr', 'de', 'cs')
 EUROSPORT_TOKEN = 'eurosport'
 ENTITY_TABLE_LIMIT = 1000
@@ -109,10 +111,14 @@ _CLASSES_COMPARISON_DROP_COLS: tuple[str, ...] = (
 
 _RESULT_SHEETS: tuple[tuple[str, str, bool], ...] = (
     ('corpora_comparison', 'corpora_comparison', False),
+    ('corpora_comparison_macro_head', 'corpora_comparison_macro_head', False),
+    ('language_comparison', 'language_comparison', False),
+    ('language_comparison_macro_head', 'language_comparison_macro_head', False),
     ('classes_comparison', 'classes_comparison', False),
     ('class_confusion_counts', 'class_confusion_counts', False),
     ('class_thresholds', 'class_thresholds', False),
     ('summary_comparison', 'summary_comparison', False),
+    ('summary_language_comparison', 'summary_language_comparison', False),
     ('top_improved_categories', 'top_improved', False),
     ('top_degraded_categories', 'top_degraded', False),
     ('top_improved_stats', 'top_improved_stats', False),
@@ -146,10 +152,14 @@ class ComparisonResult:
     """Structured outputs from one evaluation comparison run."""
 
     corpora_comparison: pd.DataFrame
+    corpora_comparison_macro_head: pd.DataFrame
+    language_comparison: pd.DataFrame
+    language_comparison_macro_head: pd.DataFrame
     classes_comparison: pd.DataFrame
     class_confusion_counts: pd.DataFrame
     class_thresholds: pd.DataFrame
     summary_comparison: pd.DataFrame
+    summary_language_comparison: pd.DataFrame
     top_improved_categories: pd.DataFrame
     top_degraded_categories: pd.DataFrame
     top_improved_stats: pd.DataFrame
@@ -482,11 +492,17 @@ def compare_runs(
         current_thr_vec=current_thr_vec,
         base_thr_vec=base_thr_vec,
     )
+    support_gold_matrix = gold_map.gold_matrix(article_ids=shared_ids, cat_ids=cat_ids)
+    class_supports = {
+        cat_id: int(support_gold_matrix[:, idx].sum(dtype=np.int64))
+        for idx, cat_id in enumerate(cat_ids)
+    }
     class_thresholds_df = build_class_thresholds_df(
         cat_ids=cat_ids,
         default_threshold=threshold_eval,
         current_thresholds=current_thresholds,
         base_thresholds=base_thresholds,
+        class_supports=class_supports,
     )
     mcnemar_df = build_mcnemar_significance_df(
         current_df=current_aligned_df,
@@ -536,10 +552,14 @@ def compare_runs(
         excel_path = Path(output_path) if output_path is not None else None
         result = ComparisonResult(
             corpora_comparison=empty_df,
+            corpora_comparison_macro_head=empty_df,
+            language_comparison=empty_df,
+            language_comparison_macro_head=empty_df,
             classes_comparison=empty_df,
             class_confusion_counts=empty_df,
             class_thresholds=empty_df,
             summary_comparison=empty_df,
+            summary_language_comparison=empty_df,
             top_improved_categories=with_class_id_column(
                 df=top_improved_df,
                 key_col='IPTC Category',
@@ -594,6 +614,37 @@ def compare_runs(
         if only_diff
         else corpora_cmp_full
     )
+    corpora_cmp_macro_head_full = build_corpora_macro_head_cmp_df(
+        current_df=current_aligned_df,
+        base_df=base_aligned_df,
+        gold_map=gold_map,
+        cat_ids=cat_ids,
+        current_thr_vec=current_thr_vec,
+        base_thr_vec=base_thr_vec,
+        corpora_cmp_reference=corpora_cmp_full,
+    )
+    corpora_cmp_macro_head_df = (
+        diff_only_df(
+            df=corpora_cmp_macro_head_full,
+            key_col='Corpus Name',
+            cmp_metrics=_CMP_METRICS_CORPORA,
+        )
+        if only_diff
+        else corpora_cmp_macro_head_full
+    )
+    language_cmp_full = build_language_cmp_df(corpora_cmp=corpora_cmp_full)
+    language_cmp_df = (
+        diff_only_df(df=language_cmp_full, key_col='Language', cmp_metrics=_CMP_METRICS_CORPORA)
+        if only_diff
+        else language_cmp_full
+    )
+    language_cmp_macro_head_full = build_language_cmp_df(corpora_cmp=corpora_cmp_macro_head_full)
+    language_cmp_macro_head_df = (
+        diff_only_df(df=language_cmp_macro_head_full, key_col='Language', cmp_metrics=_CMP_METRICS_CORPORA)
+        if only_diff
+        else language_cmp_macro_head_full
+    )
+    summary_language_df = language_cmp_df.copy()
     classes_cmp_clean = classes_cmp_full.drop(columns=list(_CLASSES_COMPARISON_DROP_COLS), errors='ignore')
     classes_cmp_df = (
         diff_only_df(df=classes_cmp_clean, key_col='IPTC Category', cmp_metrics=_CMP_METRICS_REPORT)
@@ -653,6 +704,9 @@ def compare_runs(
     excel_path = Path(output_path) if output_path is not None else None
     result = ComparisonResult(
         corpora_comparison=corpora_cmp_df,
+        corpora_comparison_macro_head=corpora_cmp_macro_head_df,
+        language_comparison=language_cmp_df,
+        language_comparison_macro_head=language_cmp_macro_head_df,
         classes_comparison=with_class_id_column(
             df=classes_cmp_df,
             key_col='IPTC Category',
@@ -661,6 +715,7 @@ def compare_runs(
         class_confusion_counts=class_confusion_df,
         class_thresholds=class_thresholds_df,
         summary_comparison=summary_df,
+        summary_language_comparison=summary_language_df,
         top_improved_categories=with_class_id_column(
             df=top_improved_df,
             key_col='IPTC Category',
@@ -854,10 +909,14 @@ def _parse_entity(*, item: Any) -> ArticleEntity | None:
             relevance_raw = feats_raw.get('relevance')
     if mentions_raw is None and raw_payload is not None:
         mentions_raw = raw_payload.get('mentions')
+    if raw_payload is not None:
+        raw_type = _mapping_value(item=raw_payload, keys=('type', 'entityType'))
+        if _normalize_entity_type(value=entity_type_raw) in {None, 'other'}:
+            entity_type_raw = raw_type
 
     gkb_id = _as_str(value=gkb_raw)
     wdids = _as_wdid_tuple(value=wdids_raw)
-    entity_type = _as_str(value=entity_type_raw)
+    entity_type = _normalize_entity_type(value=entity_type_raw)
     std_form = _as_str(value=std_form_raw)
     relevance = _as_float(value=relevance_raw)
     mention_count = _as_mentions_count(value=mentions_raw)
@@ -887,6 +946,25 @@ def _mapping_value(*, item: Mapping[str, Any], keys: Sequence[str]) -> Any:
         if key in item:
             return item[key]
     return None
+
+
+def _normalize_entity_type(*, value: Any) -> str | None:
+    """Normalize entity type to canonical lower-case labels."""
+    if value is None:
+        return None
+    if isinstance(value, Enum):
+        enum_value = getattr(value, 'value', None)
+        if enum_value is not None:
+            return _normalize_entity_type(value=enum_value)
+        return _normalize_entity_type(value=value.name)
+    value_str = _as_str(value=value)
+    if value_str is None:
+        return None
+    normalized = value_str.strip()
+    if normalized.startswith('EntityType.'):
+        normalized = normalized.split('.', 1)[1]
+    normalized = normalized.lower()
+    return normalized or None
 
 
 def _as_wdid_tuple(*, value: Any) -> tuple[str, ...]:
@@ -1035,6 +1113,212 @@ def build_cmp_df(
     for metric in metric_cols:
         cols.extend([f'{metric}_current', f'{metric}_base', f'{metric}_diff'])
     return df.reindex(columns=cols)
+
+
+def build_language_cmp_df(
+    *,
+    corpora_cmp: pd.DataFrame,
+    key_col: str = 'Language',
+) -> pd.DataFrame:
+    """Aggregate per-corpus comparison rows into per-language rows (macro over corpora)."""
+    corpora = corpora_cmp[~corpora_cmp['Corpus Name'].isin(AGG_CORPUS_ROWS)].copy()
+    corpora['Language'] = corpora['Corpus Name'].map(language_from_corpus_name)
+    corpora = corpora[corpora['Language'].notna()].copy()
+    if corpora.empty:
+        return pd.DataFrame(columns=_language_cmp_columns(key_col=key_col))
+
+    metric_cols = [col for _, col in _CMP_METRICS_CORPORA]
+    grouped = corpora.groupby('Language', sort=True)
+    rows: list[dict[str, Any]] = []
+    for language, group in grouped:
+        row: dict[str, Any] = {key_col: language}
+        for info_col in ('Data Count', 'Docs No Labels', 'Decent Labels'):
+            row[f'{info_col}_current'] = _safe_int(group[f'{info_col}_current'].sum())
+            row[f'{info_col}_base'] = _safe_int(group[f'{info_col}_base'].sum())
+        for metric_col in metric_cols:
+            row[f'{metric_col}_current'] = _safe_mean_series(group[f'{metric_col}_current'])
+            row[f'{metric_col}_base'] = _safe_mean_series(group[f'{metric_col}_base'])
+            row[f'{metric_col}_diff'] = row[f'{metric_col}_current'] - row[f'{metric_col}_base']
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    return df.reindex(columns=_language_cmp_columns(key_col=key_col))
+
+
+def build_corpora_macro_head_cmp_df(
+    *,
+    current_df: pd.DataFrame,
+    base_df: pd.DataFrame,
+    gold_map: GoldLabelMap,
+    cat_ids: Sequence[str],
+    current_thr_vec: np.ndarray,
+    base_thr_vec: np.ndarray,
+    corpora_cmp_reference: pd.DataFrame,
+    min_support: int = MACRO_HEAD_MIN_SUPPORT,
+) -> pd.DataFrame:
+    """Build corpus-level comparison table with macro-head metrics (support > ``min_support``)."""
+    article_ids = list(current_df['article_id'])
+    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(bool)
+    current_pred = build_score_matrix(df=current_df, cat_ids=cat_ids) >= current_thr_vec
+    base_pred = build_score_matrix(df=base_df, cat_ids=cat_ids) >= base_thr_vec
+    support = gold_matrix.sum(axis=0, dtype=np.int64)
+    head_mask = support > int(min_support)
+    corpus_names = current_df['corpus_name'].fillna('').astype(str)
+    row_names = sorted({name for name in corpus_names if name})
+    info_lookup = corpora_cmp_reference.set_index('Corpus Name', drop=False)
+    rows: list[dict[str, Any]] = []
+
+    for corpus_name in row_names:
+        mask = corpus_names == corpus_name
+        current_stats = _macro_head_metrics(gold=gold_matrix[mask][:, head_mask], pred=current_pred[mask][:, head_mask])
+        base_stats = _macro_head_metrics(gold=gold_matrix[mask][:, head_mask], pred=base_pred[mask][:, head_mask])
+        info_row = info_lookup.loc[corpus_name] if corpus_name in info_lookup.index else None
+        if isinstance(info_row, pd.DataFrame):
+            info_row = info_row.iloc[0]
+        rows.append(
+            _macro_head_corpora_row(
+                corpus_name=corpus_name,
+                current_stats=current_stats,
+                base_stats=base_stats,
+                info_row=info_row,
+            )
+        )
+
+    current_stats_all = _macro_head_metrics(gold=gold_matrix[:, head_mask], pred=current_pred[:, head_mask])
+    base_stats_all = _macro_head_metrics(gold=gold_matrix[:, head_mask], pred=base_pred[:, head_mask])
+    all_info_row = info_lookup.loc['All_micro'] if 'All_micro' in info_lookup.index else None
+    if isinstance(all_info_row, pd.DataFrame):
+        all_info_row = all_info_row.iloc[0]
+    rows.append(
+        _macro_head_corpora_row(
+            corpus_name='All_macro_head_corpora',
+            current_stats=current_stats_all,
+            base_stats=base_stats_all,
+            info_row=all_info_row,
+        )
+    )
+    df = pd.DataFrame(rows)
+    return df.reindex(columns=corpora_cmp_reference.columns.tolist())
+
+
+def _macro_head_corpora_row(
+    *,
+    corpus_name: str,
+    current_stats: Mapping[str, float],
+    base_stats: Mapping[str, float],
+    info_row: pd.Series | None,
+) -> dict[str, Any]:
+    """Build one corpus row with macro-head metrics and info columns."""
+    row: dict[str, Any] = {'Corpus Name': corpus_name}
+    for info_col in ('Data Count', 'Docs No Labels', 'Decent Labels'):
+        default_current = _safe_int(current_stats.get(info_col, float('nan')))
+        default_base = _safe_int(base_stats.get(info_col, float('nan')))
+        row[f'{info_col}_current'] = _safe_row_int(row=info_row, col=f'{info_col}_current', default=default_current)
+        row[f'{info_col}_base'] = _safe_row_int(row=info_row, col=f'{info_col}_base', default=default_base)
+    for _, metric_col in _CMP_METRICS_CORPORA:
+        current_value = float(current_stats.get(metric_col, float('nan')))
+        base_value = float(base_stats.get(metric_col, float('nan')))
+        row[f'{metric_col}_current'] = current_value
+        row[f'{metric_col}_base'] = base_value
+        row[f'{metric_col}_diff'] = current_value - base_value
+    return row
+
+
+def _safe_row_int(*, row: pd.Series | None, col: str, default: int) -> int:
+    """Read integer column from optional row, else return default."""
+    if row is None:
+        return default
+    value = row.get(col, np.nan)
+    return _safe_int(value, default=default)
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Convert numeric value to ``int`` with fallback for missing values."""
+    if value is None:
+        return default
+    try:
+        if np.isnan(value):
+            return default
+    except TypeError:
+        pass
+    return int(value)
+
+
+def _safe_mean_series(values: pd.Series) -> float:
+    """Mean over finite values; returns ``NaN`` when no finite values exist."""
+    numeric = pd.to_numeric(values, errors='coerce')
+    finite = numeric[np.isfinite(numeric)]
+    if finite.empty:
+        return float('nan')
+    return float(finite.mean())
+
+
+def _language_cmp_columns(*, key_col: str) -> list[str]:
+    """Column layout shared by language comparison tables."""
+    columns = [key_col]
+    for info_col in ('Data Count', 'Docs No Labels', 'Decent Labels'):
+        columns.extend([f'{info_col}_current', f'{info_col}_base'])
+    for _, metric_col in _CMP_METRICS_CORPORA:
+        columns.extend([f'{metric_col}_current', f'{metric_col}_base', f'{metric_col}_diff'])
+    return columns
+
+
+def language_from_corpus_name(corpus_name: Any) -> str | None:
+    """Extract language prefix from ``<lang>_...`` corpus names."""
+    name = str(corpus_name).strip()
+    if '_' not in name:
+        return None
+    prefix = name.split('_', 1)[0].lower()
+    return prefix if prefix in LANG_PREFIXES else None
+
+
+def _macro_head_metrics(*, gold: np.ndarray, pred: np.ndarray) -> dict[str, float]:
+    """Compute macro-head metrics for one document subset and class subset."""
+    if gold.size == 0 or pred.size == 0 or gold.shape[1] == 0:
+        return {
+            'Data Count': int(gold.shape[0]) if gold.ndim == 2 else 0,
+            'Docs No Labels': int(gold.shape[0]) if gold.ndim == 2 else 0,
+            'Decent Labels': 0,
+            'Precision': float('nan'),
+            'Recall': float('nan'),
+            'F1': float('nan'),
+            'False Positive Rate': float('nan'),
+        }
+
+    tp = np.logical_and(pred, gold).sum(axis=0, dtype=np.int64)
+    fp = np.logical_and(pred, np.logical_not(gold)).sum(axis=0, dtype=np.int64)
+    fn = np.logical_and(np.logical_not(pred), gold).sum(axis=0, dtype=np.int64)
+    tn = np.logical_and(np.logical_not(pred), np.logical_not(gold)).sum(axis=0, dtype=np.int64)
+    precision = np.divide(tp, tp + fp, out=np.zeros_like(tp, dtype=float), where=(tp + fp) > 0)
+    recall = np.divide(tp, tp + fn, out=np.zeros_like(tp, dtype=float), where=(tp + fn) > 0)
+    f1 = np.divide(
+        2 * precision * recall,
+        precision + recall,
+        out=np.zeros_like(precision, dtype=float),
+        where=(precision + recall) > 0,
+    )
+    beta_sq = 0.4 * 0.4
+    f_beta = np.divide(
+        (1.0 + beta_sq) * precision * recall,
+        beta_sq * precision + recall,
+        out=np.zeros_like(precision, dtype=float),
+        where=(beta_sq * precision + recall) > 0,
+    )
+    support = gold.sum(axis=0, dtype=np.int64)
+    decent_mask = (precision >= 0.6) & (f_beta >= 0.5) & (support >= 10)
+    docs_no_labels = int((pred.sum(axis=1, dtype=np.int64) == 0).sum())
+    negatives = int(np.logical_not(gold).sum(dtype=np.int64))
+    fp_total = int(fp.sum(dtype=np.int64))
+    false_positive_rate = float(fp_total / negatives) if negatives > 0 else float('nan')
+    return {
+        'Data Count': int(gold.shape[0]),
+        'Docs No Labels': docs_no_labels,
+        'Decent Labels': int(decent_mask.sum(dtype=np.int64)),
+        'Precision': float(precision.mean()),
+        'Recall': float(recall.mean()),
+        'F1': float(f1.mean()),
+        'False Positive Rate': false_positive_rate,
+    }
 
 
 def label_from_cat_id(*, cat_id: str) -> str:
@@ -1269,8 +1553,10 @@ def build_class_thresholds_df(
     default_threshold: float,
     current_thresholds: Mapping[str, float],
     base_thresholds: Mapping[str, float],
+    class_supports: Mapping[str, int] | None = None,
 ) -> pd.DataFrame:
     """Build per-class threshold table for current/base runs."""
+    supports = class_supports or {}
     rows: list[dict[str, Any]] = []
     for cat_id in cat_ids:
         current_thr = float(current_thresholds.get(cat_id, default_threshold))
@@ -1279,6 +1565,7 @@ def build_class_thresholds_df(
             {
                 'IPTC Category': safe_cat_label(cat_id=cat_id),
                 'class_id': format_class_id(cat_id=cat_id),
+                'count': int(supports.get(cat_id, 0)),
                 'threshold_current': current_thr,
                 'threshold_base': base_thr,
                 'threshold_diff': current_thr - base_thr,
@@ -1580,6 +1867,7 @@ def _add_mcnemar_to_top_change_df(
     """Merge McNemar rows and expose a direction-aware pass flag."""
     cols = [
         'IPTC Category',
+        'mcnemar_p_value',
         'mcnemar_p_value_fdr',
         'mcnemar_n10_current_only_correct',
         'mcnemar_n01_base_only_correct',
@@ -1590,6 +1878,7 @@ def _add_mcnemar_to_top_change_df(
     result = result.drop(columns=[pass_col])
     metric_cols = [
         'mcnemar_pass',
+        'mcnemar_p_value',
         'mcnemar_p_value_fdr',
         'mcnemar_n10_current_only_correct',
         'mcnemar_n01_base_only_correct',

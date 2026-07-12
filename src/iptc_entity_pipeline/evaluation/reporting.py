@@ -85,7 +85,7 @@ def build_test_scalar_metrics(
     :param objective_row: Corpora row for objective metrics (e.g. ``All_micro``).
     :return: Keys are qualified metric names (e.g. ``F1_micro``, ``F1_macro_relevant``).
     """
-    from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW
+    from iptc_entity_pipeline.evaluation.evaluate import CLASS_RELEVANT_MACRO_ROW
 
     corpora_row = df_corpora_test.loc[objective_row]
     macro_row = df_classes_test.loc[CLASS_RELEVANT_MACRO_ROW]
@@ -402,7 +402,7 @@ def report_test_eval_scalars(
     :param df_classes_test: Test classes evaluation DataFrame.
     :param objective_row: Corpora row used as the pipeline objective (e.g. ``All_micro``).
     """
-    from iptc_entity_pipeline.evaluate import CLASS_RELEVANT_MACRO_ROW, CORPORA_MICRO_ROW
+    from iptc_entity_pipeline.evaluation.evaluate import CLASS_RELEVANT_MACRO_ROW, CORPORA_MICRO_ROW
 
     title = 'Test Evaluation Results'
     objective_metrics = _objective_scalar_row(
