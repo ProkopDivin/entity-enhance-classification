@@ -15,7 +15,10 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Tuple
+
+from utils.dataset_names import detect_split_type, extract_dataset_name_from_path
+from utils.date_parsing import parse_iso_or_ymd_naive
 
 # Since this is a CLI script, print is acceptable for output
 # For general-purpose tools, logging should be used instead
@@ -30,68 +33,6 @@ class ArticleRecord:
     dataset: str
     json_line: str
     original_split: str
-
-
-def parse_date(date_str: Optional[str]) -> Optional[datetime]:
-    """
-    Parse date string to datetime object.
-
-    :param date_str: Date string in format 'YYYY-MM-DD' or ISO format (e.g., '2021-09-19T00:00:00Z')
-    :return: Timezone-naive datetime object or None if date_str is None or invalid
-    """
-    if not date_str:
-        return None
-    try:
-        # Try ISO format first (handles both with and without timezone)
-        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        # Normalize to timezone-naive for consistent comparison
-        if dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        return dt
-    except (ValueError, AttributeError):
-        # Fall back to simple YYYY-MM-DD format
-        try:
-            return datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            return None
-
-
-def extract_dataset_name(filepath: Path) -> Optional[str]:
-    """
-    Extract dataset name from filepath.
-
-    :param filepath: Path to .jsonl.gz file
-    :return: Dataset name (e.g., 'en_bbc_iptc' from
-             'en_bbc_iptc.dev_all.analysis.jsonl.gz' or
-             'de_dpa_iptc' from 'de_dpa_iptc.train_smallpp.analysis.jsonl.gz')
-    """
-    # Handle .gz files
-    name = filepath.name
-    if name.endswith(".gz"):
-        name = name[:-3]  # Remove .gz
-
-    # Remove .analysis.jsonl
-    name = name.replace(".analysis.jsonl", "")
-
-    # Remove split suffixes: .train_all, .dev_all, .test_all, .train, .dev,
-    # .test. Also handle patterns like _smallpp, _medium
-    for suffix in [
-        ".train_all",
-        ".dev_all",
-        ".test_all",
-        ".train_smallpp",
-        ".dev_smallpp",
-        ".test_smallpp",
-        ".train_medium",
-        ".dev_medium",
-        ".test_medium",
-        ".train",
-        ".dev",
-        ".test",
-    ]:
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-    return name
 
 
 def read_all_articles(
@@ -124,7 +65,7 @@ def read_all_articles(
     files = sorted(input_dir.glob("*.jsonl.gz"))
 
     for filepath in files:
-        dataset_name = extract_dataset_name(filepath=filepath)
+        dataset_name = extract_dataset_name_from_path(filepath=filepath)
         if not dataset_name:
             continue
 
@@ -132,14 +73,7 @@ def read_all_articles(
 
         # Determine original split from filename
         filename = filepath.name
-        if ".train" in filename:
-            original_split = "train"
-        elif ".dev" in filename:
-            original_split = "dev"
-        elif ".test" in filename:
-            original_split = "test"
-        else:
-            original_split = "train"  # default
+        original_split = detect_split_type(filename, default="train")
 
         try:
             with gzip.open(filepath, mode="rt", encoding="utf-8") as f:
@@ -153,7 +87,7 @@ def read_all_articles(
                     metadata = article.get("metadata", {})
                     date_str = metadata.get("date") if metadata else None
 
-                    date_obj = parse_date(date_str=date_str) if date_str else None
+                    date_obj = parse_iso_or_ymd_naive(date_str) if date_str else None
 
                     if date_obj:
                         articles_with_dates.append(

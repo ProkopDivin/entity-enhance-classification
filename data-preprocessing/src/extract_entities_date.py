@@ -5,36 +5,15 @@ and save them to a TSV file.
 """
 import argparse
 import csv
-from datetime import datetime
 import gzip
 import json
 import sys
 from pathlib import Path
 from typing import Optional
 
+from utils.date_parsing import parse_iso_or_ymd_naive
+
 # Since this is a CLI script, print is acceptable for output
-
-
-def parse_date(date_str: Optional[str]) -> Optional[datetime]:
-    """
-    Parse date string to datetime object.
-
-    Mirrors the logic used in ``create_splits.py`` (ISO + ``YYYY-MM-DD``), returning
-    timezone-naive datetimes for consistent comparisons.
-    """
-    if not date_str:
-        return None
-
-    try:
-        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        if dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        return dt
-    except (ValueError, AttributeError):
-        try:
-            return datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            return None
 
 
 def extract_entities_from_files(input_dir: Path) -> tuple[dict[str, list], dict[str, Optional[str]]]:
@@ -71,7 +50,7 @@ def extract_entities_from_files(input_dir: Path) -> tuple[dict[str, list], dict[
                         entities = article.get("entities", [])
                         metadata = article.get("metadata") or {}
                         date_str = metadata.get("date") if isinstance(metadata, dict) else None
-                        date_obj = parse_date(date_str)
+                        date_obj = parse_iso_or_ymd_naive(date_str)
                         date_iso = date_obj.date().isoformat() if date_obj else None
 
                         if article_id:

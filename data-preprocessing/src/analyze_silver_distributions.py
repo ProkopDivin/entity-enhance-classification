@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from utils.csv_io import ensure_large_csv_fields
 
 LOG = logging.getLogger(__name__)
 
@@ -23,13 +24,7 @@ DATA_DIR = Path(__file__).resolve().parent / 'silver_dataset'
 
 
 def _bump_csv_limit() -> None:
-    limit = sys.maxsize
-    while True:
-        try:
-            csv.field_size_limit(limit)
-            break
-        except OverflowError:
-            limit //= 10
+    ensure_large_csv_fields(preferred_limit=sys.maxsize)
 
 
 def _extract_corpus_name(meta_str: str) -> str:

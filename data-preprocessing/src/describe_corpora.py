@@ -17,6 +17,7 @@ import numpy as np  # type: ignore[import-not-found]
 import pandas as pd  # type: ignore[import-not-found]
 
 from geneea.mediacats.iptc import IptcTopics  # type: ignore[import-not-found]
+from utils.csv_io import ensure_large_csv_fields
 
 LOG = logging.getLogger(__name__)
 
@@ -284,11 +285,7 @@ def load_article_entities_tsv(article_entities_tsv: Path) -> dict[str, list[dict
     if not article_entities_tsv.is_file():
         return entities_by_article
 
-    max_field_limit = 10**9
-    try:
-        csv.field_size_limit(max_field_limit)
-    except OverflowError:
-        csv.field_size_limit(2**31 - 1)
+    ensure_large_csv_fields(preferred_limit=10**9)
 
     with article_entities_tsv.open(encoding="utf-8") as in_file:
         reader = csv.DictReader(in_file, delimiter="\t")

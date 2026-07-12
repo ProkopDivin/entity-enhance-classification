@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from requests import Session
+from utils.csv_io import ensure_large_csv_fields
 
 # Since this is a CLI script, print is acceptable for output
 # For general-purpose tools, logging should be used instead
@@ -30,14 +31,6 @@ except ImportError:
     pass
 
 RE_WIKIDATA_ID_PATTERN = re.compile(r"^Q[0-9]+$")
-
-
-def _ensure_large_csv_fields() -> None:
-    """Raise csv field size limit for TSV rows with large JSON (e.g. ``entities`` column)."""
-    try:
-        csv.field_size_limit(sys.maxsize)
-    except OverflowError:
-        csv.field_size_limit(2**31 - 1)
 
 
 def wdId_from_item(item: dict, gkb_id: str) -> list[str]:
@@ -77,7 +70,7 @@ def gkbId_from_map(path: Path) -> list[str]:
     :param path: TSV path with header including ``article_id`` and ``entities``
     :return: Unique non-empty gkbId strings (order not guaranteed)
     """
-    _ensure_large_csv_fields()
+    ensure_large_csv_fields(preferred_limit=sys.maxsize)
     gkb_ids: set[str] = set()
     with open(path, encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter="\t")

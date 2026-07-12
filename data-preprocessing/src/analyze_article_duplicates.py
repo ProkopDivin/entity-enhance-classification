@@ -8,6 +8,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from utils.csv_io import ensure_large_csv_fields
+
 TOKEN_PATTERN = re.compile(r"\w+", flags=re.UNICODE)
 
 
@@ -86,11 +88,7 @@ def overlap_percent(*, left: ArticleStub, right: ArticleStub) -> float:
 
 def ensure_csv_limit() -> None:
     """Increase CSV parser field-size limit for large text/entity fields."""
-    max_limit = 10**9
-    try:
-        csv.field_size_limit(max_limit)
-    except OverflowError:
-        csv.field_size_limit(2**31 - 1)
+    ensure_large_csv_fields(preferred_limit=10**9)
 
 
 def write_pairs_csv(*, output_path: Path, rows: list[dict[str, str]]) -> None:

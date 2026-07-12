@@ -6,61 +6,15 @@ import argparse
 import gzip
 import sys
 from collections import Counter
-from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 
+from utils.dataset_names import detect_split_type, extract_dataset_name_from_path
+from utils.date_parsing import parse_ymd_or_none
+
 # Since this is a CLI script, print is acceptable for output
 # For general-purpose tools, logging should be used instead
-
-
-def parse_date(date_str: str) -> Optional[datetime]:
-    """
-    Parse date string to datetime object.
-
-    :param date_str: Date string in format 'YYYY-MM-DD' or 'None'
-    :return: Datetime object or None if date_str is 'None' or invalid
-    """
-    if date_str == 'None' or not date_str:
-        return None
-    try:
-        return datetime.strptime(date_str, '%Y-%m-%d')
-    except ValueError:
-        return None
-
-
-def extract_dataset_name(filepath: Path) -> Optional[str]:
-    """
-    Extract dataset name from filepath.
-
-    :param filepath: Path to .jsonl.tsv or .jsonl.gz file
-    :return: Dataset name (e.g., 'en_bbc_iptc' from
-             'en_bbc_iptc.dev_all.analysis.jsonl.tsv' or
-             'de_dpa_iptc' from 'de_dpa_iptc.train_smallpp.analysis.jsonl.gz')
-    """
-    # Handle both .tsv and .gz files
-    name = filepath.name
-    if name.endswith('.gz'):
-        name = name[:-3]  # Remove .gz
-    if name.endswith('.tsv'):
-        name = name[:-4]  # Remove .tsv
-
-    # Remove .analysis.jsonl
-    name = name.replace('.analysis.jsonl', '')
-
-    # Remove split suffixes: .train_all, .dev_all, .test_all, .train, .dev,
-    # .test. Also handle patterns like _smallpp, _medium
-    for suffix in [
-        '.train_all', '.dev_all', '.test_all',
-        '.train_smallpp', '.dev_smallpp', '.test_smallpp',
-        '.train_medium', '.dev_medium', '.test_medium',
-        '.train', '.dev', '.test'
-    ]:
-        if name.endswith(suffix):
-            return name[:-len(suffix)]
-    return name
 
 
 def read_original_splits(
@@ -84,20 +38,13 @@ def read_original_splits(
     files = list(tsv_files) + list(gz_files)
 
     for filepath in files:
-        dataset_name = extract_dataset_name(filepath=filepath)
+        dataset_name = extract_dataset_name_from_path(filepath=filepath)
         if not dataset_name:
             continue
 
         # Determine original split from filename
         filename = filepath.name
-        if '.train' in filename:
-            original_split = 'train'
-        elif '.dev' in filename:
-            original_split = 'dev'
-        elif '.test' in filename:
-            original_split = 'test'
-        else:
-            original_split = 'train'  # default
+        original_split = detect_split_type(filename, default='train')
 
         try:
             # Handle gzipped files
@@ -117,7 +64,7 @@ def read_original_splits(
                         continue
 
                     date_str = parts[0]
-                    date_obj = parse_date(date_str=date_str)
+                    date_obj = parse_ymd_or_none(date_str)
 
                     # Only count articles with dates
                     if date_obj:
@@ -150,24 +97,12 @@ def read_new_splits(
     for filepath in split_files:
         filename = filepath.name
 
-        # Determine split type from filename
-        if '.train' in filename:
-            split_type = 'train'
-        elif '.dev' in filename:
-            split_type = 'dev'
-        elif '.test' in filename:
-            split_type = 'test'
-        elif filename.startswith('train.'):
-            split_type = 'train'
-        elif filename.startswith('dev.'):
-            split_type = 'dev'
-        elif filename.startswith('test.'):
-            split_type = 'test'
-        else:
+        split_type = detect_split_type(filename, default='')
+        if not split_type:
             continue
 
         # Extract dataset name (might be None for global splits)
-        dataset_name = extract_dataset_name(filepath=filepath)
+        dataset_name = extract_dataset_name_from_path(filepath=filepath)
 
         try:
             with gzip.open(filepath, mode='rt', encoding='utf-8') as f:
@@ -181,7 +116,7 @@ def read_new_splits(
                         continue
 
                     date_str = parts[0]
-                    date_obj = parse_date(date_str=date_str)
+                    date_obj = parse_ymd_or_none(date_str)
 
                     # Only count articles with dates
                     if date_obj:
@@ -226,24 +161,12 @@ def read_new_splits_with_dataset_info(
     for filepath in split_files:
         filename = filepath.name
 
-        # Determine split type from filename
-        if '.train' in filename:
-            split_type = 'train'
-        elif '.dev' in filename:
-            split_type = 'dev'
-        elif '.test' in filename:
-            split_type = 'test'
-        elif filename.startswith('train.'):
-            split_type = 'train'
-        elif filename.startswith('dev.'):
-            split_type = 'dev'
-        elif filename.startswith('test.'):
-            split_type = 'test'
-        else:
+        split_type = detect_split_type(filename, default='')
+        if not split_type:
             continue
 
         # Extract dataset name
-        dataset_name = extract_dataset_name(filepath=filepath)
+        dataset_name = extract_dataset_name_from_path(filepath=filepath)
 
         # If we have a dataset name (per-dataset split), count articles for that dataset
         # If no dataset name (global split), we need to read the original input to map
@@ -284,7 +207,7 @@ def read_new_splits_enhanced(
     files = list(tsv_files) + list(gz_files)
 
     for filepath in files:
-        dataset_name = extract_dataset_name(filepath=filepath)
+        dataset_name = extract_dataset_name_from_path(filepath=filepath)
         if not dataset_name:
             continue
 
@@ -322,24 +245,12 @@ def read_new_splits_enhanced(
     for filepath in split_files:
         filename = filepath.name
 
-        # Determine split type from filename
-        if '.train' in filename:
-            split_type = 'train'
-        elif '.dev' in filename:
-            split_type = 'dev'
-        elif '.test' in filename:
-            split_type = 'test'
-        elif filename.startswith('train.'):
-            split_type = 'train'
-        elif filename.startswith('dev.'):
-            split_type = 'dev'
-        elif filename.startswith('test.'):
-            split_type = 'test'
-        else:
+        split_type = detect_split_type(filename, default='')
+        if not split_type:
             continue
 
         # Check if this is a per-dataset split (has dataset name in filename)
-        dataset_name = extract_dataset_name(filepath=filepath)
+        dataset_name = extract_dataset_name_from_path(filepath=filepath)
 
         try:
             with gzip.open(filepath, mode='rt', encoding='utf-8') as f:

@@ -11,63 +11,11 @@ from pathlib import Path
 from collections import defaultdict
 from typing import Optional, Sequence, Tuple
 
+from utils.dataset_names import extract_dataset_name_from_filename
+from utils.date_parsing import parse_iso_to_aware_utc
+
 # Since this is a CLI script, print is acceptable for output
 # For general-purpose tools, logging should be used instead
-
-
-def extract_dataset_name(filename: str, *, no_group: bool = False) -> str:
-    """
-    Extract dataset name from filename (e.g. cs_mafra_iptc from
-    cs_mafra_iptc.dev_all.analysis.jsonl.gz).
-
-    :param filename: Name of the .jsonl.gz file
-    :return: Dataset name
-    """
-    name = filename
-    if name.endswith('.gz'):
-        name = name[:-3]
-    if name.endswith('.jsonl'):
-        name = name[:-6]
-    name = name.replace('.analysis', '')
-    if no_group:
-        return name
-
-    for suffix in (
-        '.train_all', '.dev_all', '.test_all',
-        '.train_smallpp', '.dev_smallpp', '.test_smallpp',
-        '.train_medium', '.dev_medium', '.test_medium',
-        '.train', '.dev', '.test',
-    ):
-        if name.endswith(suffix):
-            return name[:-len(suffix)]
-    return name
-
-
-def parse_date(date_str: Optional[str]) -> Optional[datetime]:
-    """
-    Parse ISO date string to datetime, ensuring timezone-aware.
-
-    :param date_str: ISO format date string (e.g., '2021-09-19T00:00:00Z')
-    :return: Timezone-aware datetime object or None if parsing fails
-    """
-    if not date_str:
-        return None
-    try:
-        # Handle ISO format with timezone: '2021-09-19T00:00:00Z'
-        if date_str.endswith('Z'):
-            date_str = date_str[:-1] + '+00:00'
-        else:
-            date_str = date_str.replace('Z', '+00:00')
-
-        dt = datetime.fromisoformat(date_str)
-
-        # Make sure datetime is timezone-aware (assume UTC if naive)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-
-        return dt
-    except (ValueError, AttributeError):
-        return None
 
 
 def analyze_file(filepath: Path) -> Tuple[
@@ -106,7 +54,7 @@ def analyze_file(filepath: Path) -> Tuple[
                         missing_count += 1
                         date_id_list.append((None, doc_id))
                     else:
-                        parsed_date = parse_date(date_str=date_str)
+                        parsed_date = parse_iso_to_aware_utc(date_str)
                         if parsed_date:
                             dates.append(parsed_date)
                             date_id_list.append((parsed_date, doc_id))
@@ -222,7 +170,7 @@ def main() -> None:
     )
 
     for filename, total, missing, min_date, max_date in results:
-        dataset = extract_dataset_name(filename, no_group=args.no_group)
+        dataset = extract_dataset_name_from_filename(filename, no_group=args.no_group)
         prev_total, prev_missing, prev_min, prev_max = by_dataset[dataset]
         new_total = prev_total + total
         new_missing = prev_missing + missing

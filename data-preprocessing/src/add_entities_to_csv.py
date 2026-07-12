@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+from utils.csv_io import ensure_large_csv_fields
+
 # Since this is a CLI script, print is acceptable for output
 
 
@@ -22,7 +24,7 @@ def load_entities_dict(entities_path: Path) -> dict[str, list]:
 
     # Increase CSV field size limit to handle large entity JSON strings
     # Default limit is 131072, increase to 10MB (10485760 bytes)
-    csv.field_size_limit(10485760)
+    ensure_large_csv_fields(preferred_limit=10485760)
 
     try:
         with open(entities_path, mode="r", encoding="utf-8", newline="") as f:
