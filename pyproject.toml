@@ -34,6 +34,9 @@ package-dir = { '' = 'src' }
 [tool.setuptools.packages.find]
 where = ['src']
 
+[tool.setuptools.package-data]
+'iptc_entity_pipeline.resources' = ['*.yaml']
+
 [tool.pytest.ini_options]
 testpaths = ['tests']
 pythonpath = ['src', 'data-preprocessing/src']
