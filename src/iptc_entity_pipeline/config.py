@@ -27,7 +27,9 @@ class PathsCnf:
     wdid_mapping_tsv: str = f'{DATA_ROOT}/gold-chrono-per-dataset/wdId_mapping.tsv'
     article_embeddings_dir: str = f'{DATA_ROOT}/article_embeddings'
     entity_embeddings_dir: str = f'{DATA_ROOT}/entity_embeddings/WikidataProject'
-    downsampling_order_cache_json: str = f'{DATA_ROOT}/downsampling_order_cache.json'
+    # in original pipeline a corpora was to donsampled during datapreparation i removed the corpora from train data,
+    # this is not needed now, im leaving this here  to future use 
+    downsampling_order_cache_json: str = f'{DATA_ROOT}/downsampling_order_cache.json' 
     removed_cat_ids: list[str] = field(default_factory=lambda: ['20000419'])
 
 
@@ -199,7 +201,6 @@ class BaseCnf:
     random_seed: int = 43
     print_logs: bool = True
     upload_artifacts: bool = False
-    debug: bool = True
 
 
     def to_clearml_mapping(self) -> dict[str, Any]:
@@ -260,7 +261,6 @@ class AssemblyCnf:
 @dataclass(frozen=True)
 class PreBaseCnfWithHPO(BaseCnf):
     """Base configuration with hyperparameter space."""
-    debug: bool = field(default_factory=lambda: False)
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -290,7 +290,6 @@ class BaseCnfWithHPO(PreBaseCnfWithHPO):
 @dataclass(frozen=True)
 class BaseCnfWithHPO2(BaseCnf):
     """Base configuration with hyperparameter space."""
-    debug: bool = field(default_factory=lambda: False)
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -305,7 +304,6 @@ class BaseCnfWithHPO2(BaseCnf):
 @dataclass(frozen=True)
 class BaseCnfWithHPO3(BaseCnf):
     """Base configuration with hyperparameter space."""
-    debug: bool = field(default_factory=lambda: False)
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -454,9 +452,10 @@ class DebugCnf(BaseCnf):
     )
     paths: PathsCnf = field(
         default_factory=lambda: PathsCnf(
-            train_csv=f'{DATA_ROOT}/debug/all-corpora-train-entities.csv',
-            test_csv=f'{DATA_ROOT}/debug/all-corpora-test-entities.csv',
-            wdid_mapping_tsv=f'{DATA_ROOT}/debug/wdId_mapping.tsv',
+            train_csv=f'{DATA_ROOT}/debug/all-corpora-train-entities.sample_4plus1.csv',
+            test_csv=f'{DATA_ROOT}/debug/all-corpora-test-entities.sample_4plus1.csv',
+            wdid_mapping_tsv=f'{DATA_ROOT}/wd-id_mapping_debug.tsv',
+            entity_embeddings_dir = f'{DATA_ROOT}/entity_embeddings/debug', 
         )
     )
     model: ModelCnf = field(default_factory=lambda: replace(ModelCnf(), dropouts1=0.1))
@@ -482,9 +481,6 @@ class DebugCnf(BaseCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
-    debug: bool = True
-
-
 @dataclass(frozen=True)
 class WPEntitiesEnDeCnf(BaseCnf):
     """Entity-enhanced configuration with English and German entity embeddings."""
@@ -533,7 +529,6 @@ class WPEntitiesRelTH(BaseCnf):
             entity_relevance_threshold=0.0,
         )
     )
-    debug: bool = field(default_factory=lambda: True)
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -1836,6 +1831,7 @@ def _config_map() -> dict[str, BaseCnf]:
         'wp_entities_mean_only_product': WPEntitiesMeanOnlyProductCnf(),
         'wp_entities_mean_only_other': WPEntitiesMeanOnlyOtherCnf(),
         'article_only_tuned_diff_thresholds': ArticleOnlyTunedDiffThresholdsCnf(),
+        
         'debug_attention': DebugAttentionCnf(),
         'debug_attention3': DebugAttention3Cnf(),
         'debug_mha_attention': DebugMhaAttentionCnf(),

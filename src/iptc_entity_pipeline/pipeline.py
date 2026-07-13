@@ -367,7 +367,6 @@ def run_cv(
     objective_row: str,
     random_seed: int,
     print_logs: bool = True,
-    debug: bool = False,
     upload_artifacts: bool = False,
     eval_thresholds: Mapping[str, float] | None = None,
 ):
@@ -428,7 +427,6 @@ def run_cv(
         tuning_cnf=tuning_cfg,
         objective_row=objective_row,
         random_seed=int(random_seed),
-        debug=debug,
         eval_thresholds=eval_thresholds,
     )
     cv.fit(
@@ -813,7 +811,6 @@ def _run_assembly_training_pipeline(
     downsample_corpora: Mapping[str, float],
     config_name: str,
     print_logs: bool,
-    debug: bool,
     upload_artifacts: bool,
     random_seed: int,
 ) -> None:
@@ -857,6 +854,7 @@ def _run_assembly_training_pipeline(
     member_model_cnf_dicts = [c['model'] for c in member_configs]
     member_train_cnf_dicts = [c['train'] for c in member_configs]
     member_hparam_cnfs = [c.get('hparam', {}) for c in member_configs]
+    member_cv_cnfs = [c['cv'] for c in member_configs]
     member_optuna_cnfs = [c.get('optuna', {}) for c in member_configs]
     member_tuning_cnfs = [c.get('tuning', {'enabled': False}) for c in member_configs]
     member_random_seeds = [int(c.get('random_seed', random_seed)) for c in member_configs]
@@ -974,13 +972,12 @@ def _run_assembly_training_pipeline(
             hparam_cnf=member_hparam_cnfs[idx],
             train_cnf=member_train_cnf_dicts[idx],
             eval_cnf=eval_cnf,
-            cv_cnf=cv_cnf,
+            cv_cnf=member_cv_cnfs[idx],
             optuna_cnf=member_optuna_cnfs[idx],
             tuning_cnf=member_tuning_cnfs[idx],
             objective_row=objective_row,
             random_seed=member_random_seeds[idx],
             print_logs=print_logs,
-            debug=debug,
             upload_artifacts=upload_artifacts,
             eval_thresholds=member_loaded_thresholds[idx],
         )
@@ -1100,7 +1097,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     model_cnf = cnf['model']
     train_cnf = cnf['train']
     eval_cnf = cnf['eval']
-    cv_cnf = cnf.get('cv', {'folds': 5})
+    cv_cnf = cnf['cv']
     optuna_cnf = cnf.get('optuna', {})
     tuning_cnf = cnf.get('tuning', {'enabled': False})
     assembly_cnf = cnf.get('assembly') or {'enabled': False}
@@ -1110,7 +1107,6 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     use_art_emb = bool(emb_cnf.get('use_article_embeddings', True))
     use_ent_emb = bool(emb_cnf.get('use_entity_embeddings', True))
     print_logs = bool(cnf.get('print_logs', True))
-    debug = bool(cnf.get('debug', False))
     upload_artifacts = bool(cnf.get('upload_artifacts', False))
     random_seed = int(cnf.get('random_seed', 43))
     emb = conf_from_dict(EmbeddingCnf, emb_cnf)
@@ -1127,7 +1123,6 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
             downsample_corpora=down_smpl,
             config_name=config_name,
             print_logs=print_logs,
-            debug=debug,
             upload_artifacts=upload_artifacts,
             random_seed=random_seed,
         )
@@ -1201,7 +1196,6 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         objective_row=obj_row,
         random_seed=random_seed,
         print_logs=print_logs,
-        debug=debug,
         upload_artifacts=upload_artifacts,
     )
     if upload_artifacts:

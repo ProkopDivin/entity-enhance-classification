@@ -337,7 +337,6 @@ class CV:
         tuning_cnf: ThresholdTuningCnf,
         objective_row: str,
         random_seed: int,
-        debug: bool = False,
         eval_thresholds: Mapping[str, float] | None = None,
     ) -> None:
         self._model_cnf = model_cnf
@@ -348,7 +347,6 @@ class CV:
         self._optuna_cnf = optuna_cnf
         self._objective_row = objective_row
         self._random_seed = random_seed
-        self._debug = debug
         self._eval_thresholds = eval_thresholds
 
         if eval_thresholds is not None and tuning_cnf.enabled:
@@ -836,9 +834,6 @@ class CV:
                     LOGGER.info(f'Trial {combo_idx} pruned after fold {fold_idx}/{self._folds_per_combo}')
                     pruned = True
                     break
-            if self._debug:
-                break
-
         trial_row = summarize_combination(
             combo_idx=combo_idx,
             params_json=params_json,
@@ -867,9 +862,7 @@ class CV:
 
         total_combinations = self._count_combinations()
         self._n_trials = self._resolve_n_trials(total_combinations=total_combinations)
-        if self._debug:
-            self._n_trials = 2
-        self._folds_per_combo = 1 if self._debug else self._cv_cnf.folds
+        self._folds_per_combo = self._cv_cnf.folds
         self._total_trainings = self._n_trials * self._folds_per_combo
         self._log_cv_plan()
         self._clearml_logger.report_text(

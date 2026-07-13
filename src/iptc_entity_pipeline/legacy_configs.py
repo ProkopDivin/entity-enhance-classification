@@ -746,12 +746,8 @@ class Assembly1Cnf(BaseCnf):
     ``results/saved_models`` and drive both per-fold evaluation and the
     final stitched per-class thresholds.
 
-    ``debug`` is forced to ``False`` here so each member's per-member
-    ``run_cv`` runs the full k-fold loop. ``BaseCnf.debug`` defaults to
-    ``True`` for fast local single-model iteration; that default would
-    silently collapse the assembly to a single fold.
+    Each member runs the full configured k-fold ``run_cv`` loop.
     """
-    debug: bool = field(default_factory=lambda: False)
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
             enabled=True,
@@ -778,7 +774,6 @@ class Assembly2Cnf(BaseCnf):
     basis when that non-primary beats the primary in ``folds - 1`` or
     more CV folds.
     """
-    debug: bool = field(default_factory=lambda: False)
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
             enabled=True,
@@ -799,7 +794,6 @@ class Assembly2Cnf(BaseCnf):
     )
 @dataclass(frozen=True)
 class Assembly3Cnf(BaseCnf):
-    debug: bool = field(default_factory=lambda: False)
     assembly: AssemblyCnf = field(
         default_factory=lambda: AssemblyCnf(
             enabled=True,
