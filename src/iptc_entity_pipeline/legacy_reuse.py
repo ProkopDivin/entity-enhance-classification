@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from clearml import Task
 from geneea.catlib.model.nnet import (
     EntityAttention3MLP,
     EntityAttention2MLP,
@@ -39,6 +38,7 @@ from geneea.catlib.vec.dataset import EmbeddingDataset
 from geneea.catlib.vec.vectorizer import Vectorizer
 
 from iptc_entity_pipeline.category_sets import load_relevant_cat_ids
+from iptc_entity_pipeline.clearml_compat import Task, get_task_logger
 from iptc_entity_pipeline.config import EvaluationCnf
 from iptc_entity_pipeline.dataset_builder import RaggedEmbeddingDataset, ragged_collate_fn
 
@@ -420,10 +420,10 @@ def trainClassificationModel(
     :return: Typed training result with model, loss, and per-epoch curves.
     """
     task = Task.current_task()
-    clearml_logger = task.get_logger()
+    clearml_logger = get_task_logger(task=task, logger=LOGGER)
     print_logs = logConfig['PRINT_LOGS']
     _log_info(logger=clearml_logger, message='Training classification model', print_logs=print_logs)
-    if connect_config:
+    if connect_config and task is not None:
         task.connect(trainingConfig, name='trainingConfig')
 
     validation_split_name = str(trainingConfig.get('validationSplitName', 'dev')).strip().lower() or 'dev'

@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
-from clearml import Task
 
+from iptc_entity_pipeline.clearml_compat import Task, get_task_logger
 from iptc_entity_pipeline.config import EmbeddingCnf, EvaluationCnf
 from iptc_entity_pipeline.data_loading import sanitize_name
 
@@ -80,7 +80,7 @@ def save_outputs(
             return cat_id
 
     task = Task.current_task()
-    logger = task.get_logger()
+    logger = get_task_logger(task=task, logger=LOGGER)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     output_dir = PROJECT_ROOT / 'results' / 'saved_models' / f'{sanitize_name(value=config_name)}_{timestamp}'
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -139,7 +139,7 @@ def save_outputs(
     logger.report_text(f'Saved raw predictions to {predictions_path.resolve()}')
     logger.report_text(f'Saved eval corpus to {eval_corpus_path.resolve()}')
 
-    if upload_artifacts:
+    if upload_artifacts and task is not None:
         task.upload_artifact('saved_model_file', artifact_object=str(model_path))
         task.upload_artifact('saved_model_test_embeddings', artifact_object=str(test_embeddings_path))
         task.upload_artifact('saved_model_config_yaml', artifact_object=str(config_yaml_path))

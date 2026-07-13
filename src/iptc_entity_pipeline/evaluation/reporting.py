@@ -6,8 +6,8 @@ import logging
 from typing import Any, Mapping, NamedTuple, Sequence
 
 import numpy as np
-from clearml import Task
 
+from iptc_entity_pipeline.clearml_compat import Task
 from iptc_entity_pipeline.training import CvFoldCurves, TrainingResult
 
 
@@ -143,7 +143,7 @@ def report_cv_std(
 
 def report_cv_curve(
     *,
-    task: Task,
+    task: Task | None,
     logger: Any,
     trials_df: Any,
     folds_df: Any,
@@ -153,7 +153,7 @@ def report_cv_curve(
     """Report CV tables and upload all frames as artifacts."""
     logger.report_table(title='Cross Validation', series='Folds', iteration=0, table_plot=folds_df)
     logger.report_table(title='Cross Validation', series='Cross Validation Results', iteration=0, table_plot=trials_df)
-    if upload_artifacts:
+    if upload_artifacts and task is not None:
         task.upload_artifact('cv_trials_dataframe', artifact_object=trials_df.copy(deep=True))
         task.upload_artifact('cv_folds_dataframe', artifact_object=folds_df.copy(deep=True))
         task.upload_artifact('cv_dev_summary_dataframe', artifact_object=cv_dev_df.copy(deep=True))
@@ -161,7 +161,7 @@ def report_cv_curve(
 
 def report_cv_result_tables(
     *,
-    task: Task,
+    task: Task | None,
     clearml_logger: Any,
     cv_result: Any,
     threshold_aggregation: str,
@@ -180,7 +180,7 @@ def report_cv_result_tables(
             f'Threshold tuning: aggregation={threshold_aggregation}, '
             f'classes_with_tuned_threshold={n_classes}/{len(cv_result.threshold_report_df)}'
         )
-        if upload_artifacts:
+        if upload_artifacts and task is not None:
             task.upload_artifact(
                 'threshold_tuning_report',
                 artifact_object=cv_result.threshold_report_df.copy(deep=True),
@@ -199,7 +199,7 @@ def report_cv_result_tables(
             iteration=0,
             table_plot=cv_result.cv_per_corpora_df,
         )
-        if upload_artifacts:
+        if upload_artifacts and task is not None:
             task.upload_artifact(
                 'cv_per_corpora_dataframe',
                 artifact_object=cv_result.cv_per_corpora_df.copy(deep=True),
@@ -211,7 +211,7 @@ def report_cv_result_tables(
             iteration=0,
             table_plot=cv_result.cv_per_class_df,
         )
-        if upload_artifacts:
+        if upload_artifacts and task is not None:
             task.upload_artifact(
                 'cv_per_class_dataframe',
                 artifact_object=cv_result.cv_per_class_df.copy(deep=True),
@@ -220,7 +220,7 @@ def report_cv_result_tables(
 
 def report_cv(
     *,
-    task: Task,
+    task: Task | None,
     logger: Any,
     report: Any,
     upload_artifacts: bool = False,
@@ -249,10 +249,11 @@ def report_cv(
     )
 
 
-def log_stage(*, task: Task, message: str, print_logs: bool) -> None:
+def log_stage(*, task: Task | None, message: str, print_logs: bool) -> None:
     """Log pipeline stage both to logger and ClearML task text output."""
     LOGGER.info(message)
-    task.get_logger().report_text(message, print_console=print_logs)
+    if task is not None:
+        task.get_logger().report_text(message, print_console=print_logs)
 
 
 def _scatter_xy(data: Sequence[float]) -> Any:

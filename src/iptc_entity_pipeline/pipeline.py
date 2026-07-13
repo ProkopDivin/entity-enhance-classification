@@ -5,10 +5,14 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple
 
-from clearml import Task, TaskTypes
-from clearml.automation.controller import PipelineDecorator
-
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
+from iptc_entity_pipeline.clearml_compat import (
+    PipelineDecorator,
+    Task,
+    TaskTypes,
+    get_task_logger,
+    is_clearml_available,
+)
 from iptc_entity_pipeline.config import BaseCnf, resolve_paths
 from iptc_entity_pipeline.data_loading import attach_entities, load_and_normalize, load_wdid_map, sanitize_name
 from iptc_entity_pipeline.evaluation.comparison import build_path, compare_runs
@@ -397,7 +401,7 @@ def run_cv(
     conf_logging()
     set_global_seed(seed=int(random_seed))
     task = Task.current_task()
-    clearml_logger = task.get_logger()
+    clearml_logger = get_task_logger(task=task, logger=logging.getLogger(__name__))
 
     space = conf_from_dict(HyperparamSpace, hparam_cnf)
     base_model = conf_from_dict(ModelCnf, model_cnf)
@@ -407,13 +411,14 @@ def run_cv(
     optuna_cfg = conf_from_dict(OptunaCnf, optuna_cnf)
     tuning_cfg = conf_from_dict(ThresholdTuningCnf, tuning_cnf)
 
-    task.connect(asdict(space), name='hyperparamSpace')
-    task.connect(asdict(base_model), name='modelConfig')
-    task.connect(asdict(base_training), name='trainingConfig')
-    task.connect(asdict(eval_cfg), name='evaluationConfig')
-    task.connect(asdict(cv_cfg), name='cvConfig')
-    task.connect(asdict(optuna_cfg), name='optunaConfig')
-    task.connect(asdict(tuning_cfg), name='thresholdTuningConfig')
+    if task is not None:
+        task.connect(asdict(space), name='hyperparamSpace')
+        task.connect(asdict(base_model), name='modelConfig')
+        task.connect(asdict(base_training), name='trainingConfig')
+        task.connect(asdict(eval_cfg), name='evaluationConfig')
+        task.connect(asdict(cv_cfg), name='cvConfig')
+        task.connect(asdict(optuna_cfg), name='optunaConfig')
+        task.connect(asdict(tuning_cfg), name='thresholdTuningConfig')
     
     train_data.load_temporary()
         
@@ -484,10 +489,11 @@ def run_assembly_step(
     conf_logging()
     logger = logging.getLogger(__name__)
     task = Task.current_task()
-    clearml_logger = task.get_logger()
+    clearml_logger = get_task_logger(task=task, logger=logger)
 
     eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
-    task.connect(eval_cnf, name='evaluationConfig')
+    if task is not None:
+        task.connect(eval_cnf, name='evaluationConfig')
 
     logger.info(
         f'Assembly step: members={list(member_labels)} '
@@ -522,8 +528,9 @@ def run_assembly_step(
         'assignments': dict(assembly_result.class_to_model.assignments),
         'stitched_thresholds': dict(assembly_result.tuned_thresholds),
     }
-    task.upload_artifact(mapping_artifact_name, artifact_object=mapping_payload)
-    if upload_artifacts:
+    if task is not None:
+        task.upload_artifact(mapping_artifact_name, artifact_object=mapping_payload)
+    if upload_artifacts and task is not None:
         task.upload_artifact(
             'assembly_per_class_f1', artifact_object=assembly_result.per_class_f1_df,
         )
@@ -566,13 +573,14 @@ def train_best(
     set_global_seed(seed=int(random_seed))
     logger = logging.getLogger(__name__)
     task = Task.current_task()
-    clearml_logger = task.get_logger()
+    clearml_logger = get_task_logger(task=task, logger=logger)
 
     model_cfg = conf_from_dict(ModelCnf, best_model_cnf)
     train_cfg = conf_from_dict(TrainingCnf, train_cnf)
 
-    task.connect(best_model_cnf, name='bestModelConfig')
-    task.connect(train_cnf, name='bestTrainingConfig')
+    if task is not None:
+        task.connect(best_model_cnf, name='bestModelConfig')
+        task.connect(train_cnf, name='bestTrainingConfig')
     train_data.load_temporary()
     if test_data is not None:
         test_data.load_temporary()
@@ -675,7 +683,7 @@ def eval_final(
             title='Evaluation Comparison', series='Classes Comparison', iteration=0,
             table_plot=result.classes_comparison,
         )
-        if upload_artifacts:
+        if upload_artifacts and task is not None:
             task.upload_artifact('evaluation_comparison_summary', artifact_object=result.summary_comparison)
             task.upload_artifact('evaluation_comparison_classes', artifact_object=result.classes_comparison)
             task.upload_artifact('evaluation_comparison_corpora', artifact_object=result.corpora_comparison)
@@ -685,6 +693,8 @@ def eval_final(
 
     def upload_eval_artifacts():
         """Upload eval-step artifacts to ClearML (test outputs only; CV in ``run_cv``)."""
+        if task is None:
+            return
         objective_row_name = f'All-{eval_cfg.averaging_type}'
         task.upload_artifact('test_corpora_dataframe', artifact_object=df_corpora_test)
         task.upload_artifact('test_classes_dataframe', artifact_object=df_classes_test)
@@ -706,12 +716,13 @@ def eval_final(
     conf_logging()
     logger = logging.getLogger(__name__)
     task = Task.current_task()
-    clearml_logger = task.get_logger()
+    clearml_logger = get_task_logger(task=task, logger=logger)
 
     eval_cfg = conf_from_dict(EvaluationCnf, eval_cnf)
     emb_cfg = conf_from_dict(EmbeddingCnf, emb_cnf)
-    task.connect(eval_cnf, name='evaluationConfig')
-    task.connect(emb_cnf, name='embeddingConfig')
+    if task is not None:
+        task.connect(eval_cnf, name='evaluationConfig')
+        task.connect(emb_cnf, name='embeddingConfig')
 
     custom_thresholds = dict(tuned_thresholds) if tuned_thresholds else None
     logger.info(
@@ -902,7 +913,7 @@ def _run_assembly_training_pipeline(
         )
         for idx in range(len(members_raw))
     ]
-    if upload_artifacts:
+    if upload_artifacts and task is not None:
         for idx, label in enumerate(member_labels):
             task.upload_artifact(
                 f'article_embedding_stats_{label}',
@@ -1054,13 +1065,13 @@ def _run_assembly_training_pipeline(
     from iptc_entity_pipeline.evaluation.reporting import report_test_eval_scalars
 
     report_test_eval_scalars(
-        clearml_logger=task.get_logger(),
+        clearml_logger=get_task_logger(task=task, logger=logging.getLogger(__name__)),
         df_corpora_test=eval_result.test_corpora_df,
         df_classes_test=eval_result.test_classes_df,
         objective_row=objective_row,
     )
 
-    if upload_artifacts:
+    if upload_artifacts and task is not None:
         task.upload_artifact('pipeline_config', artifact_object=dict(cnf))
         task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
         task.upload_artifact('test_scalar_metrics', artifact_object=dict(eval_result.scalar_metrics))
@@ -1084,9 +1095,11 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     """Execute full v1 training and evaluation pipeline."""
     conf_logging()
     task = Task.current_task()
-    task.connect(cnf, name='pipelineConfig')
+    if task is not None:
+        task.connect(cnf, name='pipelineConfig')
     config_name = str(cnf.get('config_name', 'wpentities'))
-    task.add_tags([config_name])
+    if task is not None:
+        task.add_tags([config_name])
 
     from iptc_entity_pipeline.seeding import set_global_seed
     from iptc_entity_pipeline.evaluation.reporting import report_cv_std, report_eval, report_test_eval_scalars
@@ -1155,7 +1168,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         paths_cnf=paths_cnf,
         emb_cnf=emb_cnf,
     )
-    if upload_artifacts:
+    if upload_artifacts and task is not None:
         task.upload_artifact('article_embedding_stats', artifact_object=dict(article_embedding_stats))
 
     log_stage(
@@ -1198,9 +1211,9 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         print_logs=print_logs,
         upload_artifacts=upload_artifacts,
     )
-    if upload_artifacts:
+    if upload_artifacts and task is not None:
         task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv.best_trial_stats))
-    logger = task.get_logger()
+    logger = get_task_logger(task=task, logger=logging.getLogger(__name__))
     # Report CV objective metrics on the pipeline task (keys match report_eval METRIC_SERIES).
     report_eval(
         logger=logger,
@@ -1249,13 +1262,13 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     )
     # Log on the pipeline controller from scalar_metrics (pickle-safe; includes F1_macro_relevant).
     report_test_eval_scalars(
-        clearml_logger=task.get_logger(),
+        clearml_logger=get_task_logger(task=task, logger=logging.getLogger(__name__)),
         df_corpora_test=eval_result.test_corpora_df,
         df_classes_test=eval_result.test_classes_df,
         objective_row=obj_row,
     )
 
-    if upload_artifacts:
+    if upload_artifacts and task is not None:
         task.upload_artifact('pipeline_config', artifact_object=dict(cnf))
         task.upload_artifact('objective_metrics', artifact_object=dict(eval_result.objective_metrics))
         task.upload_artifact('test_scalar_metrics', artifact_object=dict(eval_result.scalar_metrics))
@@ -1288,6 +1301,11 @@ def run_pipeline(
     resolved_config = resolve_paths(config=pipeline_config, root_dir=Path.cwd())
     config_mapping = asdict(resolved_config)
     config_mapping['config_name'] = config_name
+    if not is_local and not is_clearml_available():
+        raise RuntimeError(
+            'ClearML is not installed. Install package "clearml" to run non-local pipeline mode, '
+            'or rerun with --local.'
+        )
     if is_local:
         PipelineDecorator.run_locally()
     run_training_pipeline(cnf=config_mapping)

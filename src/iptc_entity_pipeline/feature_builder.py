@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from clearml import Task
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
+from iptc_entity_pipeline.clearml_compat import Task
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.pooling import EntityPoolingStrategy
 

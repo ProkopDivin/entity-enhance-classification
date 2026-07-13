@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 import numpy as np
-from clearml import Task, TaskTypes
-from clearml.automation.controller import PipelineDecorator
 
 from iptc_entity_pipeline.article_embeddings import ArticleEmbeddingProvider
+from iptc_entity_pipeline.clearml_compat import PipelineDecorator, Task, TaskTypes
 from iptc_entity_pipeline.config import EmbeddingCnf, PathsCnf, conf_from_dict
 from iptc_entity_pipeline.dataset_builder import build_emb_data
 from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
