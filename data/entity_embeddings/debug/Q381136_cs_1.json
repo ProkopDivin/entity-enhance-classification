@@ -1,0 +1,11 @@
+{
+  "id": "Q381136_cs_1",
+  "metadata": {
+    "QID": "Q381136",
+    "Date": "2026-02-24T00:50:01.616555",
+    "DumpDate": "09/18/2024",
+    "ChunkID": 1,
+    "Language": "cs"
+  },
+  "text": "akcionář, osoba, která vlastní část společnosti prostřednictvím jejích akcií, take zname jako akcionářka. Atributy zahrnuji: \n- nadtřída: \"vlastník\",\n \"stakeholder\"\n- instance (čeho): \"pozice\"\n- částečně se kryje s: \"investor\"\n- rozdílné od: \"investor\"\n- ženská varianta štítku: \"akcionářka\",\n \"акционерка\",\n \"акционерка\",\n \"акціонерка\",\n \"akcjonariuszka\"\n- vlastní: \"akcie\"\n- charakterizováno (čím): \"vlastnictví\""
+}

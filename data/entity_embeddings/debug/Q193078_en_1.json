@@ -1,0 +1,11 @@
+{
+  "id": "Q193078_en_1",
+  "metadata": {
+    "ChunkID": 1,
+    "Language": "en",
+    "Date": "2026-02-25T23:43:41.957586",
+    "DumpDate": "09/18/2024",
+    "QID": "Q193078"
+  },
+  "text": "injury, physiological wound caused by an external source, also known as injured, trauma, traumatic injury, injuries, wounds and injuries, physical trauma. Attributes include: \n- subclass of: \"damage\"\n- health specialty: \"emergency medicine\",\n \"traumatology\"\n- Commons category: \"Injuries\"\n- different from: \"Free\"\n- has cause: \"accident\"\n- has effect: \"dying\"\n- NCI Thesaurus ID: \"C3671\"\n- drug or therapy used for treatment: \"oxycodone\",\n \"denosumab\"\n- main Wikidata property: \"number of injured\"\n- ICPC 2 ID: \"A80\"\n- handled, mitigated, or managed by: \"injury prevention\",\n \"first aid\"\n- said to be the same as: \"injury\""
+}

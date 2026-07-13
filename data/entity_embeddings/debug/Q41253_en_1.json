@@ -1,0 +1,11 @@
+{
+  "id": "Q41253_en_1",
+  "metadata": {
+    "Date": "2026-02-26T00:36:14.812340",
+    "Language": "en",
+    "QID": "Q41253",
+    "DumpDate": "09/18/2024",
+    "ChunkID": 1
+  },
+  "text": "movie theater, venue, usually a building, for viewing films, also known as picture theatre, movie theatre, film house, film theater, picture house, film theatre, movie house, cinema, cinema hall. Attributes include: \n- OpenStreetMap tag: \"amenity=cinema\"\n- Unicode character: \"🎦\"\n- Commons category: \"Cinemas\"\n- Commons gallery: \"Cinemas\"\n- properties for this type: \"located in the administrative territorial entity\",\n \"country\",\n \"Cinema Treasures ID\",\n \"Theatres Trust Database ID\",\n \"coordinate location\",\n \"street address\",\n \"Fandango theater ID\",\n \"Bioguiden movie theater ID\"\n- Merchant Category Code: \"7832\"\n- has use: \"film screening\"\n- different from: \"Kino\""
+}

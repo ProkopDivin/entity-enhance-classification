@@ -1,0 +1,11 @@
+{
+  "id": "Q522344_en_1",
+  "metadata": {
+    "DumpDate": "09/18/2024",
+    "ChunkID": 1,
+    "Date": "2026-02-26T00:52:54.778679",
+    "QID": "Q522344",
+    "Language": "en"
+  },
+  "text": "score, in games, abstract quantity associated with a player or team, which tracks the results of game play and determines the winner, also known as points total, ranking by points. Attributes include: \n- part of: \"game\"\n- has use: \"measurement (class of object(s) of occurrence: team)\"\n- subclass of: \"calculation\",\n \"result\",\n \"measure\""
+}

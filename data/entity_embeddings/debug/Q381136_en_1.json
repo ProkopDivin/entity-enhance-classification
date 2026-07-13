@@ -1,0 +1,11 @@
+{
+  "id": "Q381136_en_1",
+  "metadata": {
+    "QID": "Q381136",
+    "ChunkID": 1,
+    "DumpDate": "09/18/2024",
+    "Date": "2026-02-26T00:32:47.848745",
+    "Language": "en"
+  },
+  "text": "shareholder, individual or organization that owns part of a corporation through shares of its stock, also known as stockholder, stock holder. Attributes include: \n- subclass of: \"stakeholder\"\n- instance of: \"role (has characteristic: ownership)\"\n- partially coincident with: \"investor\"\n- has goal: \"profit maximization\"\n- different from: \"investor (criterion used: Library of Congress Subject Headings)\"\n- female form of label: \"akcionářka\",\n \"акционерка\",\n \"акционерка\",\n \"акціонерка\",\n \"akcjonariuszka\"\n- owner of: \"share\"\n- has characteristic: \"ownership\""
+}
