@@ -2,20 +2,80 @@
 
 from __future__ import annotations
 
+from functools import wraps
 import logging
 from typing import Any
 
 LOGGER = logging.getLogger(__name__)
+_LOCAL_CLEARML_BYPASS = False
 
 try:
     from clearml import Task as _Task
     from clearml import TaskTypes as _TaskTypes
     from clearml.automation.controller import PipelineDecorator as _PipelineDecorator
+    from clearml.backend_api.session.defs import MissingConfigError as _MissingConfigError
 
     CLEARML_AVAILABLE = True
-    Task = _Task
     TaskTypes = _TaskTypes
-    PipelineDecorator = _PipelineDecorator
+
+    class Task:
+        """Task proxy that supports local execution without ClearML config."""
+
+        @staticmethod
+        def current_task() -> Any | None:
+            """Return current ClearML task or None in local-bypass mode."""
+            if _LOCAL_CLEARML_BYPASS:
+                return None
+            try:
+                return _Task.current_task()
+            except _MissingConfigError:
+                return None
+
+    class PipelineDecorator:
+        """PipelineDecorator proxy with runtime local bypass support."""
+
+        @staticmethod
+        def component(**kwargs: Any) -> Any:
+            """Wrap ClearML component decorator with optional local bypass."""
+            clearml_deco = _PipelineDecorator.component(**kwargs)
+
+            def deco(func: Any) -> Any:
+                clearml_wrapped = clearml_deco(func)
+
+                @wraps(func)
+                def runner(*args: Any, **kw: Any) -> Any:
+                    if _LOCAL_CLEARML_BYPASS:
+                        return func(*args, **kw)
+                    return clearml_wrapped(*args, **kw)
+
+                return runner
+
+            return deco
+
+        @staticmethod
+        def pipeline(**kwargs: Any) -> Any:
+            """Wrap ClearML pipeline decorator with optional local bypass."""
+            clearml_deco = _PipelineDecorator.pipeline(**kwargs)
+
+            def deco(func: Any) -> Any:
+                clearml_wrapped = clearml_deco(func)
+
+                @wraps(func)
+                def runner(*args: Any, **kw: Any) -> Any:
+                    if _LOCAL_CLEARML_BYPASS:
+                        return func(*args, **kw)
+                    return clearml_wrapped(*args, **kw)
+
+                return runner
+
+            return deco
+
+        @staticmethod
+        def run_locally() -> None:
+            """Enable local execution in native ClearML mode when applicable."""
+            if _LOCAL_CLEARML_BYPASS:
+                return None
+            return _PipelineDecorator.run_locally()
 except ModuleNotFoundError:
     CLEARML_AVAILABLE = False
 
@@ -120,6 +180,12 @@ class LocalTaskLogger:
 def is_clearml_available() -> bool:
     """Return True when ClearML package is importable."""
     return CLEARML_AVAILABLE
+
+
+def set_local_clearml_bypass(*, enabled: bool) -> None:
+    """Toggle bypass of ClearML wrappers for explicit local pipeline mode."""
+    global _LOCAL_CLEARML_BYPASS
+    _LOCAL_CLEARML_BYPASS = bool(enabled)
 
 
 def get_task_logger(*, task: Any, logger: logging.Logger | None = None) -> Any:

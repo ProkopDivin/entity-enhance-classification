@@ -12,6 +12,7 @@ from iptc_entity_pipeline.clearml_compat import (
     TaskTypes,
     get_task_logger,
     is_clearml_available,
+    set_local_clearml_bypass,
 )
 from iptc_entity_pipeline.config import BaseCnf, resolve_paths
 from iptc_entity_pipeline.data_loading import attach_entities, load_and_normalize, load_wdid_map, sanitize_name
@@ -1307,6 +1308,12 @@ def run_pipeline(
             'or rerun with --local.'
         )
     if is_local:
-        PipelineDecorator.run_locally()
-    run_training_pipeline(cnf=config_mapping)
+        set_local_clearml_bypass(enabled=True)
+    try:
+        if is_local:
+            PipelineDecorator.run_locally()
+        run_training_pipeline(cnf=config_mapping)
+    finally:
+        if is_local:
+            set_local_clearml_bypass(enabled=False)
     return resolved_config, config_mapping
