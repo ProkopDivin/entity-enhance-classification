@@ -14,6 +14,7 @@ dependencies = [
     'numpy~=1.26',
     'optuna~=4.0',
     'pandas~=2.2',
+    'openpyxl~=3.1',
     'iterative-stratification~=0.1',
     'matplotlib~=3.10',
     'sentence-transformers~=3.0',
@@ -22,6 +23,7 @@ dependencies = [
     'regex~=2024.0',
     'requests~=2.32',
     'statsmodels',
+    'gensim~=4.4.0',
 ]
 
 [project.optional-dependencies]

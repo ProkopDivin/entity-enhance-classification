@@ -1,12 +1,14 @@
 """Configuration dataclasses for the IPTC entity-enhanced pipeline."""
 
+import os
 from dataclasses import Field, asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
 from iptc_entity_pipeline.data_loading import EntityType, remove_types_except
 
-DATA_ROOT = '/home/prokop/Git/entity-enhance-classification/data'
+_DEFAULT_DATA_ROOT = Path(__file__).resolve().parents[2] / 'data'
+DATA_ROOT = os.getenv('IPTC_DATA_ROOT', str(_DEFAULT_DATA_ROOT))
 ALL_ENTITY_LANGS = ('en', 'de','fr' , 'nl', 'es' , 'cs')
 GOLD_ORIGIN_TRAIN_CSV = f'{DATA_ROOT}/gold-origin/all-corpora-train-entities.csv'
 GOLD_ORIGIN_TEST_CSV = f'{DATA_ROOT}/gold-origin/all-corpora-test-entities.csv'
@@ -455,6 +457,7 @@ class DebugCnf(BaseCnf):
             train_csv=f'{DATA_ROOT}/debug/all-corpora-train-entities.sample_4plus1.csv',
             test_csv=f'{DATA_ROOT}/debug/all-corpora-test-entities.sample_4plus1.csv',
             wdid_mapping_tsv=f'{DATA_ROOT}/wd-id_mapping_debug.tsv',
+            article_embeddings_dir=f'{DATA_ROOT}/article_embeddings_debug',
             entity_embeddings_dir = f'{DATA_ROOT}/entity_embeddings/debug', 
         )
     )
