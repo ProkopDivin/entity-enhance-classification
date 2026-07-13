@@ -29,7 +29,6 @@ class SavedModelPaths:
 
     output_dir: str
     model_path: str
-    test_embeddings_path: str
     config_yaml_path: str
     parameters_json_path: str
     predictions_path: str
@@ -88,9 +87,6 @@ def save_outputs(
     model_path = output_dir / 'model.nn.bin'
     model.save(str(model_path))
 
-    test_embeddings_path = output_dir / 'test_embeddings.tsv'
-    test_data.saveEmbeds(str(test_embeddings_path))
-
     predictions_path = output_dir / PREDICTIONS_FILENAME
     with open(predictions_path, 'wb') as f:
         pickle.dump(list(pred_scores), f)
@@ -108,7 +104,6 @@ def save_outputs(
             if cid in selected_cat_ids
         }
     config_data = {
-        'testEmbeddingPath': str(test_embeddings_path),
         'embedSvcModelId': emb_cnf.article_model_name,
         'embedDim': int(feature_dim),
         'nnModelPath': str(model_path),
@@ -141,7 +136,6 @@ def save_outputs(
 
     if upload_artifacts and task is not None:
         task.upload_artifact('saved_model_file', artifact_object=str(model_path))
-        task.upload_artifact('saved_model_test_embeddings', artifact_object=str(test_embeddings_path))
         task.upload_artifact('saved_model_config_yaml', artifact_object=str(config_yaml_path))
         task.upload_artifact('saved_model_parameters_json', artifact_object=str(parameters_json_path))
         task.upload_artifact('saved_model_predictions', artifact_object=str(predictions_path))
@@ -150,7 +144,6 @@ def save_outputs(
     return SavedModelPaths(
         output_dir=str(output_dir),
         model_path=str(model_path),
-        test_embeddings_path=str(test_embeddings_path),
         config_yaml_path=str(config_yaml_path),
         parameters_json_path=str(parameters_json_path),
         predictions_path=str(predictions_path),

@@ -458,7 +458,7 @@ class DebugCnf(BaseCnf):
             test_csv=f'{DATA_ROOT}/debug/all-corpora-test-entities.sample_4plus1.csv',
             wdid_mapping_tsv=f'{DATA_ROOT}/wd-id_mapping_debug.tsv',
             article_embeddings_dir=f'{DATA_ROOT}/article_embeddings_debug',
-            entity_embeddings_dir = f'{DATA_ROOT}/entity_embeddings/debug', 
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/debug'
         )
     )
     model: ModelCnf = field(default_factory=lambda: replace(ModelCnf(), dropouts1=0.1))
