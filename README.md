@@ -3,66 +3,50 @@
 Repository for diploma-thesis experiments on improving cross-language IPTC multi-label classification with
 entity-enhanced inputs.
 
-## IPTC Entity-Enhanced ClearML Pipeline (v1)
+## Quick start (debug run)
 
-The implemented pipeline trains and evaluates an IPTC classifier using:
+Use the `debug` config for a fast end-to-end smoke test on a tiny dataset. It runs the full
+pipeline locally (load data → embeddings → 5-fold CV → train → test eval) with reduced
+training time.
 
-- article text (`title`, `lead`, `text`)
-- article embedding (`<article_id>.npy`, computed on demand if missing)
-- linked Wikidata entities (`data/article_2_entities.tsv`)
-- entity embeddings from `.npy` files (`{wdid}_en_{chunk}.npy`)
+### What `debug` uses
 
-v1 settings:
+Defined in `src/iptc_entity_pipeline/config.py` (`DebugCnf`):
 
-- entity pooling: sum (after per-entity chunk averaging)
-- article/entity combination: concatenation
-- model training and evaluation logic: copied from the original IPTC ClearML pipeline internals
-- article embedding backend default: origin-compatible service mode (`SvcTextVectorizer` via `DocVectorizer`)
+- **Train/test corpora:** `data/debug/all-corpora-*.sample_4plus1.csv` (small sample)
+- **Entity mapping:** `data/wd-id_mapping_debug.tsv`
+- **Entity embeddings:** `data/entity_embeddings/debug/`
+- **Article embeddings:** `data/article_embeddings_debug`
+- **Training:** 5 epochs, MLP with relevance-weighted entity pooling
+- **CV / HPO:** 5 folds, small grid over `dropouts2` (3 trials)
 
-## Project Structure
+### Prerequisites
 
-- `src/iptc_entity_pipeline/config.py` - dataclass configuration.
-- `src/iptc_entity_pipeline/data_loading.py` - corpora loading + category normalization + wdId extraction.
-- `src/iptc_entity_pipeline/article_embeddings.py` - article embedding cache and fallback compute.
-- `src/iptc_entity_pipeline/entity_embeddings.py` - `EntityEmbeddingStore` with chunk averaging and cache.
-- `src/iptc_entity_pipeline/pooling.py` - pooling strategy interface + v1 sum pooling.
-- `src/iptc_entity_pipeline/feature_builder.py` - creates concatenated article+entity vectors.
-- `src/iptc_entity_pipeline/dataset_builder.py` - converts vectors to `EmbeddingDataset`.
-- `src/iptc_entity_pipeline/legacy_reuse.py` - reused original model/train/eval functions.
-- `src/iptc_entity_pipeline/pipeline.py` - ClearML components and orchestration.
-  - `load_data`
-  - `prepare_article_embeddings`
-  - `link_embeddings_and_build_datasets`
-  - `train_classification_model`
-  - `evaluate_classification_model`
-- `src/iptc_entity_pipeline/run_pipeline.py` - CLI entrypoint.
-- `notes.md` - architecture and implementation decisions.
+- Python 3.10+
+- ClearML credentials configured in your environment
 
-## Data Layout
+- Internal `geneea` packages
 
-Default paths are hardcoded (origin-style) to:
+### Run
 
-- `/home/prokop/Git/entity-enhance-classification/data/origin-corpora/all-corpora-train.csv`
-- `/home/prokop/Git/entity-enhance-classification/data/origin-corpora/all-corpora-dev.csv`
-- `/home/prokop/Git/entity-enhance-classification/data/origin-corpora/all-corpora-test.csv`
-- `/home/prokop/Git/entity-enhance-classification/data/article_2_entities.tsv`
-- `/home/prokop/Git/entity-enhance-classification/data/entity_embeddings/WikidataProject/`
-- `/home/prokop/Git/entity-enhance-classification/data/article_embeddings/` (created automatically)
+From the repository root:
 
-Article embedding computation defaults:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
 
-- model id: `paraphrase-multilingual-MiniLM-L12-v2-300-0.3`
-- service URL: `http://tau.g:5533`
-- dimension: `384`
+python3 -m iptc_entity_pipeline.run_pipeline --local --config debug
+```
 
-Entity embeddings must be `.npy` files named as:
 
-`{wdid}_en_{chunk}.npy`
+### Output
 
-Examples:
+- Progress is logged to the terminal (6 pipeline stages).
+- Metrics are reported to the ClearML task.
+- Saved model and evaluation artifacts are written under
+  `results/saved_models/debug_<timestamp>/` (model weights, thresholds, test tables).
 
-- `Q1000033_en_1.npy`
-- `Q1000033_en_2.npy`
 
 ## Installation
 
@@ -74,37 +58,10 @@ pip install -e .
 
 Notes:
 
-- This pipeline reuses `geneea.*` model/evaluation data structures. Install internal `geneea` packages in your
+
   environment before running training.
 - ClearML agent/execution queue configuration is expected in your environment.
 
-## Usage
-
-Run locally from repository root:
-
-```bash
-python3 -m iptc_entity_pipeline.run_pipeline --local
-```
-
-Useful arguments:
-
-- `--task-name`: ClearML task name (default: `iptc-entity-enhanced-v1`)
-- `--config` / `-c`: config variant to run:
-  - `debug`
-  - `wpentities`
-  - `wpentities_weighted_mean`
-  - `wpentities_relevance_weighted_sum`
-  - `wpentities_mention_weighted_sum`
-  - `article_only`
-  - `entity_only`
-  - `wpentities_en_nl`
-  - `wpentities_nl`
-  - `wpentities_all_langs`
-  - `wpentities_rel_th_5`
-  - `best_wpentities`
-  - `best_article_only`
-  - `wikipedia2vec_entities_all_langs`
-  - `wikidata_description_entities`
 
 ## Wikipedia2Vec Embedding Prefetch
 
