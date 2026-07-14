@@ -38,6 +38,7 @@ from iptc_entity_pipeline.evaluation.evaluate import (
     evaluate_predictions,
     get_cat_name,
     get_iptc_topics,
+    normalize_pred_cats,
 )
 from iptc_entity_pipeline.model_io import EVAL_CORPUS_FILENAME, PREDICTIONS_FILENAME
 
@@ -1156,13 +1157,13 @@ def build_corpora_macro_head_cmp_df(
     corpora_cmp_reference: pd.DataFrame,
     min_support: int = MACRO_HEAD_MIN_SUPPORT,
 ) -> pd.DataFrame:
-    """Build corpus-level comparison table with macro-head metrics (support > ``min_support``)."""
+    """Build corpus-level comparison table with macro-head metrics (support >= ``min_support``)."""
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(bool)
-    current_pred = build_score_matrix(df=current_df, cat_ids=cat_ids) >= current_thr_vec
-    base_pred = build_score_matrix(df=base_df, cat_ids=cat_ids) >= base_thr_vec
+    current_pred = build_pred_matrix(df=current_df, cat_ids=cat_ids, thr_vec=current_thr_vec)
+    base_pred = build_pred_matrix(df=base_df, cat_ids=cat_ids, thr_vec=base_thr_vec)
     support = gold_matrix.sum(axis=0, dtype=np.int64)
-    head_mask = support > int(min_support)
+    head_mask = support >= int(min_support)
     corpus_names = current_df['corpus_name'].fillna('').astype(str)
     row_names = sorted({name for name in corpus_names if name})
     info_lookup = corpora_cmp_reference.set_index('Corpus Name', drop=False)
@@ -1310,13 +1311,17 @@ def _macro_head_metrics(*, gold: np.ndarray, pred: np.ndarray) -> dict[str, floa
     negatives = int(np.logical_not(gold).sum(dtype=np.int64))
     fp_total = int(fp.sum(dtype=np.int64))
     false_positive_rate = float(fp_total / negatives) if negatives > 0 else float('nan')
+    # Restrict the macro average to head classes present in this subset; absent
+    # classes (zero gold here) would otherwise enter the mean as F1=0 and deflate
+    # per-corpus numbers.
+    present = support > 0
     return {
         'Data Count': int(gold.shape[0]),
         'Docs No Labels': docs_no_labels,
         'Decent Labels': int(decent_mask.sum(dtype=np.int64)),
-        'Precision': float(precision.mean()),
-        'Recall': float(recall.mean()),
-        'F1': float(f1.mean()),
+        'Precision': float(precision[present].mean()) if present.any() else float('nan'),
+        'Recall': float(recall[present].mean()) if present.any() else float('nan'),
+        'F1': float(f1[present].mean()) if present.any() else float('nan'),
         'False Positive Rate': false_positive_rate,
     }
 
@@ -1512,8 +1517,8 @@ def build_class_confusion_counts_df(
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(bool)
     not_gold_matrix = np.logical_not(gold_matrix)
-    current_pred = build_score_matrix(df=current_df, cat_ids=cat_ids) >= current_thr_vec
-    base_pred = build_score_matrix(df=base_df, cat_ids=cat_ids) >= base_thr_vec
+    current_pred = build_pred_matrix(df=current_df, cat_ids=cat_ids, thr_vec=current_thr_vec)
+    base_pred = build_pred_matrix(df=base_df, cat_ids=cat_ids, thr_vec=base_thr_vec)
 
     fp_current = np.logical_and(current_pred, not_gold_matrix).sum(axis=0, dtype=np.int64)
     fp_base = np.logical_and(base_pred, not_gold_matrix).sum(axis=0, dtype=np.int64)
@@ -1780,8 +1785,8 @@ def build_mcnemar_significance_df(
     """
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(bool)
-    current_pred = build_score_matrix(df=current_df, cat_ids=cat_ids) >= current_thr_vec
-    base_pred = build_score_matrix(df=base_df, cat_ids=cat_ids) >= base_thr_vec
+    current_pred = build_pred_matrix(df=current_df, cat_ids=cat_ids, thr_vec=current_thr_vec)
+    base_pred = build_pred_matrix(df=base_df, cat_ids=cat_ids, thr_vec=base_thr_vec)
     current_correct = current_pred == gold_matrix
     base_correct = base_pred == gold_matrix
     not_gold_matrix = np.logical_not(gold_matrix)
@@ -2439,10 +2444,10 @@ def build_article_f1_diff_df(
     """
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
-    current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
-    base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
-    current_f1 = compute_article_f1(scores=current_scores, gold_matrix=gold_matrix, thr_vec=current_thr_vec)
-    base_f1 = compute_article_f1(scores=base_scores, gold_matrix=gold_matrix, thr_vec=base_thr_vec)
+    current_pred = build_pred_matrix(df=current_df, cat_ids=cat_ids, thr_vec=current_thr_vec)
+    base_pred = build_pred_matrix(df=base_df, cat_ids=cat_ids, thr_vec=base_thr_vec)
+    current_f1 = compute_article_f1(pred_matrix=current_pred, gold_matrix=gold_matrix)
+    base_f1 = compute_article_f1(pred_matrix=base_pred, gold_matrix=gold_matrix)
     article_f1_df = pd.DataFrame(
         {
             'article_id': article_ids,
@@ -2457,12 +2462,11 @@ def build_article_f1_diff_df(
     return article_f1_df
 
 
-def compute_article_f1(*, scores: np.ndarray, gold_matrix: np.ndarray, thr_vec: np.ndarray) -> np.ndarray:
-    """Compute per-article F1 scores from score and gold matrices.
+def compute_article_f1(*, pred_matrix: np.ndarray, gold_matrix: np.ndarray) -> np.ndarray:
+    """Compute per-article F1 scores from prediction and gold matrices.
 
-    :param thr_vec: Per-class threshold vector broadcast over rows.
+    :param pred_matrix: Boolean ancestor-normalized prediction matrix.
     """
-    pred_matrix = scores >= thr_vec
     gold_bool = gold_matrix.astype(bool)
     tp = np.logical_and(pred_matrix, gold_bool).sum(axis=1, dtype=np.int32)
     fp = np.logical_and(pred_matrix, np.logical_not(gold_bool)).sum(axis=1, dtype=np.int32)
@@ -2490,10 +2494,10 @@ def build_article_confusion_diff_df(
     """
     article_ids = list(current_df['article_id'])
     gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
-    current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
-    base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
-    current_conf = compute_article_confusion(scores=current_scores, gold_matrix=gold_matrix, thr_vec=current_thr_vec)
-    base_conf = compute_article_confusion(scores=base_scores, gold_matrix=gold_matrix, thr_vec=base_thr_vec)
+    current_pred = build_pred_matrix(df=current_df, cat_ids=cat_ids, thr_vec=current_thr_vec)
+    base_pred = build_pred_matrix(df=base_df, cat_ids=cat_ids, thr_vec=base_thr_vec)
+    current_conf = compute_article_confusion(pred_matrix=current_pred, gold_matrix=gold_matrix)
+    base_conf = compute_article_confusion(pred_matrix=base_pred, gold_matrix=gold_matrix)
     return pd.DataFrame(
         {
             'article_id': article_ids,
@@ -2507,13 +2511,12 @@ def build_article_confusion_diff_df(
 
 
 def compute_article_confusion(
-    *, scores: np.ndarray, gold_matrix: np.ndarray, thr_vec: np.ndarray
+    *, pred_matrix: np.ndarray, gold_matrix: np.ndarray
 ) -> Mapping[str, np.ndarray]:
-    """Compute per-article TP/TN/FP/FN counts from score and gold matrices.
+    """Compute per-article TP/TN/FP/FN counts from prediction and gold matrices.
 
-    :param thr_vec: Per-class threshold vector broadcast over rows.
+    :param pred_matrix: Boolean ancestor-normalized prediction matrix.
     """
-    pred_matrix = scores >= thr_vec
     gold_bool = gold_matrix.astype(bool)
     tp = np.logical_and(pred_matrix, gold_bool).sum(axis=1, dtype=np.int32)
     fp = np.logical_and(pred_matrix, np.logical_not(gold_bool)).sum(axis=1, dtype=np.int32)
@@ -2718,8 +2721,7 @@ def compute_hamming(
 
     :param thr_vec: Per-class threshold vector aligned with ``cat_ids``.
     """
-    score_matrix = build_score_matrix(df=df, cat_ids=cat_ids)
-    pred_matrix = (score_matrix >= thr_vec).astype(np.int8)
+    pred_matrix = build_pred_matrix(df=df, cat_ids=cat_ids, thr_vec=thr_vec).astype(np.int8)
     return float(hamming_loss(gold_matrix, pred_matrix))
 
 
@@ -2913,6 +2915,36 @@ def build_score_matrix(*, df: pd.DataFrame, cat_ids: Sequence[str]) -> np.ndarra
     """Build dense score matrix for selected category ids."""
     cols = [f'prob_{cat_id}' for cat_id in cat_ids]
     return df.reindex(columns=cols, fill_value=0.0).to_numpy(dtype=float)
+
+
+def build_pred_matrix(*, df: pd.DataFrame, cat_ids: Sequence[str], thr_vec: np.ndarray) -> np.ndarray:
+    """Build ancestor-normalized boolean prediction matrix aligned with ``cat_ids``.
+
+    Thresholded predictions are pushed through :func:`normalize_pred_cats` so
+    they match the gold matrix's ancestor-closure convention (a predicted leaf
+    implies its ancestors) and drop ``REMOVED_CAT_IDS``. Without this, parent
+    categories reached only via ancestor closure would count as false negatives,
+    making confusion counts, McNemar tests, Hamming loss, and per-article F1
+    disagree with the normalized headline F1 tables.
+
+    :param df: Aligned per-article probability table.
+    :param cat_ids: Category ids matching the matrix columns.
+    :param thr_vec: Per-class threshold vector aligned with ``cat_ids``.
+    :return: Boolean ``(n_docs, n_classes)`` matrix of normalized predictions.
+    """
+    score_matrix = build_score_matrix(df=df, cat_ids=cat_ids)
+    keep = score_matrix >= thr_vec
+    cats = list(cat_ids)
+    raw_cats = [[cats[k] for k in np.where(keep[row_idx])[0]] for row_idx in range(score_matrix.shape[0])]
+    norm_cats = normalize_pred_cats(pred_cats=raw_cats)
+    cat_to_idx = {cat_id: idx for idx, cat_id in enumerate(cat_ids)}
+    pred_matrix = np.zeros((len(raw_cats), len(cat_ids)), dtype=bool)
+    for row_idx, cats_row in enumerate(norm_cats):
+        for cat_id in cats_row:
+            col_idx = cat_to_idx.get(cat_id)
+            if col_idx is not None:
+                pred_matrix[row_idx, col_idx] = True
+    return pred_matrix
 
 
 def average_precision(*, y_true: np.ndarray, y_score: np.ndarray) -> float:
