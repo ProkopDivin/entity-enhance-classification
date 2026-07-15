@@ -220,3 +220,16 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 data-preprocessing/downsample_corp_ids.txt
+data-preprocessing/src/add_entities_to_all.sh
+data-preprocessing/src/add_entities_to_csv.py
+data-preprocessing/src/analyze_article_duplicates.py
+data-preprocessing/src/extract_wikidata_mapping.py
+data-preprocessing/src/visualize_splits.py
+data-preprocessing/src/extract_entities_date.py
+data-preprocessing/src/entity_wordclouds.py
+data-preprocessing/src/describe_corpora.py
+data-preprocessing/src/create_splits.py
+data-preprocessing/src/category_split_analysis.py
+data-preprocessing/src/analyze_splits.py
+data-preprocessing/src/analyze_silver_distributions.py
+data-preprocessing/src/analyze_jsonl_stats.py
