@@ -47,7 +47,6 @@ class EmbeddingCnf:
     entity_lang_mode: Literal['average', 'fallback'] = 'average'
     entity_relevance_threshold: float = 0.0
     remove_types: tuple[str, ...] = ()
-    use_entity_relevance_weights: bool = False
     use_article_embeddings: bool = True
     use_entity_embeddings: bool = True
     combine_method: Literal['concat', 'sum'] = 'concat'
@@ -404,7 +403,6 @@ class WPEntitiesWeightedMeanCnf(PreBaseCnfWithHPO):
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
             EmbeddingCnf(),
-            use_entity_relevance_weights=True,
             entity_pooling='weighted_mean_relevance',
         )
     )
@@ -449,9 +447,6 @@ class W2VEntityOnlyCnf(BaseCnfWithHPO):
 @dataclass(frozen=True)
 class DebugCnf(BaseCnf):
     """Debug configuration for quick local runs."""
-    model: ModelCnf = field(
-        default_factory=lambda: replace(ModelCnf(), nn_type='mlp_gelu')
-    )
     paths: PathsCnf = field(
         default_factory=lambda: PathsCnf(
             train_csv=f'{DATA_ROOT}/debug/all-corpora-train-entities.sample_4plus1.csv',
@@ -462,7 +457,6 @@ class DebugCnf(BaseCnf):
         )
     )
     model: ModelCnf = field(default_factory=lambda: replace(ModelCnf(), dropouts1=0.1))
-    train: TrainingCnf = field(default_factory=lambda: replace(TrainingCnf(), epochs=5))
     hparam: HyperparamSpace = field(
         default_factory=lambda: replace(
             HyperparamSpace(),
@@ -475,7 +469,6 @@ class DebugCnf(BaseCnf):
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
             EmbeddingCnf(),
-            use_entity_relevance_weights=True,
             entity_pooling='weighted_mean_relevance',
         )
     )
@@ -1193,30 +1186,12 @@ class ArticleOnlyTunedCnf(ArticleOnlyCnf):
     )
     
 @dataclass(frozen=True)
-class BestArticleOnlyTunedCnf(ArticleOnlyTunedCnf):
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
-    )
-    hparam: HyperparamSpace = field(default_factory=lambda: replace(
-            HyperparamSpace(),
-            hidden_dims=(4096,),
-            dropouts1=(0.0,),
-            dropouts2=(0.5, ),
-            learning_rates=(0.00037,),
-        )
-    )
-
-        
-@dataclass(frozen=True)
 class BestArticleOnlyTunedCnf(BestArticleOnlyCnf):
     tuning: ThresholdTuningCnf = field(
         default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
     train: TrainingCnf = field(
         default_factory=lambda: replace(TrainingCnf(), train_validation=True)
-    )
-    tuning: ThresholdTuningCnf = field(
-        default_factory=lambda: replace(ThresholdTuningCnf(), enabled=True)
     )
 
     

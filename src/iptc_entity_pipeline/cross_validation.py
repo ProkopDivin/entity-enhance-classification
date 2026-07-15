@@ -83,6 +83,7 @@ class FoldMetrics:
     fold_id: int
     params: str
     epochs: float
+    best_epoch: int
     loss: float
     precision_macro_relevant: float
     recall_macro_relevant: float
@@ -98,6 +99,7 @@ class FoldMetrics:
             'fold_id': self.fold_id,
             'params': self.params,
             'epochs': self.epochs,
+            'best_epoch': self.best_epoch,
             'Loss': self.loss,
             'Precision_macro_relevant': self.precision_macro_relevant,
             'Recall_macro_relevant': self.recall_macro_relevant,
@@ -190,6 +192,7 @@ class FoldEvalOutput:
     :param macro_relevant_row: Relevant-class macro row from classes table.
     :param dev_loss: Final dev loss for the fold.
     :param epochs_run: Number of epochs the fold actually ran (early stop).
+    :param best_epoch: Epoch with the best early-stopping metric (1-indexed).
     :param fold_curve: Per-epoch train/dev loss + F1 curves.
     :param fold_thresholds: Per-class threshold map when tuning is enabled,
         empty dict otherwise.
@@ -202,6 +205,7 @@ class FoldEvalOutput:
     macro_relevant_row: Mapping[str, Any]
     dev_loss: float
     epochs_run: int
+    best_epoch: int
     fold_curve: CvFoldCurves
     fold_thresholds: dict[str, float]
     df_corpora: pd.DataFrame
@@ -237,6 +241,7 @@ def summarize_combination(
         'trial_id': combo_idx,
         'params': params_json,
         'epochs': float(df['epochs'].mean()),
+        'best_epoch': float(df['best_epoch'].mean()),
         'Loss_mean': float(df['Loss'].mean()),
         'Loss_std': float(df['Loss'].std(ddof=0)),
         'F1_macro_relevant_mean': float(df['F1_macro_relevant'].mean()),
@@ -284,6 +289,37 @@ def _subset_predictions(*, pred_scores: Any, indices: Sequence[int]) -> Any:
     return [pred_scores[int(idx)] for idx in indices]
 
 
+def _resolve_final_epochs(
+    *,
+    best_trial: Mapping[str, Any],
+    fold_metrics: Sequence[FoldMetrics],
+    max_epochs: int,
+    patience: int,
+) -> int:
+    '''Decide how many epochs the final model should train (no early stopping).
+
+    Uses the old heuristic ``mean(epochs_run) - patience`` when every fold
+    stopped early.  Falls back to ``mean(best_epoch)`` and emits a warning
+    when at least one fold hit the configured epoch cap, because the
+    subtraction would under-count in that case.
+
+    :param best_trial: aggregated trial-row dict (must contain *epochs* and *best_epoch*).
+    :param fold_metrics: per-fold metrics for the best trial.
+    :param max_epochs: configured upper epoch limit (``training.epochs``).
+    :param patience: early-stopping patience used during CV.
+    :return: epoch count for final training (>= 1).
+    '''
+    capped_folds = [fm for fm in fold_metrics if fm.epochs >= max_epochs]
+    if capped_folds:
+        LOGGER.warning(
+            f'CV best trial: {len(capped_folds)}/{len(fold_metrics)} fold(s) '
+            f'reached the maximum epoch limit ({max_epochs}). '
+            'The model may benefit from increasing training.epochs.'
+        )
+        return max(1, int(round(float(best_trial['best_epoch']))))
+    return max(1, int(round(float(best_trial['epochs']))) - patience)
+
+
 def _build_cv_dev_row(best_trial: Mapping[str, Any]) -> dict[str, Any]:
     """Build CV summary metrics from a best-trial row.
 
@@ -295,6 +331,7 @@ def _build_cv_dev_row(best_trial: Mapping[str, Any]) -> dict[str, Any]:
     return {
         'params': best_trial['params'],
         'epochs': float(best_trial['epochs']),
+        'best_epoch': float(best_trial['best_epoch']),
         'Loss': float(best_trial['Loss_mean']),
         'Loss_std': float(best_trial['Loss_std']),
         'Precision_micro': float(best_trial['Precision_micro_mean']),
@@ -530,7 +567,10 @@ class CV:
         """Create Optuna sampler based on configuration."""
         sampler_name = self._optuna_cnf.sampler.strip().lower()
         if sampler_name == 'grid':
-            return optuna_module.samplers.GridSampler(search_space=self._build_search_space())
+            return optuna_module.samplers.GridSampler(
+                search_space=self._build_search_space(),
+                seed=int(self._random_seed),
+            )
         if sampler_name == 'tpe':
             return optuna_module.samplers.TPESampler(seed=int(self._random_seed))
         if sampler_name == 'random':
@@ -749,6 +789,7 @@ class CV:
             macro_relevant_row=macro_relevant_row,
             dev_loss=float(train_result.final_dev_loss),
             epochs_run=int(train_result.epochs_run),
+            best_epoch=int(train_result.best_epoch),
             fold_curve=fold_curve,
             fold_thresholds=fold_thresholds,
             df_corpora=df_corpora_fold,
@@ -813,6 +854,7 @@ class CV:
                 fold_id=fold_idx,
                 params=params_json,
                 epochs=float(fold_out.epochs_run),
+                best_epoch=fold_out.best_epoch,
                 loss=fold_out.dev_loss,
                 precision_macro_relevant=float(fold_out.macro_relevant_row['Precision']),
                 recall_macro_relevant=float(fold_out.macro_relevant_row['Recall']),
@@ -948,10 +990,12 @@ class CV:
 
         self.best_params = json.loads(best_trial['params'])
         self.best_model_config = best.model_config
-
-        fixed_epochs = max(
-            1,
-            int(round(float(best_trial['epochs']))) - self._train_cnf.early_stopping_patience,
+        
+        fixed_epochs = _resolve_final_epochs(
+            best_trial=best_trial,
+            fold_metrics=best.fold_metrics,
+            max_epochs=self._train_cnf.epochs,
+            patience=self._train_cnf.early_stopping_patience,
         )
         self.best_training_config = replace(
             best.training_config,

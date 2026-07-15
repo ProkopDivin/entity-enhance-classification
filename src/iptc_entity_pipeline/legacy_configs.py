@@ -590,10 +590,6 @@ class BestWPEntitiesENNLCnf(PreBaseCnfWithHPO):
 @dataclass(frozen=True)
 class BestArticleOnlyTunedF1Cnf(BestArticleOnlyCnf):
     train: TrainingCnf = field(
-        default_factory=lambda: replace(TrainingCnf(), train_validation=True)
-    )
-    
-    train: TrainingCnf = field(
         default_factory=lambda: replace(TrainingCnf(), early_stopping_metric='f1')
     )
     tuning: ThresholdTuningCnf = field(

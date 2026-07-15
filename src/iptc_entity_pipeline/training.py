@@ -23,6 +23,7 @@ class TrainingResult:
     model: Any
     final_dev_loss: float
     epochs_run: int
+    best_epoch: int
     train_precision_micro_per_epoch: tuple[float, ...]
     dev_precision_micro_per_epoch: tuple[float, ...]
     train_recall_micro_per_epoch: tuple[float, ...]
@@ -195,6 +196,7 @@ def train_model(
         model=result.model,
         final_dev_loss=result.final_dev_loss,
         epochs_run=result.epochs_run,
+        best_epoch=result.best_epoch,
         train_precision_micro_per_epoch=tuple(result.train_precisions),
         dev_precision_micro_per_epoch=tuple(result.dev_precisions),
         train_recall_micro_per_epoch=tuple(result.train_recalls),

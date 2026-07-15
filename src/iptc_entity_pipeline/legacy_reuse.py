@@ -105,6 +105,7 @@ class LegacyTrainResult:
     model: NeuralCategModel
     final_dev_loss: float
     epochs_run: int
+    best_epoch: int
     train_precisions: list[float]
     train_recalls: list[float]
     train_losses: list[float]
@@ -475,6 +476,7 @@ def trainClassificationModel(
     best_state_cpu: dict[str, Any] | None = None
     best_score: float | None = None
     best_dev_loss: float | None = None
+    best_epoch_idx: int = 0
     epochs_without_improvement = 0
 
     start_time = time.time()
@@ -523,6 +525,7 @@ def trainClassificationModel(
             if is_improved:
                 best_score = current_score
                 best_dev_loss = dev_loss
+                best_epoch_idx = epoch
                 best_state_cpu = _clone_state_cpu(model)
                 epochs_without_improvement = 0
                 _log_info(
@@ -590,10 +593,14 @@ def trainClassificationModel(
     model._nn.eval()
     final_dev_loss = best_dev_loss if best_dev_loss is not None else (dev_stats.loss[-1] if dev_stats.loss else 0.0)
 
+    epochs_run = len(dev_stats.loss)
+    best_epoch = (best_epoch_idx + 1) if es_patience > 0 and best_state_cpu is not None else epochs_run
+
     return LegacyTrainResult(
         model=model,
         final_dev_loss=final_dev_loss,
-        epochs_run=len(dev_stats.loss),
+        epochs_run=epochs_run,
+        best_epoch=best_epoch,
         train_precisions=list(train_stats.precision),
         train_recalls=list(train_stats.recall),
         train_losses=list(train_stats.loss),

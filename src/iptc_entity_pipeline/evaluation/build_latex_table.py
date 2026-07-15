@@ -228,9 +228,9 @@ def read_cv_metrics(*, model_dir: Path) -> tuple[float, float] | None:
     if not xlsx_files:
         LOG.warning(f'No final_evaluation_tables_*.xlsx in {model_dir}')
         return None
-    df = pd.read_excel(xlsx_files[0], sheet_name=DEV_CV_SHEET)
+    df = pd.read_excel(xlsx_files[-1], sheet_name=DEV_CV_SHEET)
     if df.empty:
-        LOG.warning(f'Empty {DEV_CV_SHEET} sheet in {xlsx_files[0]}')
+        LOG.warning(f'Empty {DEV_CV_SHEET} sheet in {xlsx_files[-1]}')
         return None
     row = df.iloc[0]
     return float(row['F1_micro']), float(row['F1_micro_std'])
