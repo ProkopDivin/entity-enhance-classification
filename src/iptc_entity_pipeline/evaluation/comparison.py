@@ -23,7 +23,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from scipy import stats as scipy_stats
-from sklearn.metrics import average_precision_score, hamming_loss
+from sklearn.metrics import average_precision_score
 from statsmodels.stats.contingency_tables import mcnemar
 from statsmodels.stats.multitest import multipletests
 import numpy as np
@@ -78,8 +78,6 @@ SUPPORT_BUCKETS: tuple[tuple[int, int, str], ...] = (
 MACRO_HEAD_MIN_SUPPORT = 15
 LANG_PREFIXES: tuple[str, ...] = ('en', 'es', 'nl', 'fr', 'de', 'cs')
 EUROSPORT_TOKEN = 'eurosport'
-ENTITY_TABLE_LIMIT = 1000
-ENTITY_RANDOM_SEED = 42
 MCNEMAR_ALPHA = 0.05
 MCNEMAR_MIN_DISAGREEMENTS = 25
 BOOTSTRAP_PR_AUC_ITERATIONS = 1000
@@ -119,19 +117,13 @@ _RESULT_SHEETS: tuple[tuple[str, str, bool], ...] = (
     ('class_confusion_counts', 'class_confusion_counts', False),
     ('class_thresholds', 'class_thresholds', False),
     ('summary_comparison', 'summary_comparison', False),
-    ('summary_language_comparison', 'summary_language_comparison', False),
     ('top_improved_categories', 'top_improved', False),
     ('top_degraded_categories', 'top_degraded', False),
     ('top_improved_stats', 'top_improved_stats', False),
     ('top_degraded_stats', 'top_degraded_stats', False),
-    ('hamming_loss_comparison', 'hamming_loss', False),
     ('pr_auc_per_class', 'pr_auc_per_class', False),
     ('pr_auc_summary', 'pr_auc_summary', False),
-    ('entity_impact_improvers', 'entity_impact_improvers', False),
-    ('entity_impact_decaders', 'entity_impact_decaders', False),
-    ('entity_impact_random', 'entity_impact_random', False),
     ('entity_impact_all', 'entity_impact_all', False),
-    ('article_f1_diff_avg_stats', 'article_f1_diff_avg_stats', False),
     ('article_confusion_diff', 'article_confusion_diff', False),
     ('current_corpora', 'current_corpora', True),
     ('current_classes', 'current_classes', True),
@@ -160,19 +152,13 @@ class ComparisonResult:
     class_confusion_counts: pd.DataFrame
     class_thresholds: pd.DataFrame
     summary_comparison: pd.DataFrame
-    summary_language_comparison: pd.DataFrame
     top_improved_categories: pd.DataFrame
     top_degraded_categories: pd.DataFrame
     top_improved_stats: pd.DataFrame
     top_degraded_stats: pd.DataFrame
-    hamming_loss_comparison: pd.DataFrame
     pr_auc_per_class: pd.DataFrame
     pr_auc_summary: pd.DataFrame
-    entity_impact_improvers: pd.DataFrame
-    entity_impact_decaders: pd.DataFrame
-    entity_impact_random: pd.DataFrame
     entity_impact_all: pd.DataFrame
-    article_f1_diff_avg_stats: pd.DataFrame
     article_confusion_diff: pd.DataFrame
     current_corpora: pd.DataFrame
     current_classes: pd.DataFrame
@@ -542,11 +528,6 @@ def compare_runs(
         alpha=BRIER_TEST_ALPHA,
         min_positive_samples=BRIER_MIN_POSITIVE_SAMPLES,
     )
-    top_improved_df, top_degraded_df = add_brier_to_top_change_dfs(
-        improved_df=top_improved_df,
-        degraded_df=top_degraded_df,
-        brier_df=brier_df,
-    )
     label_to_cat_id = build_label_to_cat_id_map(cat_ids=cat_ids)
     if top_changes_only:
         empty_df = pd.DataFrame()
@@ -560,7 +541,6 @@ def compare_runs(
             class_confusion_counts=empty_df,
             class_thresholds=empty_df,
             summary_comparison=empty_df,
-            summary_language_comparison=empty_df,
             top_improved_categories=with_class_id_column(
                 df=top_improved_df,
                 key_col='IPTC Category',
@@ -573,14 +553,9 @@ def compare_runs(
             ),
             top_improved_stats=empty_df,
             top_degraded_stats=empty_df,
-            hamming_loss_comparison=empty_df,
             pr_auc_per_class=empty_df,
             pr_auc_summary=empty_df,
-            entity_impact_improvers=empty_df,
-            entity_impact_decaders=empty_df,
-            entity_impact_random=empty_df,
             entity_impact_all=empty_df,
-            article_f1_diff_avg_stats=empty_df,
             article_confusion_diff=empty_df,
             current_corpora=current_run.corpora_df,
             current_classes=with_class_id_column(
@@ -656,21 +631,12 @@ def compare_runs(
         current_run=current_run_summary,
         base_run=base_run_summary,
         classes_cmp=classes_cmp_full,
-        corpora_cmp=corpora_cmp_full,
         relevant_cat_ids=relevant_cat_ids,
         tail_cat_ids=tail_cat_ids,
     )
     top_improved_stats_df, top_degraded_stats_df = build_top_change_stats_dfs(
         improved_df=top_improved_df,
         degraded_df=top_degraded_df,
-    )
-    hamming_df = build_hamming_df(
-        current_df=current_aligned_df,
-        base_df=base_aligned_df,
-        gold_map=gold_map,
-        cat_ids=cat_ids,
-        current_thr_vec=current_thr_vec,
-        base_thr_vec=base_thr_vec,
     )
     pr_auc_df, pr_auc_summary_df = build_pr_auc_dfs(
         current_df=current_aligned_df,
@@ -686,13 +652,10 @@ def compare_runs(
         current_thr_vec=current_thr_vec,
         base_thr_vec=base_thr_vec,
     )
-    entity_improvers_df, entity_decaders_df, entity_random_df, entity_all_df = build_entity_impact_tables(
+    entity_all_df = build_entity_impact_all_df(
         current_df=current_aligned_df,
         article_f1_df=article_f1_df,
-        limit=ENTITY_TABLE_LIMIT,
-        random_seed=ENTITY_RANDOM_SEED,
     )
-    article_avg_stats_df = build_article_f1_diff_avg_stats(df=article_f1_df, limit=ENTITY_TABLE_LIMIT)
     article_confusion_diff_df = build_article_confusion_diff_df(
         current_df=current_aligned_df,
         base_df=base_aligned_df,
@@ -716,7 +679,6 @@ def compare_runs(
         class_confusion_counts=class_confusion_df,
         class_thresholds=class_thresholds_df,
         summary_comparison=summary_df,
-        summary_language_comparison=summary_language_df,
         top_improved_categories=with_class_id_column(
             df=top_improved_df,
             key_col='IPTC Category',
@@ -729,18 +691,9 @@ def compare_runs(
         ),
         top_improved_stats=top_improved_stats_df,
         top_degraded_stats=top_degraded_stats_df,
-        hamming_loss_comparison=hamming_df,
-        pr_auc_per_class=with_class_id_column(
-            df=pr_auc_df,
-            key_col='IPTC Category',
-            label_to_cat_id=label_to_cat_id,
-        ),
+        pr_auc_per_class=pr_auc_df,
         pr_auc_summary=pr_auc_summary_df,
-        entity_impact_improvers=entity_improvers_df,
-        entity_impact_decaders=entity_decaders_df,
-        entity_impact_random=entity_random_df,
         entity_impact_all=entity_all_df,
-        article_f1_diff_avg_stats=article_avg_stats_df,
         article_confusion_diff=article_confusion_diff_df,
         current_corpora=current_run.corpora_df,
         current_classes=with_class_id_column(
@@ -1626,7 +1579,6 @@ def build_summary_df(
     current_run: RunEval,
     base_run: RunEval,
     classes_cmp: pd.DataFrame,
-    corpora_cmp: pd.DataFrame,
     relevant_cat_ids: set[str],
     tail_cat_ids: set[str],
 ) -> pd.DataFrame:
@@ -1687,38 +1639,6 @@ def build_summary_df(
                 cmp_metrics=_CMP_METRICS_REPORT,
             )
         )
-
-    corpora_filtered = corpora_cmp[~corpora_cmp['Corpus Name'].isin(AGG_CORPUS_ROWS)].copy()
-    for prefix in LANG_PREFIXES:
-        mask = corpora_filtered['Corpus Name'].str.startswith(f'{prefix}_')
-        sub = corpora_filtered[mask]
-        rows.append(
-            _avg_metrics_row(
-                summary_key=f'macro_over_corpora_prefix_{prefix}',
-                sub_df=sub,
-                cmp_metrics=_CMP_METRICS_REPORT,
-            )
-        )
-
-    eurosport_mask = corpora_filtered['Corpus Name'].str.contains(EUROSPORT_TOKEN, case=False, na=False)
-    rows.append(
-        _avg_metrics_row(
-            summary_key=f'macro_over_corpora_{EUROSPORT_TOKEN}',
-            sub_df=corpora_filtered[eurosport_mask],
-            cmp_metrics=_CMP_METRICS_REPORT,
-        )
-    )
-
-    macro_corpora_current = current_run.corpora_df.loc['All_macro_corpora']
-    macro_corpora_base = base_run.corpora_df.loc['All_macro_corpora']
-    rows.append(
-        _metric_row(
-            summary_key='macro_over_corpora',
-            current=macro_corpora_current,
-            base=macro_corpora_base,
-            cmp_metrics=_CMP_METRICS_REPORT,
-        )
-    )
     return pd.DataFrame(rows)
 
 
@@ -1734,7 +1654,6 @@ def build_top_change_dfs(*, classes_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.
     cols = [
         'IPTC Category',
         'article_frequency',
-        'ranking_score',
         'Precision_current',
         'Precision_base',
         'Precision_diff',
@@ -2218,49 +2137,6 @@ def wilcoxon_signed_rank_p_value(differences: Sequence[float]) -> float:
     )
 
 
-def add_brier_to_top_change_dfs(
-    *,
-    improved_df: pd.DataFrame,
-    degraded_df: pd.DataFrame,
-    brier_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Attach direction-aware Brier/Wilcoxon columns to top change tables."""
-    return (
-        _add_brier_to_top_change_df(df=improved_df, brier_df=brier_df, pass_col='brier_current_significant'),
-        _add_brier_to_top_change_df(df=degraded_df, brier_df=brier_df, pass_col='brier_base_significant'),
-    )
-
-
-def _add_brier_to_top_change_df(*, df: pd.DataFrame, brier_df: pd.DataFrame, pass_col: str) -> pd.DataFrame:
-    """Merge Brier rows and expose a direction-aware pass flag."""
-    stratified_cols = [
-        'brier_p_value_fdr_pos',
-        'brier_p_value_fdr_neg',
-        'brier_stratified_passed_1_test',
-        'brier_stratified_passed_2_tests',
-    ]
-    cols = ['IPTC Category', 'brier_wilcoxon_eligible', 'brier_p_value']
-    cols.extend(
-        [
-            pass_col,
-            *stratified_cols,
-        ],
-    )
-    result = df.merge(brier_df.reindex(columns=cols), on='IPTC Category', how='left')
-    result['brier_pass'] = result[pass_col].fillna(0).astype(int)
-    result = result.drop(columns=[pass_col])
-    for col in ('brier_stratified_passed_1_test', 'brier_stratified_passed_2_tests'):
-        result[col] = result[col].fillna(0).astype(int)
-    metric_cols = ['brier_pass', 'brier_wilcoxon_eligible', 'brier_p_value']
-    metric_cols.extend(
-        [
-            *stratified_cols,
-        ],
-    )
-    base_cols = [col for col in result.columns if col not in metric_cols]
-    return result.loc[:, base_cols + metric_cols]
-
-
 def plot_brier_diagnostics(*, brier_df: pd.DataFrame, output_path: Path) -> tuple[Path, Path] | tuple[None, None]:
     """Save histogram/KDE and Q-Q plots for per-class Brier mean error differences."""
     values = pd.to_numeric(brier_df.get('brier_mean_error_diff', pd.Series(dtype=float)), errors='coerce').dropna()
@@ -2525,39 +2401,23 @@ def compute_article_confusion(
     return {'tp': tp, 'tn': tn, 'fp': fp, 'fn': fn}
 
 
-def build_entity_impact_tables(
+def build_entity_impact_all_df(
     *,
     current_df: pd.DataFrame,
     article_f1_df: pd.DataFrame,
-    limit: int,
-    random_seed: int,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Build improvers/decaders/random entity impact tables plus the full table.
+) -> pd.DataFrame:
+    """Build the complete, un-thresholded entity impact table sorted by entity score.
 
-    :return: ``(improvers, decaders, random, all_entities)`` where ``all_entities``
-        is the complete, un-thresholded table sorted by entity score.
+    :return: All entities ranked by ``entity_score`` with an ``AVG`` footer row.
     """
     footer_ids = {'gkbid': 'AVG', 'stdform': 'AVG'}
     entity_df = build_entity_impact_df(current_df=current_df, article_f1_df=article_f1_df)
     if entity_df.empty:
         empty = entity_df.reindex(columns=entity_impact_columns())
-        return (
-            append_avg_footer_row(df=empty, id_col_values=footer_ids),
-            append_avg_footer_row(df=empty, id_col_values=footer_ids),
-            append_avg_footer_row(df=empty, id_col_values=footer_ids),
-            append_avg_footer_row(df=empty, id_col_values=footer_ids),
-        )
+        return append_avg_footer_row(df=empty, id_col_values=footer_ids)
 
     all_entities = entity_df.sort_values(by='entity_score', ascending=False)
-    improvers = entity_df[entity_df['entity_score'] > 0].sort_values(by='entity_score', ascending=False).head(limit)
-    decaders = entity_df[entity_df['entity_score'] < 0].sort_values(by='entity_score', ascending=True).head(limit)
-    random_n = min(limit, len(entity_df))
-    random_df = entity_df.sample(n=random_n, random_state=random_seed) if random_n > 0 else entity_df.iloc[0:0].copy()
-    improvers = append_avg_footer_row(df=improvers, id_col_values=footer_ids)
-    decaders = append_avg_footer_row(df=decaders, id_col_values=footer_ids)
-    random_df = append_avg_footer_row(df=random_df, id_col_values=footer_ids)
-    all_entities = append_avg_footer_row(df=all_entities, id_col_values=footer_ids)
-    return improvers, decaders, random_df, all_entities
+    return append_avg_footer_row(df=all_entities, id_col_values=footer_ids)
 
 
 def build_entity_impact_df(*, current_df: pd.DataFrame, article_f1_df: pd.DataFrame) -> pd.DataFrame:
@@ -2637,29 +2497,6 @@ def choose_mode_by_gkbid(*, df: pd.DataFrame, value_col: str) -> pd.DataFrame:
     return counts.drop_duplicates(subset=['gkbid'], keep='first')[['gkbid', value_col]]
 
 
-def build_article_f1_diff_avg_stats(*, df: pd.DataFrame, limit: int) -> pd.DataFrame:
-    """Build three-row average stats table from article F1 deltas."""
-    top_improving = df[df['f1_diff'] > 0].nlargest(limit, 'f1_diff')
-    top_decreasing = df[df['f1_diff'] < 0].nsmallest(limit, 'f1_diff')
-    rows = [
-        article_avg_row(segment='top_1000_improving_articles', df=top_improving),
-        article_avg_row(segment='top_1000_decreasing_articles', df=top_decreasing),
-        article_avg_row(segment='all_articles', df=df),
-    ]
-    return pd.DataFrame(rows)
-
-
-def article_avg_row(*, segment: str, df: pd.DataFrame) -> dict[str, Any]:
-    """Build one row of numeric mean stats for an article subset."""
-    row: dict[str, Any] = {'segment': segment, 'article_count': int(len(df))}
-    numeric_cols = [
-        col for col in ('f1_current', 'f1_base', 'f1_diff', 'article_length') if col in df.columns
-    ]
-    for col in numeric_cols:
-        row[col] = float(pd.to_numeric(df[col], errors='coerce').mean()) if not df.empty else float('nan')
-    return row
-
-
 def append_avg_footer_row(*, df: pd.DataFrame, id_col_values: Mapping[str, str]) -> pd.DataFrame:
     """Append one footer row with numeric means and fixed identifier labels."""
     footer: dict[str, Any] = {**id_col_values}
@@ -2681,48 +2518,6 @@ def entity_impact_columns() -> list[str]:
         'article_count',
         'normalized',
     ]
-
-
-# ---------------------------------------------------------------------------
-# Hamming loss
-# ---------------------------------------------------------------------------
-
-def build_hamming_df(
-    *,
-    current_df: pd.DataFrame,
-    base_df: pd.DataFrame,
-    gold_map: GoldLabelMap,
-    cat_ids: Sequence[str],
-    current_thr_vec: np.ndarray,
-    base_thr_vec: np.ndarray,
-) -> pd.DataFrame:
-    """Build current/base Hamming loss comparison.
-
-    :param current_thr_vec: Per-class threshold vector for the current run.
-    :param base_thr_vec: Per-class threshold vector for the base run.
-    """
-    article_ids = list(current_df['article_id'])
-    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
-    current_loss = compute_hamming(df=current_df, cat_ids=cat_ids, thr_vec=current_thr_vec, gold_matrix=gold_matrix)
-    base_loss = compute_hamming(df=base_df, cat_ids=cat_ids, thr_vec=base_thr_vec, gold_matrix=gold_matrix)
-    return pd.DataFrame(
-        [{'metric': 'hamming_loss', 'current': current_loss, 'base': base_loss, 'diff': current_loss - base_loss}]
-    )
-
-
-def compute_hamming(
-    *,
-    df: pd.DataFrame,
-    cat_ids: Sequence[str],
-    thr_vec: np.ndarray,
-    gold_matrix: np.ndarray,
-) -> float:
-    """Compute Hamming loss for one aligned probability table.
-
-    :param thr_vec: Per-class threshold vector aligned with ``cat_ids``.
-    """
-    pred_matrix = build_pred_matrix(df=df, cat_ids=cat_ids, thr_vec=thr_vec).astype(np.int8)
-    return float(hamming_loss(gold_matrix, pred_matrix))
 
 
 # ---------------------------------------------------------------------------
@@ -2797,6 +2592,15 @@ def build_pr_auc_summary_df(
             aggregation='macro_all',
             current=_safe_mean(values=pr_auc_df['pr_auc_current']),
             base=_safe_mean(values=pr_auc_df['pr_auc_base']),
+        )
+    )
+    tail_mask = pr_auc_df['positive_support'] < MACRO_HEAD_MIN_SUPPORT
+    tail_sub = pr_auc_df[tail_mask]
+    rows.append(
+        _pr_auc_row(
+            aggregation='macro_tail',
+            current=_safe_mean(values=tail_sub['pr_auc_current']),
+            base=_safe_mean(values=tail_sub['pr_auc_base']),
         )
     )
     rows.append(

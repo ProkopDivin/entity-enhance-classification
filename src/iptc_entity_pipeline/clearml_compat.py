@@ -31,6 +31,16 @@ try:
             except _MissingConfigError:
                 return None
 
+        @staticmethod
+        def init(*args: Any, **kwargs: Any) -> Any:
+            """Delegate to ClearML ``Task.init`` for remote component execution."""
+            return _Task.init(*args, **kwargs)
+
+        @staticmethod
+        def get_task(*args: Any, **kwargs: Any) -> Any:
+            """Delegate to ClearML ``Task.get_task`` for remote component execution."""
+            return _Task.get_task(*args, **kwargs)
+
     class PipelineDecorator:
         """PipelineDecorator proxy with runtime local bypass support."""
 

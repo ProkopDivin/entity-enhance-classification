@@ -23,8 +23,7 @@ Defined in `src/iptc_entity_pipeline/config.py` (`DebugCnf`):
 ### Prerequisites
 
 - Python 3.10+
-- ClearML credentials configured in your environment
-
+- ClearML installed and credentials configured only for non-local pipeline mode
 - Internal `geneea` packages
 
 ### Run
@@ -39,11 +38,18 @@ pip install -e .
 python3 -m iptc_entity_pipeline.run_pipeline --local --config debug
 ```
 
+`--local` runs even when `clearml` is not installed.
+Non-local mode still requires ClearML:
+
+```bash
+python3 -m iptc_entity_pipeline.run_pipeline --config debug
+```
+
 
 ### Output
 
 - Progress is logged to the terminal (6 pipeline stages).
-- Metrics are reported to the ClearML task.
+- Metrics are reported to ClearML when running with ClearML available.
 - Saved model and evaluation artifacts are written under
   `results/saved_models/debug_<timestamp>/` (model weights, thresholds, test tables).
 
@@ -58,9 +64,10 @@ pip install -e .
 
 Notes:
 
-
-  environment before running training.
+- Install `clearml` and configure credentials only when you run non-local queue mode.
 - ClearML agent/execution queue configuration is expected in your environment.
+
+## Setup Clearml 
 
 
 ## Wikipedia2Vec Embedding Prefetch

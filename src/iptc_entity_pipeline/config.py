@@ -93,7 +93,7 @@ class TrainingCnf:
     # 0 = disabled. When > 0, monitors dev loss, stops after this many epochs
     # without improvement, and restores the best weights.
     early_stopping_patience: int = 5
-    early_stopping_min_delta: float = 0.0000000001 # because of small classes the improvement can be very small
+    early_stopping_min_delta: float = 0.000000001 # because of small classes the improvement can be very small
     # because the validation set is different than test set - not splited chronologically 
     # we do not want to overfit it - not expecting all the articles be the same
     early_stopping_metric: Literal['loss', 'f1'] = 'loss'

@@ -189,9 +189,6 @@ def export_eval_excel(
             comparison_result.top_degraded_categories.to_excel(
                 excel_writer=writer, sheet_name='comparison_top_down', index=False,
             )
-            comparison_result.hamming_loss_comparison.to_excel(
-                excel_writer=writer, sheet_name='comparison_hamming', index=False,
-            )
             comparison_result.pr_auc_per_class.to_excel(
                 excel_writer=writer, sheet_name='comparison_pr_auc', index=False,
             )

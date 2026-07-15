@@ -9,6 +9,7 @@ description = 'ClearML pipeline for entity-enhanced IPTC multi-label classificat
 readme = 'README.md'
 requires-python = '>=3.10'
 dependencies = [
+    'geneea==0.1.0',
     'clearml~=1.16',
     'dill~=0.3',
     'numpy~=1.26',
@@ -39,7 +40,6 @@ where = ['src']
 
 [tool.setuptools.package-data]
 'iptc_entity_pipeline.resources' = ['*.yaml']
-'geneea.mediacats.resources' = ['iptc-topics.json']
 
 [tool.pytest.ini_options]
 testpaths = ['tests']
