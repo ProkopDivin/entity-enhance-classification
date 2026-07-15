@@ -85,7 +85,9 @@ from entity_embeddings.constants import (
     DEFAULT_JINA_TASK,
     DEFAULT_JINA_VARIANT,
     DEFAULT_OUT_DIR,
+    DEFAULT_SPARQL_ACCEPT,
     DEFAULT_SPARQL_URL,
+    DEFAULT_SPARQL_USER_AGENT,
     DEFAULT_SVC_EMBED_DIM,
     DEFAULT_TEXT_DIR,
 )
@@ -163,10 +165,21 @@ Jina tasks (--task):
     )
     argparser.add_argument(
         '--ids',
+        '--ids-path',
+        dest='ids',
         default=None,
-        help='QID list file (one QID per line). Required for wikidata mode; optional filter for files mode.',
+        help=(
+            'QID list file path (one QID per line). '
+            'Required for wikidata mode (defaults to data/gold-chrono-per-dataset/wdId_ids.txt); '
+            'optional filter for files mode.'
+        ),
     )
     argparser.add_argument('--sparql-url', default=DEFAULT_SPARQL_URL, help='SPARQL endpoint URL.')
+    argparser.add_argument(
+        '--sparql-user-agent',
+        default=DEFAULT_SPARQL_USER_AGENT,
+        help='User-Agent for SPARQL requests. Wikidata may return 403 when this header is missing.',
+    )
     argparser.add_argument('--embed-svc-url', default=DEFAULT_EMBED_SVC_URL, help='Embedding service URL.')
     argparser.add_argument(
         '--svc-embedding-dim',
@@ -257,6 +270,16 @@ def main() -> int:
     )
 
     sparql = UrlSparqlService(args.sparql_url)
+    sparql_session = getattr(sparql, 'session', None)
+    if sparql_session is not None and hasattr(sparql_session, 'headers'):
+        sparql_session.headers.update(
+            {
+                'Accept': DEFAULT_SPARQL_ACCEPT,
+                'User-Agent': args.sparql_user_agent,
+            }
+        )
+    else:
+        LOG.warning('SPARQL client has no writable session headers; custom User-Agent was not applied')
     saved_count, missing_count = compute_description_embeddings(
         qids=qids,
         langs=langs,

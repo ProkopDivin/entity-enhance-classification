@@ -713,7 +713,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     :return: Configured argument parser.
     """
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
-    parser.add_argument('--ids', default=DEFAULT_IDS_PATH, help='QID list file (one QID per line).')
+    parser.add_argument(
+        '--ids',
+        '--ids-path',
+        dest='ids',
+        default=DEFAULT_IDS_PATH,
+        help='QID list file path (one QID per line).',
+    )
     parser.add_argument('--out-dir', default=DEFAULT_OUT_DIR, help='Output directory for per-entity files.')
     parser.add_argument('--model-dir', default=DEFAULT_MODEL_DIR, help='Directory caching the downloaded model.')
     parser.add_argument(
