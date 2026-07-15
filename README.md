@@ -74,14 +74,7 @@ pip install --find-links=wheels -e .
 The `--find-links=wheels` flag tells pip to look in the `wheels/` directory for the
 bundled `geneea` dependency (a pure Python wheel shipped with this repo).
 
-Notes:
-
-- Install `clearml` and configure credentials only when you run non-local queue mode.
-- ClearML agent/execution queue configuration is expected in your environment.
-
-
-
-## ClearML Setup(optional)
+## ClearML Setup (optional)
 
 ClearML is **optional**. The pipeline runs fully offline with the `--local` flag -- no
 ClearML server, credentials, or agent required. Use `--local` for development, debugging,
@@ -318,8 +311,8 @@ PYTHONPATH=data-preprocessing/src:src python -m entity_embeddings.wikipedia2vec 
 Requires internet access and several GB of free disk. Use `--skip-download` if the model  
 is already present, and `--titles-only` to resolve Wikidata titles without computing  
 vectors. For multiple languages, provide per-language model URLs/names/dump dates via  
-`--model-url-map`, `--model-name-map`, and `--dump-date-map` (see  
-`docs/wikipedia2vec_entity_embeddings.md`).
+`--model-url-map`, `--model-name-map`, and `--dump-date-map` (run
+`python -m entity_embeddings.wikipedia2vec --help` for details).
 
 Warning: `entity_embeddings.wikipedia2vec` may repeatedly log `Wikidata maxlag=...` and pause for 30s when Wikidata replicas are overloaded. This is a temporary upstream API throttling condition (not invalid QIDs). The command is retrying automatically and may take significantly longer, or require rerunning later when Wikidata load is lower.
 

@@ -17,37 +17,19 @@ This README explains all Python and Bash scripts in `data-preprocessing`, what t
 - **Outputs:** `stats.md` and one `.tsv` date list per input file.
 - **Example:** `python3 analyze_jsonl_stats.py origin-corpora`
 
-### `filter_valid_dates.py`
-- **Purpose:** Keep only articles with valid dates in `metadata.date`.
-- **Use when:** You want to remove undated/invalid-dated articles before chronological splitting.
-- **Outputs:** Filtered `*.jsonl.gz` files in output directory.
-- **Example:** `python3 filter_valid_dates.py origin-corpora -o origin-corpora-filtred`
-
 ### `create_splits.py`
-- **Purpose:** Build chronological train/dev/test splits from `*.jsonl.gz`.
+- **Purpose:** Build chronological train/test splits from `*.jsonl.gz`.
 - **Use when:** You need either:
   - `global` split (all datasets mixed then split by time), or
   - `per-dataset` split (each dataset split independently by time).
-- **Outputs:** `<dataset>.train/dev/test.analysis.jsonl.gz` and `articles_without_dates.txt`.
-- **Example:** `python3 create_splits.py origin-corpora-filtred -o chrono-corpora-global --split-type global`
-
-### `create_new_splits.py`
-- **Purpose:** Analyze date-based split proportions and visualize original vs newly computed split distributions.
-- **Use when:** You want diagnostics/inspection of split behavior, not production split files.
-- **Outputs:** `split_distributions.png`, `articles_without_dates.txt`.
-- **Example:** `python3 create_new_splits.py origin-corpora-filtred -o split-debug`
+- **Outputs:** `<dataset>.train/test.analysis.jsonl.gz` and `articles_without_dates.txt`.
+- **Example:** `python3 create_splits.py origin-corpora-filtred -o chrono-corpora-global --split global`
 
 ### `visualize_splits.py`
 - **Purpose:** Plot comparisons between original and generated split distributions.
 - **Use when:** You already generated `global_chronological` / `per_dataset_chronological` and want visual QA.
 - **Outputs:** `split_distributions_global.png`, `split_distributions_per_dataset.png`.
 - **Example:** `python3 visualize_splits.py origin-corpora-filtred -s . -o plots`
-
-### `plot_monthly_stats.py`
-- **Purpose:** Plot monthly article counts from `*.jsonl.tsv`.
-- **Use when:** You need timeline plots by dataset and combined timeline chart.
-- **Outputs:** One `.png` per `.jsonl.tsv` and `combined_datasets.png`.
-- **Example:** `python3 plot_monthly_stats.py chrono-corpora-global`
 
 ### `analyze_splits.py`
 - **Purpose:** Compare two CSV split directories (dataset mix, categories, entities, article length).
@@ -73,19 +55,27 @@ This README explains all Python and Bash scripts in `data-preprocessing`, what t
 - **Outputs:** Per-corpus `*_tables.tex`, `all_corpora_summary_basic.tex`, `all_corpora_aggregated.tex`, plus optional `*_missing_entities.txt`.
 - **Example:** `python3 describe_corpora.py origin-downsampled-nl -o origin-downsampled-nl/macro-tables`
 
-### `read_csv_sample.py`
-- **Purpose:** Quick diagnostic script printing first 100-row stats from one CSV.
-- **Use when:** You need a fast sanity check of lengths/categories/entities in a sample.
-- **Notes:** Path is currently hardcoded inside the script.
+### `extract_entities_date.py`
+- **Purpose:** Extract entities with date information from corpus files.
+- **Use when:** You need entity-date associations from the source corpora.
+- **Example:** `python3 extract_entities_date.py --help`
 
-### `corpora-iptc-patches/translateIds.py`
-- **Purpose:** Translate publisher IDs to standardized IDs in TSV using a mapping CSV.
-- **Use when:** Patch or metadata files need ID normalization before downstream processing.
-- **Example:** `python3 corpora-iptc-patches/translateIds.py -i in.tsv -m map.csv -o out.tsv`
+### `analyze_article_duplicates.py`
+- **Purpose:** Detect and report duplicate articles across corpus files.
+- **Use when:** You need to check for data duplication before training.
+- **Example:** `python3 analyze_article_duplicates.py --help`
 
-### `origin-corpora/backup/extract_entities.py` (backup/legacy)
-- **Purpose:** Extract `article_id -> entities` from `*analysis*.jsonl.gz` and convert `gkbId` to `wdId`.
-- **Use when:** You need to regenerate entity TSV and this backup script version is the intended one.
-- **Outputs:** TSV with columns `article_id`, `entities`.
-- **Example:** `python3 origin-corpora/backup/extract_entities.py origin-corpora -o article_2_entities.tsv`
+### `analyze_silver_distributions.py`
+- **Purpose:** Analyze label distributions in silver-standard (auto-annotated) corpora.
+- **Use when:** You need distribution diagnostics on silver data.
+- **Example:** `python3 analyze_silver_distributions.py --help`
 
+### `entity_wordclouds.py`
+- **Purpose:** Generate word clouds from entity mentions in corpus files.
+- **Use when:** You need visual summaries of entity distributions.
+- **Example:** `python3 entity_wordclouds.py --help`
+
+### `category_split_analysis.py`
+- **Purpose:** Analyze category distributions across train/test splits.
+- **Use when:** You need to verify category balance after splitting.
+- **Example:** `python3 category_split_analysis.py --help`

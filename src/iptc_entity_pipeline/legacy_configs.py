@@ -640,7 +640,7 @@ class GoldOriginWikipedia2VecEntityOnlyCnf(Wikipedia2VecEntityOnlyCnf):
 
     paths: PathsCnf = field(
         default_factory=lambda: _gold_origin_paths(
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec',
         )
     )
 @dataclass(frozen=True)
@@ -703,7 +703,7 @@ class GoldOriginWikipedia2VecEntitiesCnf(Wikipedia2VecEntitiesCnf):
 
     paths: PathsCnf = field(
         default_factory=lambda: _gold_origin_paths(
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec',
         )
     )
 @dataclass(frozen=True)

@@ -97,7 +97,7 @@ For entity features, the pipeline:
 - Combines the pooled entity vector with the article vector when both are enabled.
 - Converts the resulting matrices into the legacy `EmbeddingDataset` format.
 
-The default entity pooling is `sum`, and the default article/entity combination
+The default entity pooling is `mean`, and the default article/entity combination
 method is `concat`.
 
 ### 4. Cross-Validation
@@ -114,15 +114,17 @@ Default CV setup:
 - Folds: `5`
 - Random seed: `43`
 - Sampler: `grid`
-- Objective: `All-datapoint`
+- Objective: `All_micro`
 
 ### 5. Train Final Model
 
 Component: `train_best`
 
 The final model is trained on the full train dataset using the best
-hyperparameters from cross-validation. The test dataset is passed as the
-validation split for final training logs and curves.
+hyperparameters from cross-validation. No test data is passed during final
+training — the training loop monitors the train set itself for per-epoch
+curves. Early stopping is disabled for this stage to prevent any influence
+of test data on model selection.
 
 The model architecture and training loop are implemented through the reused
 legacy IPTC training path, wrapped by `src/iptc_entity_pipeline/training.py`.
@@ -219,8 +221,8 @@ Common config names:
 - `wikipedia2vec_entities`: Wikipedia2Vec entity embedding directory.
 - `wikipedia2vec_entities_all_langs`: multilingual Wikipedia2Vec embeddings.
 - `wikidata_description_entities`: Wikidata description embeddings.
-- `best_wpentities`: narrowed best-known hyperparameter space for entity-enhanced runs.
-- `best_article_only`: narrowed best-known hyperparameter space for article-only runs.
+- `wpentities_tuned`: entity-enhanced with per-class threshold tuning enabled.
+- `best_article_only_tuned`: narrowed best-known hyperparameter space for article-only runs with threshold tuning.
 
 Print all supported names from the CLI help:
 

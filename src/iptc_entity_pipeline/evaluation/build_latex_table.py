@@ -29,7 +29,7 @@ are bolded.
 
 Example::
 
-    python -m iptc_entity_pipeline.build_latex_table results/comparisons
+    python -m iptc_entity_pipeline.evaluation.build_latex_table results/comparisons
 
 Flat bundle (CSV files next to the path you pass)::
 
