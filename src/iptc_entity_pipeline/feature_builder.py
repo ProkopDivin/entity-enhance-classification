@@ -24,6 +24,7 @@ class FeatureBuildStats:
     unique_missing_wdids: frozenset[str]
     total_found_embeddings: int
     total_missing_embeddings: int
+    total_unmapped_entities: int
     entity_dim: int
     max_found_embeddings_per_article: int
     p99_found_embeddings_per_article: int
@@ -46,6 +47,7 @@ class _BuildTracking:
     unique_missing_wdids: set[str]
     total_found_embeddings: int
     total_missing_embeddings: int
+    total_unmapped_entities: int
     found_embeddings_per_article: list[int]
     articles_without_linked_entities: int
 
@@ -110,6 +112,7 @@ class FeatureBuilder:
             unique_missing_wdids=set(),
             total_found_embeddings=0,
             total_missing_embeddings=0,
+            total_unmapped_entities=0,
             found_embeddings_per_article=[],
             articles_without_linked_entities=0,
         )
@@ -118,12 +121,14 @@ class FeatureBuilder:
     def _update_log(*, doc_id: str, pooling_result: Any, tracking: _BuildTracking) -> None:
         """Update per-corpus counters and emit per-document diagnostics."""
         wdids = list(pooling_result.requested_wdids)
-        if not wdids:
+        unmapped = pooling_result.unmapped_entities
+        if not wdids and unmapped == 0:
             LOGGER.warning('No linked entities for article_id=%s', doc_id)
 
         tracking.unique_requested_wdids.update(wdids)
         tracking.total_found_embeddings += pooling_result.found_embeddings
         tracking.total_missing_embeddings += pooling_result.missing_embeddings
+        tracking.total_unmapped_entities += unmapped
         tracking.unique_missing_wdids.update(pooling_result.missing_wdids)
         tracking.found_embeddings_per_article.append(int(pooling_result.found_embeddings))
 
@@ -134,7 +139,13 @@ class FeatureBuilder:
                 doc_id,
                 ', '.join(unique_missing_wdids),
             )
-        if not wdids:
+        if unmapped > 0:
+            LOGGER.warning(
+                'Unmapped entities (gkbId not in wdId mapping) for article_id=%s: %d',
+                doc_id,
+                unmapped,
+            )
+        if not wdids and unmapped == 0:
             tracking.articles_without_linked_entities += 1
 
     def _final_message(self, *, tracking: _BuildTracking, total_docs: int) -> str:
@@ -150,6 +161,7 @@ class FeatureBuilder:
         articles_without_linked_entities_pct = (
             (articles_without_linked_entities / total_docs * 100) if total_docs else 0.0
         )
+        unmapped = tracking.total_unmapped_entities
         return (
             'Entity embedding final stats: '
             f'unique_missing={unique_missing_entities} '
@@ -161,6 +173,7 @@ class FeatureBuilder:
             f'avg_found_per_article={avg_found_per_article:.4f} '
             f'max_found_per_article={max_found_per_article} '
             f'p99_found_per_article={p99_found_per_article} '
+            f'unmapped_entities={unmapped} '
             f'articles_without_linked_entities={articles_without_linked_entities} '
             f'articles_without_linked_entities_pct={articles_without_linked_entities_pct:.4f}%'
         )
@@ -245,6 +258,7 @@ class FeatureBuilder:
             unique_missing_wdids=frozenset(tracking.unique_missing_wdids),
             total_found_embeddings=tracking.total_found_embeddings,
             total_missing_embeddings=tracking.total_missing_embeddings,
+            total_unmapped_entities=tracking.total_unmapped_entities,
             entity_dim=int(entity_dim),
             max_found_embeddings_per_article=max(tracking.found_embeddings_per_article, default=0),
             p99_found_embeddings_per_article=self._p99_count(values=tracking.found_embeddings_per_article),
@@ -295,6 +309,7 @@ class FeatureBuilder:
             unique_missing_wdids=frozenset(tracking.unique_missing_wdids),
             total_found_embeddings=tracking.total_found_embeddings,
             total_missing_embeddings=tracking.total_missing_embeddings,
+            total_unmapped_entities=tracking.total_unmapped_entities,
             entity_dim=int(entity_dim),
             max_found_embeddings_per_article=max(tracking.found_embeddings_per_article, default=0),
             p99_found_embeddings_per_article=self._p99_count(values=tracking.found_embeddings_per_article),

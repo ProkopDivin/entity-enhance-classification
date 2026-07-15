@@ -594,6 +594,16 @@ def get_doc_wdids(doc: DocWithEntities) -> list[str]:
     return [wd_id for ent in doc.entities for wd_id in ent.wd_ids]
 
 
+def count_unmapped_entities(doc: DocWithEntities) -> int:
+    """
+    Count entities whose gkbId was not found in the wdId mapping.
+
+    :param doc: Corpus document with attached :class:`LinkedEntity` objects.
+    :return: Number of entities with empty ``wd_ids``.
+    """
+    return sum(1 for ent in doc.entities if not ent.wd_ids)
+
+
 def get_doc_weighted_wdids(doc: DocWithEntities) -> list[tuple[str, float]]:
     """
     Extract ``(wdId, weight)`` pairs from ``doc.entities``.

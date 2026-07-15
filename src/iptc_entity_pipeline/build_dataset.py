@@ -35,6 +35,7 @@ class EntityEmbeddingStats:
     linked_unique_wdids: int = 0
     found_embeddings: int = 0
     missing_embeddings: int = 0
+    unmapped_entities: int = 0
     max_found_embeddings_per_article: int = 0
     p99_found_embeddings_per_article: int = 0
 
@@ -150,11 +151,13 @@ def report_ent_stats(
     found_cnt = total_wdids - missing_cnt
     entity_dim = stats.entity_dim
     linked_ratio = (found_cnt / total_wdids) if total_wdids else 0.0
+    unmapped_cnt = stats.total_unmapped_entities
     summary_message = (
         'Entity linking summary: '
         f'linked_unique={total_wdids} '
         f'linked_with_embedding={found_cnt} '
         f'unlinked_missing_embedding={missing_cnt} '
+        f'unmapped_entities={unmapped_cnt} '
         f'coverage={linked_ratio:.4f} '
         f'entity_dim={entity_dim} '
         f'max_found_per_article={stats.max_found_embeddings_per_article} '
@@ -169,6 +172,7 @@ def report_ent_stats(
         linked_unique_wdids=total_wdids,
         found_embeddings=found_cnt,
         missing_embeddings=missing_cnt,
+        unmapped_entities=unmapped_cnt,
         max_found_embeddings_per_article=stats.max_found_embeddings_per_article,
         p99_found_embeddings_per_article=stats.p99_found_embeddings_per_article,
     )

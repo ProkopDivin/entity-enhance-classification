@@ -10,7 +10,12 @@ from iptc_entity_pipeline.entity_embeddings import EntityEmbeddingStore
 from iptc_entity_pipeline.data_loading import DocWithEntities
 import numpy as np
 
-from iptc_entity_pipeline.data_loading import get_doc_wdid_mention_counts, get_doc_wdids, get_doc_weighted_wdids
+from iptc_entity_pipeline.data_loading import (
+    count_unmapped_entities,
+    get_doc_wdid_mention_counts,
+    get_doc_wdids,
+    get_doc_weighted_wdids,
+)
 
 
 def _unit_weighted_wdids(*, doc: DocWithEntities) -> list[tuple[str, float]]:
@@ -65,6 +70,7 @@ class EntityPoolingResult:
     missing_wdids: tuple[str, ...]
     found_embeddings: int
     missing_embeddings: int
+    unmapped_entities: int
 
 
 class EntityPoolingStrategy(ABC):
@@ -100,6 +106,7 @@ class EntityPoolingStrategy(ABC):
         """
         weighted_wdids = self._get_weighted_wdids(doc=doc)
         requested_wdids = tuple(wd_id for wd_id, _ in weighted_wdids)
+        unmapped = count_unmapped_entities(doc)
 
         entity_embeddings: list[np.ndarray] = []
         entity_weights: list[float] = []
@@ -126,6 +133,7 @@ class EntityPoolingStrategy(ABC):
             missing_wdids=tuple(missing_wdids),
             found_embeddings=len(entity_embeddings),
             missing_embeddings=len(missing_wdids),
+            unmapped_entities=unmapped,
         )
         
 
