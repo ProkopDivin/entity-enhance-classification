@@ -110,10 +110,13 @@ def select_thresholds_by_f1(
     def score(stats: Any) -> float:
         return float(stats.fmeasure(beta=f_beta))
 
-    return {
-        cat: max(d.items(), key=lambda kv: score(kv[1]))
-        for cat, d in cat_to_thr_stats.items()
-    }
+    result: dict[str, tuple[float, Any]] = {}
+    for cat, d in cat_to_thr_stats.items():
+        best_thr, best_stats = max(d.items(), key=lambda kv: score(kv[1]))
+        if score(best_stats) <= 0.0:
+            continue
+        result[cat] = (best_thr, best_stats)
+    return result
 
 
 def tune_thresholds(

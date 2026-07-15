@@ -439,7 +439,7 @@ class W2VEntityOnlyCnf(BaseCnfWithHPO):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec',
         )
     )
 
@@ -517,7 +517,7 @@ class WPEntitiesAllLangsCnf(PreBaseCnfWithHPO):
 
 @dataclass(frozen=True)
 class WPEntitiesRelTH(BaseCnf):
-    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    """Entity-enhanced configuration with English entity embeddings and relevance threshold 0.0."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
             EmbeddingCnf(),
@@ -538,7 +538,7 @@ class WPEntitiesRelTH(BaseCnf):
 
 @dataclass(frozen=True)
 class WPEntitiesRelTH5(BaseCnfWithHPO):
-    """Entity-enhanced configuration with English, German and Czech entity embeddings."""
+    """Entity-enhanced configuration with English entity embeddings and relevance threshold 5.0."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
             EmbeddingCnf(),
@@ -550,7 +550,7 @@ class WPEntitiesRelTH5(BaseCnfWithHPO):
     
 @dataclass(frozen=True)
 class WPEntitiesNlCnf(PreBaseCnfWithHPO):
-    """Entity-enhanced configuration with English and Dutch entity embeddings."""
+    """Entity-enhanced configuration with Dutch entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(
             EmbeddingCnf(),
@@ -668,8 +668,8 @@ def _resolve_assembly(*, assembly: AssemblyCnf, root_path: Path) -> AssemblyCnf:
 class WpEntitiesTunedCnf(PreBaseCnfWithHPO):
     """Best entity-enhanced config with per-class threshold tuning enabled.
 
-    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
-    and per-class thresholds are aggregated by mean across folds, then reused
+    The dev folds are scanned over a 9-point grid (0.25..0.65 by 0.05) and
+    per-class thresholds are aggregated by mean across folds, then reused
     when evaluating the final model on test.
     """
 
@@ -693,10 +693,10 @@ class BestWpEntitiesTunedCnf(BaseCnfWithHPO):
 
 @dataclass(frozen=True)
 class WpEntitiesTunedF1Cnf(PreBaseCnfWithHPO):
-    """Best entity-enhanced config with per-class threshold tuning enabled.
+    """Entity-enhanced config with per-class threshold tuning and F1 early stopping.
 
-    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
-    and per-class thresholds are aggregated by mean across folds, then reused
+    The dev folds are scanned over a 9-point grid (0.25..0.65 by 0.05) and
+    per-class thresholds are aggregated by mean across folds, then reused
     when evaluating the final model on test.
     """
 
@@ -707,10 +707,10 @@ class WpEntitiesTunedF1Cnf(PreBaseCnfWithHPO):
 
 @dataclass(frozen=True)
 class WpEntitiesPmmTunedCnf(BaseCnfWithHPO):
-    """Best entity-enhanced config with per-class threshold tuning enabled.
+    """Entity-enhanced config using PMM entity embeddings.
 
-    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
-    and per-class thresholds are aggregated by mean across folds, then reused
+    The dev folds are scanned over a 9-point grid (0.25..0.65 by 0.05) and
+    per-class thresholds are aggregated by mean across folds, then reused
     when evaluating the final model on test.
     """
     paths: PathsCnf = field(
@@ -723,12 +723,7 @@ class WpEntitiesPmmTunedCnf(BaseCnfWithHPO):
 
 @dataclass(frozen=True)
 class WpEntitiesPmmTunedOnlyCnf(WpEntitiesPmmTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled.
-
-    The dev folds are scanned over a 17-point sigmoid grid (0.10..0.90 by 0.05)
-    and per-class thresholds are aggregated by mean across folds, then reused
-    when evaluating the final model on test.
-    """
+    """PMM entity embeddings without article embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), use_article_embeddings=False)
     )
@@ -933,7 +928,7 @@ class WPEntitiesPmmAttentionHPOCnf(WpEntitiesPmmTunedCnf):
     
 @dataclass(frozen=True)
 class WikipediaArticleEntitiesCnf(BaseCnfWithHPO):
-    """Entity-enhanced configuration using Wikidata description embeddings."""
+    """Entity-enhanced configuration using full Wikipedia article embeddings."""
 
     paths: PathsCnf = field(
         default_factory=lambda: replace(
@@ -976,7 +971,7 @@ class Wikipedia2VecEntitiesCnf(BaseCnfWithHPO):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec',
         )
     )
     
@@ -1153,7 +1148,7 @@ class Wikipedia2VecEntitiesAllLangsCnf(PreBaseCnfWithHPO):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec',
         )
     )
     emb: EmbeddingCnf = field(
@@ -1166,7 +1161,7 @@ class BestWikipedia2VecEntitiesCnf(PreBaseCnfWithHPO):
     paths: PathsCnf = field(
         default_factory=lambda: replace(
             PathsCnf(),
-            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec_old',
+            entity_embeddings_dir=f'{DATA_ROOT}/entity_embeddings/wikipedia2vec',
         )
     )
     hparam: HyperparamSpace = field(default_factory=lambda: replace(
@@ -1257,7 +1252,7 @@ class WikidataDescriptionEntitiesCnf(BaseCnfWithHPO):
 
 @dataclass(frozen=True)
 class WikipediaIntroEntitiesCnf(BaseCnfWithHPO):
-    """Entity-enhanced configuration using Wikidata description embeddings."""
+    """Entity-enhanced configuration using Wikipedia intro text embeddings."""
 
     paths: PathsCnf = field(
         default_factory=lambda: replace(
@@ -1618,63 +1613,63 @@ class DebugMhaAttention2Cnf(DebugCnf):
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedAllLangsCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with all supported entity languages."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS)
     )
     
 @dataclass(frozen=True)
 class BWpEntitiesTunedCsCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with Czech entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('cs',))
     )
     
 @dataclass(frozen=True)
 class BWpEntitiesTunedDeCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with German entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('de',))
     )
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedNlCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with Dutch entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('nl',))
     )
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedFrCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with French entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('fr',))
     )
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedEsCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with Spanish entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('es',))
     )
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedEnCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with English entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en',))
     )
     
 @dataclass(frozen=True)
 class BWpEntitiesTunedEnDeCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with German and English entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('de','en'))
     )
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedEnNlCnf(BestWpEntitiesTunedCnf):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with Dutch and English entity embeddings."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('nl','en'))
     )  
@@ -1683,14 +1678,14 @@ class BWpEntitiesTunedEnNlCnf(BestWpEntitiesTunedCnf):
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedAllLangsFallbackCnf(BaseCnfWithHPO):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with all languages in fallback mode."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS, entity_lang_mode='fallback')
     )
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedAllLangsFallbackAttentionCnf(BaseCnfWithHPO):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with all languages in fallback mode and attention pooling."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=ALL_ENTITY_LANGS, entity_lang_mode='fallback', entity_pooling='no_pooling')
     )
@@ -1716,28 +1711,28 @@ class BWpEntitiesTunedAllLangsFallbackAttentionCnf(BaseCnfWithHPO):
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedEnFallbackCnf(BaseCnfWithHPO):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with English in fallback mode."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en',), entity_lang_mode='fallback')
     )
     
 @dataclass(frozen=True)
 class BWpEntitiesTunedEnDeFallbackCnf(BaseCnfWithHPO):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with English and German in fallback mode."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en', 'de'), entity_lang_mode='fallback')
     )
 
 @dataclass(frozen=True)
 class BWpEntitiesTunedNlEnFallbackCnf(BaseCnfWithHPO):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with Dutch and English in fallback mode."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('nl','en'), entity_lang_mode='fallback')
     )  
     
 @dataclass(frozen=True)
 class BWpEntitiesTunedEnNlFallbackCnf(BaseCnfWithHPO):
-    """Best entity-enhanced config with per-class threshold tuning enabled and all languages."""
+    """Best entity-enhanced config with English and Dutch in fallback mode."""
     emb: EmbeddingCnf = field(
         default_factory=lambda: replace(EmbeddingCnf(), entity_langs=('en','nl'), entity_lang_mode='fallback')
     )  

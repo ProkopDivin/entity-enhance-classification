@@ -586,8 +586,8 @@ def train_best(
     if test_data is not None:
         test_data.load_temporary()
     monitor_data = test_data if test_data is not None else train_data
-    curve_label = 'test' if test_data is not None else 'dev'
-    validation_split_name = 'test' if test_data is not None else 'dev'
+    curve_label = 'test' if test_data is not None else 'train'
+    validation_split_name = 'test' if test_data is not None else 'train'
     logger.info(
         f'Training final model: hidden_dim={model_cfg.hidden_dim}, '
         f'dropouts=({model_cfg.dropouts1}, {model_cfg.dropouts2}), '

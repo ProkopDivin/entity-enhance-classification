@@ -45,9 +45,9 @@ class CoreMetricAccumulator:
     def append_core_metrics(self, *, data_count: int, stats: Any, digits: int = 3) -> None:
         """Append one row of P/R/F1 derived from a stats object (AvgData or ClassData)."""
         self.data_count.append(data_count)
-        self.precision.append(round(stats.precision, digits))
-        self.recall.append(round(stats.recall, digits))
-        self.f1.append(round(stats.fmeasure(beta=1), digits))
+        self.precision.append(float(stats.precision))
+        self.recall.append(float(stats.recall))
+        self.f1.append(float(stats.fmeasure(beta=1)))
 
 
 @dataclass
@@ -490,7 +490,7 @@ def aggregate_fold_dfs(
 
     Every numeric column gets a mean column (under the original name, so the
     output is shape-compatible with ``eval_final``'s test tables) and a
-    ``<col>_std`` companion column (population std across folds). Non-numeric
+    ``<col>_std`` companion column (sample std across folds, ddof=1). Non-numeric
     columns listed in ``keep_columns`` are passed through from the first
     fold. The output is row-aligned with the union of fold indices.
 
@@ -517,7 +517,7 @@ def aggregate_fold_dfs(
     for col in numeric_cols:
         stacked = pd.concat([df[col] for df in aligned], axis=1)
         out_data[col] = stacked.mean(axis=1, skipna=True).tolist()
-        out_data[f'{col}_std'] = stacked.std(axis=1, ddof=0, skipna=True).tolist()
+        out_data[f'{col}_std'] = stacked.std(axis=1, ddof=1, skipna=True).tolist()
 
     out = pd.DataFrame(out_data, index=union_index)
     out.index.name = first.index.name

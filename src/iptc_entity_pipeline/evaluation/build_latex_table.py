@@ -33,7 +33,7 @@ Example::
 
 Flat bundle (CSV files next to the path you pass)::
 
-    python -m iptc_entity_pipeline.build_latex_table results/comparisons/run123 \\
+    python -m iptc_entity_pipeline.evaluation.build_latex_table results/comparisons/run123 \\
         --flat-config-name best_wpentities_all_langs
 """
 
