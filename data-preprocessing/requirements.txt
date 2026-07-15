@@ -5,3 +5,4 @@ seaborn>=0.12.0
 numpy>=1.24.0
 # required by entity_embeddings.wikipedia2vec (Wikipedia2Vec entity vectors)
 wikipedia2vec>=1.0.5
+einops>=0.8.0

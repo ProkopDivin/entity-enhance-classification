@@ -1,0 +1,21 @@
+[build-system]
+requires = ['setuptools>=68.0']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'entity-embeddings'
+version = '0.1.0'
+description = 'Entity embedding preparation for the IPTC classification pipeline.'
+requires-python = '>=3.10'
+dependencies = [
+    'numpy>=1.24.0,<2',
+    'pandas>=2.0.0',
+    'wikipedia2vec>=1.0.5',
+    'einops>=0.8.0',
+]
+
+[project.scripts]
+entity-embeddings = 'entity_embeddings.__main__:main'
+
+[tool.setuptools.packages.find]
+where = ['src']

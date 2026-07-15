@@ -270,17 +270,17 @@ required by the training pipeline.
 
 #### Prerequisites
 
-Install the preprocessing dependencies (includes `wikipedia2vec`, which is **not** part
+Install the preprocessing package (includes `wikipedia2vec`, which is **not** part
 of the main pipeline install):
 
 ```bash
-pip install -r data-preprocessing/requirements.txt
+pip install -e data-preprocessing
 ```
 
-All generators are run as modules with the preprocessing sources on `PYTHONPATH`:
+Install the `entity_embeddings` package in editable mode (once):
 
 ```bash
-export PYTHONPATH=data-preprocessing/src:src
+pip install -e data-preprocessing
 ```
 
 
@@ -302,7 +302,7 @@ This generator downloads the pretrained Wikipedia2Vec model automatically on fir
 Warning: even with a small input, the first run can take several minutes because the model must be downloaded.
 
 ```bash
-PYTHONPATH=data-preprocessing/src:src python -m entity_embeddings.wikipedia2vec \
+python -m entity_embeddings.wikipedia2vec \
   --ids-path data/gold-chrono-per-dataset/wdId_ids_sample.txt \
   --lang en \
   --out-dir data/entity_embeddings/wikipedia2vec_sample
@@ -323,7 +323,7 @@ Warning: `entity_embeddings.wikipedia2vec` may repeatedly log `Wikidata maxlag=.
 #### 3.1 Get text representation from Wikidata descriptions
 
 ```bash
-PYTHONPATH=data-preprocessing/src:src python -m entity_embeddings \
+python -m entity_embeddings \
   --input-source wikidata \
   --ids data/gold-chrono-per-dataset/wdId_ids_sample.txt \
   --out-dir data/entity_embeddings/WikidataDescription_jina_sample \
@@ -335,7 +335,7 @@ PYTHONPATH=data-preprocessing/src:src python -m entity_embeddings \
 #### 3.2 Get text representation from local files (intros/full text)
 
 ```bash
-PYTHONPATH=data-preprocessing/src:src python -m entity_embeddings \
+python -m entity_embeddings \
   --input-source files \
   --text-dir data/cuted-articles_sample \
   --out-dir data/entity_embeddings/cuted-article-embeddings_sample \
