@@ -197,8 +197,10 @@ def _resolve_batch_titles(*, batch: list[str], langs: tuple[str, ...]) -> dict[s
     remaining = list(batch)
     resolved: dict[str, dict[str, str | None]] = {}
     sites = '|'.join(f'{lang}wiki' for lang in langs)
+    maxlag_retries = 10
     guard = 0
-    max_rounds = len(batch) + 2
+    max_rounds = len(batch) + 2 + maxlag_retries
+    maxlag_count = 0
     while remaining and guard < max_rounds:
         guard += 1
         params = {
@@ -212,8 +214,15 @@ def _resolve_batch_titles(*, batch: list[str], langs: tuple[str, ...]) -> dict[s
         payload = _http_get_json(url=WBGETENTITIES_URL, params=params)
         error = payload.get('error')
         if error and error.get('code') == 'maxlag':
+            maxlag_count += 1
+            if maxlag_count > maxlag_retries:
+                raise RuntimeError(
+                    f'Wikidata maxlag exceeded {maxlag_retries} retries for batch starting with {batch[0]}. '
+                    f'Server is too lagged; retry later.'
+                )
             wait_s = HTTP_RATE_LIMIT_DEFAULT_WAIT_S
-            LOG.warning('Wikidata maxlag=%s, sleeping %.1fs', error.get('info'), wait_s)
+            LOG.warning('Wikidata maxlag=%s, sleeping %.1fs (attempt %d/%d)',
+                        error.get('info'), wait_s, maxlag_count, maxlag_retries)
             time.sleep(wait_s)
             continue
         if error and error.get('code') == 'no-such-entity':
