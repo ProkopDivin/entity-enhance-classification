@@ -24,7 +24,6 @@ Defined in `src/iptc_entity_pipeline/config.py` (`DebugCnf`):
 
 - Python 3.10+
 - ClearML installed and credentials configured only for non-local pipeline mode
-- Internal `geneea` packages
 
 ### Run
 
@@ -33,7 +32,7 @@ From the repository root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install --find-links=wheels -e .
 
 python3 -m iptc_entity_pipeline.run_pipeline --local --config debug
 ```
@@ -59,16 +58,57 @@ python3 -m iptc_entity_pipeline.run_pipeline --config debug
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install --find-links=wheels -e .
 ```
+
+The `--find-links=wheels` flag tells pip to look in the `wheels/` directory for the
+bundled `geneea` dependency (a pure Python wheel shipped with this repo).
 
 Notes:
 
 - Install `clearml` and configure credentials only when you run non-local queue mode.
 - ClearML agent/execution queue configuration is expected in your environment.
 
-## Setup Clearml 
+## ClearML Setup
 
+ClearML is **optional**. The pipeline runs fully offline with the `--local` flag -- no
+ClearML server, credentials, or agent required. Use `--local` for development, debugging,
+and standalone experiments.
+
+When you want experiment tracking, metric logging, and remote execution via queues,
+set up ClearML:
+
+1. **Create a free account** at [app.clear.ml](https://app.clear.ml) (or use a
+   self-hosted server).
+
+2. **Install the SDK** (already included in this project's dependencies):
+
+   ```bash
+   pip install clearml
+   ```
+
+3. **Generate credentials** -- go to *Settings > Workspace > Create new credentials*
+   in the ClearML web UI
+   ([docs](https://clear.ml/docs/latest/docs/getting_started/ds/ds_first_steps/#connect-clearml-sdk-to-the-server)).
+
+4. **Configure locally** -- run `clearml-init` and paste the credentials when prompted:
+
+   ```bash
+   clearml-init
+   ```
+
+   This writes `~/clearml.conf` with your API key, secret, and server URL.
+
+5. **Run with ClearML** (omit `--local`):
+
+   ```bash
+   python3 -m iptc_entity_pipeline.run_pipeline --config debug
+   ```
+
+   Metrics, parameters, and artifacts are now logged to your ClearML project.
+
+For remote queue execution with a ClearML agent, see the
+[ClearML Agent docs](https://clear.ml/docs/latest/docs/clearml_agent/).
 
 ## Wikipedia2Vec Embedding Prefetch
 
