@@ -99,6 +99,11 @@ class EntityPoolingStrategy(ABC):
         """
         Build pooled embedding from one document.
 
+        When no entity embeddings are found (all missing or no linked
+        entities), the fallback is the corpus train-mean embedding — not a
+        zero vector. ``_pool_embeddings`` is only called when at least one
+        embedding was resolved.
+
         :param doc: Corpus document with attached linked entities.
         :param entity_embedding_store: Entity embedding store used to resolve wdId vectors.
         :param embedding_dim: Expected pooled vector dimensionality.
@@ -151,8 +156,6 @@ class SumEntityPooling(EntityPoolingStrategy):
         embedding_dim: int,
         weights: Sequence[float] | None = None,
     ) -> np.ndarray:
-        if not entity_embeddings:
-            return np.zeros(embedding_dim, dtype=np.float32)
         return np.sum(np.vstack(entity_embeddings), axis=0, dtype=np.float32)
 
 
@@ -169,8 +172,6 @@ class MeanEntityPooling(EntityPoolingStrategy):
         embedding_dim: int,
         weights: Sequence[float] | None = None,
     ) -> np.ndarray:
-        if not entity_embeddings:
-            return np.zeros(embedding_dim, dtype=np.float32)
         return np.mean(np.vstack(entity_embeddings), axis=0, dtype=np.float32)
 
 
@@ -187,8 +188,6 @@ class WeightedMeanEntityPooling(EntityPoolingStrategy):
         embedding_dim: int,
         weights: Sequence[float] | None = None,
     ) -> np.ndarray:
-        if not entity_embeddings:
-            return np.zeros(embedding_dim, dtype=np.float32)
         weights_arr = _validate_weight_alignment(
             class_name=self.__class__.__name__,
             entity_embeddings=entity_embeddings,
@@ -214,8 +213,6 @@ class WeightedSumEntityPooling(EntityPoolingStrategy):
         embedding_dim: int,
         weights: Sequence[float] | None = None,
     ) -> np.ndarray:
-        if not entity_embeddings:
-            return np.zeros(embedding_dim, dtype=np.float32)
         weights_arr = _validate_weight_alignment(
             class_name=self.__class__.__name__,
             entity_embeddings=entity_embeddings,
@@ -237,8 +234,6 @@ class MentionWeightedSumEntityPooling(EntityPoolingStrategy):
         embedding_dim: int,
         weights: Sequence[float] | None = None,
     ) -> np.ndarray:
-        if not entity_embeddings:
-            return np.zeros(embedding_dim, dtype=np.float32)
         weights_arr = _validate_weight_alignment(
             class_name=self.__class__.__name__,
             entity_embeddings=entity_embeddings,
@@ -260,8 +255,6 @@ class MentionWeightedMeanEntityPooling(EntityPoolingStrategy):
         embedding_dim: int,
         weights: Sequence[float] | None = None,
     ) -> np.ndarray:
-        if not entity_embeddings:
-            return np.zeros(embedding_dim, dtype=np.float32)
         weights_arr = _validate_weight_alignment(
             class_name=self.__class__.__name__,
             entity_embeddings=entity_embeddings,
@@ -275,9 +268,9 @@ class MentionWeightedMeanEntityPooling(EntityPoolingStrategy):
 
 
 class NoEntityPooling(EntityPoolingStrategy):
-    """
-    No pooling: return np.array with all entity embeddings. Shape: [len(entity_embeddings), embedding_dim]
-    Can be used when attention is used for pooling.
+    """No pooling: return all entity embeddings stacked. Shape: ``[n_entities, embedding_dim]``.
+
+    Used when attention handles the aggregation.
     """
 
     def _get_weighted_wdids(self, *, doc: DocWithEntities) -> list[tuple[str, float]]:
@@ -290,6 +283,4 @@ class NoEntityPooling(EntityPoolingStrategy):
         embedding_dim: int,
         weights: Sequence[float] | None = None,
     ) -> np.ndarray:
-        if not entity_embeddings:
-            return np.zeros(embedding_dim, dtype=np.float32)
         return np.vstack(entity_embeddings)

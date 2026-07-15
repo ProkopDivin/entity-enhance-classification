@@ -48,7 +48,7 @@ WBGETENTITIES_BATCH = 50
 HTTP_TIMEOUT_S = 30
 HTTP_RETRY = 8
 HTTP_BACKOFF_S = 2.0
-HTTP_RATE_LIMIT_DEFAULT_WAIT_S = 30.0
+HTTP_RATE_LIMIT_DEFAULT_WAIT_S = 60.0
 HTTP_RATE_LIMIT_MAX_WAIT_S = 90.0
 DEFAULT_BATCH_SLEEP_S = 3.0
 TEXT_FETCH_SLEEP_S = 0.2
@@ -197,7 +197,7 @@ def _resolve_batch_titles(*, batch: list[str], langs: tuple[str, ...]) -> dict[s
     remaining = list(batch)
     resolved: dict[str, dict[str, str | None]] = {}
     sites = '|'.join(f'{lang}wiki' for lang in langs)
-    maxlag_retries = 10
+    maxlag_retries = 20
     guard = 0
     max_rounds = len(batch) + 2 + maxlag_retries
     maxlag_count = 0
