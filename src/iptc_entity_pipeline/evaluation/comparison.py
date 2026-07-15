@@ -22,7 +22,6 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
-from scipy import stats as scipy_stats
 from sklearn.metrics import average_precision_score
 from statsmodels.stats.contingency_tables import mcnemar
 from statsmodels.stats.multitest import multipletests
@@ -80,13 +79,6 @@ LANG_PREFIXES: tuple[str, ...] = ('en', 'es', 'nl', 'fr', 'de', 'cs')
 EUROSPORT_TOKEN = 'eurosport'
 MCNEMAR_ALPHA = 0.05
 MCNEMAR_MIN_DISAGREEMENTS = 25
-BOOTSTRAP_PR_AUC_ITERATIONS = 1000
-BOOTSTRAP_PR_AUC_SEED = 43
-BOOTSTRAP_PR_AUC_ALPHA = 0.05
-BOOTSTRAP_PR_AUC_MIN_POSITIVES = 15
-BRIER_TEST_ALPHA = 0.05
-BRIER_MIN_POSITIVE_SAMPLES = BOOTSTRAP_PR_AUC_MIN_POSITIVES
-BRIER_STRATIFIED_MIN_SAMPLES = 15
 
 _CMP_METRICS_CORE: tuple[tuple[str, str], ...] = (
     ('precision', 'Precision'),
@@ -337,7 +329,6 @@ def compare_runs(
     top_n: int = 20,
     only_diff: bool = False,
     top_changes_only: bool = False,
-    run_bootstrap_pr_auc_test: bool = False,
     output_path: str | Path | None = None,
     use_saved_thresholds: bool = True,
 ) -> ComparisonResult:
@@ -364,7 +355,6 @@ def compare_runs(
     :param top_n: Preview size for improved/degraded categories logging.
     :param only_diff: Drop base metric columns from comparison sheets.
     :param top_changes_only: Persist only top improved/degraded category tables.
-    :param run_bootstrap_pr_auc_test: Add bootstrap PR-AUC significance columns to top change tables.
     :param output_path: Optional Excel workbook path.
     :param use_saved_thresholds: When ``True`` (default), auto-load per-class
         thresholds from each run directory. Set to ``False`` to force a
@@ -504,30 +494,6 @@ def compare_runs(
         degraded_df=top_degraded_df,
         mcnemar_df=mcnemar_df,
     )
-    if run_bootstrap_pr_auc_test:
-        bootstrap_df = build_bootstrap_pr_auc_df(
-            current_df=current_aligned_df,
-            base_df=base_aligned_df,
-            gold_map=gold_map,
-            cat_ids=cat_ids,
-            n_iterations=BOOTSTRAP_PR_AUC_ITERATIONS,
-            seed=BOOTSTRAP_PR_AUC_SEED,
-            alpha=BOOTSTRAP_PR_AUC_ALPHA,
-            min_positives=BOOTSTRAP_PR_AUC_MIN_POSITIVES,
-        )
-        top_improved_df, top_degraded_df = add_bootstrap_pr_auc_to_top_change_dfs(
-            improved_df=top_improved_df,
-            degraded_df=top_degraded_df,
-            bootstrap_df=bootstrap_df,
-        )
-    brier_df = build_brier_significance_df(
-        current_df=current_aligned_df,
-        base_df=base_aligned_df,
-        gold_map=gold_map,
-        cat_ids=cat_ids,
-        alpha=BRIER_TEST_ALPHA,
-        min_positive_samples=BRIER_MIN_POSITIVE_SAMPLES,
-    )
     label_to_cat_id = build_label_to_cat_id_map(cat_ids=cat_ids)
     if top_changes_only:
         empty_df = pd.DataFrame()
@@ -574,7 +540,6 @@ def compare_runs(
         if excel_path is not None:
             write_csv(result=result, output_path=excel_path.parent, result_sheets=_TOP_CHANGE_CATEGORY_SHEETS)
             write_excel(result=result, output_path=excel_path, result_sheets=_TOP_CHANGE_CATEGORY_SHEETS)
-            plot_brier_diagnostics(brier_df=brier_df, output_path=excel_path.parent)
             log_top_changes(result=result, top_n=top_n)
         return result
 
@@ -713,7 +678,6 @@ def compare_runs(
         result_sheets = _TOP_CHANGE_CATEGORY_SHEETS if top_changes_only else _RESULT_SHEETS
         write_csv(result=result, output_path=excel_path.parent, result_sheets=result_sheets)
         write_excel(result=result, output_path=excel_path, result_sheets=result_sheets)
-        plot_brier_diagnostics(brier_df=brier_df, output_path=excel_path.parent)
         log_top_changes(result=result, top_n=top_n)
     return result
 
@@ -1011,9 +975,6 @@ def gold_df_from_corpus(*, corpus: Any) -> pd.DataFrame:
             }
         )
     df = pd.DataFrame(rows)
-    dup_ids = df['article_id'][df['article_id'].duplicated()].astype(str).unique().tolist()
-    if dup_ids:
-        raise ValueError(f'Duplicate article_id values in eval corpus: {dup_ids[:5]}')
     return df
 
 
@@ -1811,405 +1772,10 @@ def _add_mcnemar_to_top_change_df(
     return result.loc[:, base_cols + metric_cols]
 
 
-def bootstrap_pr_auc_test(
-    *,
-    y_true: np.ndarray,
-    prob_base: np.ndarray,
-    prob_current: np.ndarray,
-    n_iterations: int = BOOTSTRAP_PR_AUC_ITERATIONS,
-    min_positives: int = BOOTSTRAP_PR_AUC_MIN_POSITIVES,
-    rng: np.random.Generator | None = None,
-) -> dict[str, Any]:
-    """Bootstrap one-label PR-AUC current-base differences."""
-    y_true = np.asarray(y_true, dtype=np.int8)
-    prob_base = np.asarray(prob_base, dtype=float)
-    prob_current = np.asarray(prob_current, dtype=float)
-    positive_count = int(y_true.sum())
-    if positive_count < min_positives:
-        return _bootstrap_pr_auc_empty_result(positive_count=positive_count)
-
-    generator = rng if rng is not None else np.random.default_rng(BOOTSTRAP_PR_AUC_SEED)
-    n_samples = len(y_true)
-    differences = []
-    for _ in range(n_iterations):
-        indices = generator.integers(0, n_samples, n_samples)
-        y_boot = y_true[indices]
-        if int(y_boot.sum()) == 0:
-            continue
-
-        base_auc = average_precision(y_true=y_boot, y_score=prob_base[indices])
-        current_auc = average_precision(y_true=y_boot, y_score=prob_current[indices])
-        if np.isnan(base_auc) or np.isnan(current_auc):
-            continue
-        differences.append(current_auc - base_auc)
-
-    if not differences:
-        return _bootstrap_pr_auc_empty_result(positive_count=positive_count)
-
-    diffs = np.asarray(differences, dtype=float)
-    return {
-        'bootstrap_pr_auc_p_value_current': float((np.sum(diffs <= 0) + 1) / (len(diffs) + 1)),
-        'bootstrap_pr_auc_p_value_base': float((np.sum(diffs >= 0) + 1) / (len(diffs) + 1)),
-        'bootstrap_pr_auc_mean_diff': float(np.mean(diffs)),
-        'bootstrap_pr_auc_positive_count': positive_count,
-        'bootstrap_pr_auc_iterations': int(len(diffs)),
-    }
-
-
-def _bootstrap_pr_auc_empty_result(*, positive_count: int) -> dict[str, Any]:
-    """Return a skipped bootstrap result with stable output keys."""
-    return {
-        'bootstrap_pr_auc_p_value_current': float('nan'),
-        'bootstrap_pr_auc_p_value_base': float('nan'),
-        'bootstrap_pr_auc_mean_diff': float('nan'),
-        'bootstrap_pr_auc_positive_count': positive_count,
-        'bootstrap_pr_auc_iterations': 0,
-    }
-
-
-def build_bootstrap_pr_auc_df(
-    *,
-    current_df: pd.DataFrame,
-    base_df: pd.DataFrame,
-    gold_map: GoldLabelMap,
-    cat_ids: Sequence[str],
-    n_iterations: int = BOOTSTRAP_PR_AUC_ITERATIONS,
-    seed: int = BOOTSTRAP_PR_AUC_SEED,
-    alpha: float = BOOTSTRAP_PR_AUC_ALPHA,
-    min_positives: int = BOOTSTRAP_PR_AUC_MIN_POSITIVES,
-) -> pd.DataFrame:
-    """Build per-class bootstrap PR-AUC significance rows with FDR correction."""
-    article_ids = list(current_df['article_id'])
-    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids)
-    current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
-    base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
-    rng = np.random.default_rng(seed)
-
-    rows = []
-    for idx, cat_id in enumerate(cat_ids):
-        row = {
-            'IPTC Category': safe_cat_label(cat_id=cat_id),
-            'cat_id': cat_id,
-        }
-        row.update(
-            bootstrap_pr_auc_test(
-                y_true=gold_matrix[:, idx],
-                prob_base=base_scores[:, idx],
-                prob_current=current_scores[:, idx],
-                n_iterations=n_iterations,
-                min_positives=min_positives,
-                rng=rng,
-            )
-        )
-        rows.append(row)
-
-    df = pd.DataFrame(rows)
-    return add_bootstrap_fdr_columns(df=df, alpha=alpha)
-
-
-def add_bootstrap_fdr_columns(*, df: pd.DataFrame, alpha: float) -> pd.DataFrame:
-    """Add Benjamini-Hochberg corrected p-values and direction-specific pass flags."""
-    result = df.copy()
-    for direction in ('current', 'base'):
-        p_col = f'bootstrap_pr_auc_p_value_{direction}'
-        fdr_col = f'bootstrap_pr_auc_p_value_fdr_{direction}'
-        pass_col = f'bootstrap_pr_auc_{direction}_significant'
-        valid_mask = result[p_col].notna()
-        result[fdr_col] = np.nan
-        if valid_mask.any():
-            corrected = benjamini_hochberg(p_values=result.loc[valid_mask, p_col].to_numpy(dtype=float))
-            result.loc[valid_mask, fdr_col] = corrected
-        if direction == 'current':
-            direction_mask = result['bootstrap_pr_auc_mean_diff'] > 0
-        else:
-            direction_mask = result['bootstrap_pr_auc_mean_diff'] < 0
-        result[pass_col] = ((result[fdr_col] < alpha) & direction_mask).astype(int)
-    return result
-
-
 def benjamini_hochberg(*, p_values: Sequence[float]) -> np.ndarray:
     """Apply Benjamini-Hochberg FDR correction preserving input order."""
     adjusted = multipletests(p_values, method='fdr_bh')[1]
     return np.asarray(adjusted, dtype=float)
-
-def add_bootstrap_pr_auc_to_top_change_dfs(
-    *,
-    improved_df: pd.DataFrame,
-    degraded_df: pd.DataFrame,
-    bootstrap_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Attach direction-aware bootstrap PR-AUC columns to top change tables."""
-    return (
-        _add_bootstrap_pr_auc_to_top_change_df(
-            df=improved_df,
-            bootstrap_df=bootstrap_df,
-            direction='current',
-        ),
-        _add_bootstrap_pr_auc_to_top_change_df(
-            df=degraded_df,
-            bootstrap_df=bootstrap_df,
-            direction='base',
-        ),
-    )
-
-
-def _add_bootstrap_pr_auc_to_top_change_df(
-    *,
-    df: pd.DataFrame,
-    bootstrap_df: pd.DataFrame,
-    direction: str,
-) -> pd.DataFrame:
-    """Merge bootstrap PR-AUC rows and expose generic direction-aware columns."""
-    p_col = f'bootstrap_pr_auc_p_value_{direction}'
-    fdr_col = f'bootstrap_pr_auc_p_value_fdr_{direction}'
-    pass_col = f'bootstrap_pr_auc_{direction}_significant'
-    cols = [
-        'IPTC Category',
-        p_col,
-        fdr_col,
-        'bootstrap_pr_auc_mean_diff',
-        'bootstrap_pr_auc_positive_count',
-        'bootstrap_pr_auc_draws_attempted',
-        'bootstrap_pr_auc_iterations',
-        pass_col,
-    ]
-    renamed = bootstrap_df.reindex(columns=cols).rename(
-        columns={
-            p_col: 'bootstrap_pr_auc_p_value',
-            fdr_col: 'bootstrap_pr_auc_p_value_fdr',
-            pass_col: 'bootstrap_pr_auc_pass',
-        }
-    )
-    result = df.merge(renamed, on='IPTC Category', how='left')
-    result['bootstrap_pr_auc_pass'] = result['bootstrap_pr_auc_pass'].fillna(0).astype(int)
-    metric_cols = [
-        'bootstrap_pr_auc_pass',
-        'bootstrap_pr_auc_p_value',
-        'bootstrap_pr_auc_p_value_fdr',
-        'bootstrap_pr_auc_mean_diff',
-        'bootstrap_pr_auc_positive_count',
-        'bootstrap_pr_auc_iterations',
-    ]
-    base_cols = [col for col in result.columns if col not in metric_cols]
-    return result.loc[:, base_cols + metric_cols]
-
-
-def build_brier_significance_df(
-    *,
-    current_df: pd.DataFrame,
-    base_df: pd.DataFrame,
-    gold_map: GoldLabelMap,
-    cat_ids: Sequence[str],
-    alpha: float = BRIER_TEST_ALPHA,
-    min_positive_samples: int = BRIER_MIN_POSITIVE_SAMPLES,
-) -> pd.DataFrame:
-    """Build per-class Brier-score Wilcoxon significance rows with FDR correction.
-
-    Wilcoxon and FDR are applied only where gold positive count for the label
-    is at least ``min_positive_samples`` (aligned with bootstrap PR-AUC cutoff).
-    Other rows retain mean squared errors but set p-values to NaN and
-    significance flags to ``0``.
-    """
-    article_ids = list(current_df['article_id'])
-    gold_matrix = gold_map.gold_matrix(article_ids=article_ids, cat_ids=cat_ids).astype(float)
-    current_scores = build_score_matrix(df=current_df, cat_ids=cat_ids)
-    base_scores = build_score_matrix(df=base_df, cat_ids=cat_ids)
-
-    rows: list[dict[str, Any]] = []
-    for idx, cat_id in enumerate(cat_ids):
-        positives = gold_matrix[:, idx]
-        gold_positive_count = int(positives.sum())
-        wilcox_eligible_int = int(gold_positive_count >= min_positive_samples)
-        current_errors = np.square(current_scores[:, idx] - positives)
-        base_errors = np.square(base_scores[:, idx] - positives)
-        mean_diff = float(np.mean(current_errors) - np.mean(base_errors))
-
-        diff = current_errors - base_errors
-        p_val = wilcoxon_signed_rank_p_value(diff) if wilcox_eligible_int else float('nan')
-
-        # Stratified Brier test: separate positive (gold==1) and negative (gold==0) samples.
-        positives_mask = positives.astype(bool)
-        negatives_mask = np.logical_not(positives_mask)
-        pos_n = int(positives_mask.sum())
-        neg_n = int(negatives_mask.sum())
-
-        if pos_n > 0:
-            mean_diff_pos = float(
-                np.mean(current_errors[positives_mask]) - np.mean(base_errors[positives_mask])
-            )
-        else:
-            mean_diff_pos = float('nan')
-        if pos_n >= BRIER_STRATIFIED_MIN_SAMPLES:
-            p_val_pos = wilcoxon_signed_rank_p_value(
-                current_errors[positives_mask] - base_errors[positives_mask]
-            )
-        else:
-            p_val_pos = float('nan')
-
-        if neg_n > 0:
-            mean_diff_neg = float(
-                np.mean(current_errors[negatives_mask]) - np.mean(base_errors[negatives_mask])
-            )
-        else:
-            mean_diff_neg = float('nan')
-        if neg_n >= BRIER_STRATIFIED_MIN_SAMPLES:
-            p_val_neg = wilcoxon_signed_rank_p_value(
-                current_errors[negatives_mask] - base_errors[negatives_mask]
-            )
-        else:
-            p_val_neg = float('nan')
-
-        rows.append(
-            {
-                'IPTC Category': safe_cat_label(cat_id=cat_id),
-                'cat_id': cat_id,
-                'brier_wilcoxon_eligible': wilcox_eligible_int,
-                'brier_p_value': p_val,
-                'brier_mean_error_diff': mean_diff,
-                'brier_current_mean_error': float(np.mean(current_errors)),
-                'brier_base_mean_error': float(np.mean(base_errors)),
-                'brier_p_value_pos': p_val_pos,
-                'brier_mean_error_diff_pos': mean_diff_pos,
-                'brier_p_value_neg': p_val_neg,
-                'brier_mean_error_diff_neg': mean_diff_neg,
-            }
-        )
-
-    df = pd.DataFrame(rows)
-    p_numpy = df['brier_p_value'].to_numpy(dtype=float)
-    fdr = np.full(len(df), np.nan, dtype=float)
-    ok = np.isfinite(p_numpy)
-    if np.any(ok):
-        fdr[ok] = benjamini_hochberg(p_values=p_numpy[ok])
-    df['brier_p_value_fdr'] = fdr
-
-    elig = df['brier_wilcoxon_eligible'].astype(bool)
-    fdr_ok = np.isfinite(df['brier_p_value_fdr'].to_numpy(dtype=float))
-    df['brier_current_significant'] = (
-        elig & fdr_ok & (df['brier_p_value_fdr'] < alpha) & (df['brier_mean_error_diff'] < 0)
-    ).astype(int)
-    df['brier_base_significant'] = (
-        elig & fdr_ok & (df['brier_p_value_fdr'] < alpha) & (df['brier_mean_error_diff'] > 0)
-    ).astype(int)
-
-    # Stratified Brier test: BH FDR applied independently per stratum.
-    p_pos = df['brier_p_value_pos'].to_numpy(dtype=float)
-    fdr_pos = np.full(len(df), np.nan, dtype=float)
-    ok_pos = np.isfinite(p_pos)
-    if np.any(ok_pos):
-        fdr_pos[ok_pos] = benjamini_hochberg(p_values=p_pos[ok_pos])
-    df['brier_p_value_fdr_pos'] = fdr_pos
-
-    p_neg = df['brier_p_value_neg'].to_numpy(dtype=float)
-    fdr_neg = np.full(len(df), np.nan, dtype=float)
-    ok_neg = np.isfinite(p_neg)
-    if np.any(ok_neg):
-        fdr_neg[ok_neg] = benjamini_hochberg(p_values=p_neg[ok_neg])
-    df['brier_p_value_fdr_neg'] = fdr_neg
-
-    mean_diff_pos_arr = df['brier_mean_error_diff_pos'].to_numpy(dtype=float)
-    mean_diff_neg_arr = df['brier_mean_error_diff_neg'].to_numpy(dtype=float)
-    df['brier_positive'] = (
-        np.isfinite(fdr_pos) & (fdr_pos < alpha) & (mean_diff_pos_arr < 0)
-    ).astype(int)
-    df['brier_negative'] = (
-        np.isfinite(fdr_neg) & (fdr_neg < alpha) & (mean_diff_neg_arr < 0)
-    ).astype(int)
-    n_passed = df['brier_positive'].astype(int) + df['brier_negative'].astype(int)
-    df['brier_stratified_passed_1_test'] = (n_passed >= 1).astype(int)
-    df['brier_stratified_passed_2_tests'] = (n_passed == 2).astype(int)
-    return df
-
-
-def wilcoxon_signed_rank_p_value(differences: Sequence[float]) -> float:
-    """Return two-sided Wilcoxon signed-rank p-value using a normal approximation."""
-    diff = np.asarray(differences, dtype=float)
-    diff = diff[diff != 0]
-    if diff.size == 0:
-        return 1.0
-    return float(
-        scipy_stats.wilcoxon(
-            diff,
-            zero_method='wilcox',
-            alternative='two-sided',
-            method='approx',
-        ).pvalue
-    )
-
-
-def plot_brier_diagnostics(*, brier_df: pd.DataFrame, output_path: Path) -> tuple[Path, Path] | tuple[None, None]:
-    """Save histogram/KDE and Q-Q plots for per-class Brier mean error differences."""
-    values = pd.to_numeric(brier_df.get('brier_mean_error_diff', pd.Series(dtype=float)), errors='coerce').dropna()
-    if values.empty:
-        LOG.warning('Skipping Brier diagnostic plots because no Brier differences are available')
-        return None, None
-
-    output_path.mkdir(parents=True, exist_ok=True)
-    hist_path = output_path / 'brier_mean_error_diff_hist_kde.png'
-    qq_path = output_path / 'brier_mean_error_diff_qq.png'
-    data = values.to_numpy(dtype=float)
-    plot_hist_kde(values=data, output_path=hist_path)
-    plot_qq(values=data, output_path=qq_path)
-    LOG.info('Saved Brier diagnostic plots to %s and %s', hist_path, qq_path)
-    return hist_path, qq_path
-
-
-def plot_hist_kde(*, values: np.ndarray, output_path: Path) -> None:
-    """Save a histogram with Gaussian KDE overlay."""
-    import matplotlib
-
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(values, bins='auto', density=True, alpha=0.45, label='Histogram')
-    x_grid, density = gaussian_kde(values=values)
-    if x_grid.size:
-        ax.plot(x_grid, density, label='Gaussian KDE')
-    ax.axvline(0.0, color='black', linestyle='--', linewidth=1, label='No difference')
-    ax.set_title('Brier Mean Error Difference Distribution')
-    ax.set_xlabel('current_mean_brier_error - base_mean_brier_error')
-    ax.set_ylabel('Density')
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150)
-    plt.close(fig)
-
-
-def gaussian_kde(*, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Compute a Gaussian KDE evaluated on a uniform grid."""
-    if values.size < 2 or float(np.std(values, ddof=1)) == 0.0:
-        return np.asarray([], dtype=float), np.asarray([], dtype=float)
-    kde = scipy_stats.gaussian_kde(values)
-    padding = 3 * float(np.sqrt(kde.covariance[0, 0]))
-    x_grid = np.linspace(float(values.min() - padding), float(values.max() + padding), 256)
-    return x_grid, kde(x_grid)
-
-
-def plot_qq(*, values: np.ndarray, output_path: Path) -> None:
-    """Save a normal Q-Q plot for Brier mean error differences."""
-    import matplotlib
-
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    sigma = float(np.std(values, ddof=1)) or 1.0
-    mu = float(np.mean(values))
-    theoretical, sample_quantiles = scipy_stats.probplot(
-        values, sparams=(mu, sigma), dist='norm', fit=False,
-    )
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(theoretical, sample_quantiles, s=12, alpha=0.7)
-    min_val = float(min(theoretical.min(), sample_quantiles.min()))
-    max_val = float(max(theoretical.max(), sample_quantiles.max()))
-    ax.plot([min_val, max_val], [min_val, max_val], color='black', linestyle='--', linewidth=1)
-    ax.set_title('Brier Mean Error Difference Q-Q Plot')
-    ax.set_xlabel('Theoretical normal quantiles')
-    ax.set_ylabel('Observed quantiles')
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150)
-    plt.close(fig)
 
 
 CHANGE_THRESHOLDS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.7)
@@ -2831,11 +2397,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help='Write only top_improved and top_degraded category tables.',
     )
     parser.add_argument(
-        '--bootstrap-pr-auc-test',
-        action='store_true',
-        help='Add bootstrap PR-AUC significance columns to top improved/degraded category tables.',
-    )
-    parser.add_argument(
         '--ignore-saved-thresholds',
         action='store_true',
         help=(
@@ -2865,7 +2426,6 @@ def main() -> None:
         top_n=args.top_n,
         only_diff=args.only_diff,
         top_changes_only=args.top_changes_only,
-        run_bootstrap_pr_auc_test=args.bootstrap_pr_auc_test,
         output_path=output_path,
         use_saved_thresholds=not args.ignore_saved_thresholds,
     )

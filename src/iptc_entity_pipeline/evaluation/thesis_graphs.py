@@ -1065,7 +1065,7 @@ _MD_SECTIONS: dict[str, str] = {
         **Source:** `classes_comparison` sheet, column `F1_diff`.
 
         **Methodology:** Subclasses with support >= 15 are sorted by support ascending.
-        A rolling mean with window 50 (min_periods=5) is computed over the absolute value
+        A rolling mean with window 50 (min_periods=1) is computed over the absolute value
         |F1_diff| and plotted against the actual support value on a logarithmic x-axis.
 
         **Interpretation:** Shows how the average magnitude of the F1-score change (regardless

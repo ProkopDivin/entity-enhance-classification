@@ -132,8 +132,6 @@ All classes with `F1_diff > 0` (improved) or `F1_diff < 0` (degraded), sorted by
 | `mcnemar_n10_current_only_correct` | Articles correct only under current |
 | `mcnemar_n01_base_only_correct` | Articles correct only under base |
 
-With `--bootstrap-pr-auc-test`, extra columns appear: `bootstrap_pr_auc_pass`, `bootstrap_pr_auc_p_value`, `bootstrap_pr_auc_p_value_fdr`, `bootstrap_pr_auc_mean_diff`.
-
 McNemar requires ≥25 disagreeing articles; otherwise p-values are empty.
 
 ---

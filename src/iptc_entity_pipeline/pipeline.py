@@ -20,6 +20,7 @@ from iptc_entity_pipeline.evaluation.comparison import build_path, compare_runs
 from iptc_entity_pipeline.legacy_reuse import evaluateModel
 from iptc_entity_pipeline.model_io import save_outputs
 from iptc_entity_pipeline.evaluation.reporting import (
+    conf_logging,
     log_stage,
     objective_suffix,
     report_cv,
@@ -27,7 +28,6 @@ from iptc_entity_pipeline.evaluation.reporting import (
 )
 
 from iptc_entity_pipeline.training import train_model
-from iptc_entity_pipeline.evaluation.reporting import conf_logging
 
 RV_LOAD_DATA = ['corpora']
 RV_PREPARE_ARTICLE_EMBEDDINGS = ['articleEmbeddingStats']
@@ -1104,8 +1104,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
 
     from iptc_entity_pipeline.seeding import set_global_seed
     from iptc_entity_pipeline.evaluation.reporting import report_cv_std, report_eval, report_test_eval_scalars
-    from iptc_entity_pipeline.config import EmbeddingCnf, conf_from_dict
-    
+
     paths_cnf = cnf['paths']
     emb_cnf = cnf['emb']
     model_cnf = cnf['model']
@@ -1123,8 +1122,7 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
     print_logs = bool(cnf.get('print_logs', True))
     upload_artifacts = bool(cnf.get('upload_artifacts', False))
     random_seed = int(cnf.get('random_seed', 43))
-    emb = conf_from_dict(EmbeddingCnf, emb_cnf)
-    
+
     set_global_seed(seed=random_seed)
 
     if assembly_cnf.get('enabled'):

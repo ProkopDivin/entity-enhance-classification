@@ -107,12 +107,6 @@ def load_and_normalize(
                     norm_cats = iptc_cats.normalizeCategories(valid_topics)
                     doc.cats.clear()
                     doc.cats.extend(sorted(cat.id for cat in norm_cats if cat.id and cat.id not in removed_cat_ids_set))
-                    if 'catScores' in doc.metadata:
-                        doc.metadata['catScores'] = {
-                            cat: score
-                            for cat, score in doc.metadata['catScores'].items()
-                            if cat not in removed_cat_ids_set and cat not in unknown_cat_ids_seen
-                        }
                 elif remove_empty_cats:
                     continue
                 yield doc
