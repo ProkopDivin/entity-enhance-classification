@@ -1190,56 +1190,77 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         article_embedding_stats=article_embedding_stats,
     )
         
-    log_stage(
-        task=task,
-        message=f'Stage 4/6: Running mandatory {cv_cnf.get("folds", 5)}-fold cross-validation on train',
-        print_logs=print_logs,
-    )
-    cv = run_cv(
-        train_data=train_data,
-        feature_dim=feature_dim,
-        model_cnf=model_cnf,
-        hparam_cnf=hparam_cnf,
-        train_cnf=train_cnf,
-        eval_cnf=eval_cnf,
-        cv_cnf=cv_cnf,
-        optuna_cnf=optuna_cnf,
-        tuning_cnf=tuning_cnf,
-        objective_row=obj_row,
-        random_seed=random_seed,
-        print_logs=print_logs,
-        upload_artifacts=upload_artifacts,
-    )
-    if upload_artifacts and task is not None:
-        task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv.best_trial_stats))
-    logger = get_task_logger(task=task, logger=logging.getLogger(__name__))
-    # Report CV objective metrics on the pipeline task (keys match report_eval METRIC_SERIES).
-    report_eval(
-        logger=logger,
-        title='Cross Validation Results',
-        row=cv.best_trial_stats,
-        iteration=0,
-    )
-    report_cv_std(
-        logger=logger,
-        row=cv.best_trial_stats,
-        title='Cross Validation Results',
-        iteration=0,
-    )
+    model_path = str(cnf.get('model_path') or '')
 
-    log_stage(
-        task=task,
-        message='Stage 5/6: Training final model on full train with fixed CV-derived epochs',
-        print_logs=print_logs,
-    )
-    trained_model = train_best(
-        train_data=train_data,
-        feature_dim=feature_dim,
-        best_model_cnf=asdict(cv.best_model_config),
-        train_cnf=asdict(cv.best_training_config),
-        random_seed=random_seed,
-        print_logs=print_logs,
-    )
+    if model_path:
+        from geneea.catlib.model.nnet import NeuralCategModel
+        from iptc_entity_pipeline.evaluation.comparison import load_custom_thresholds
+
+        log_stage(
+            task=task,
+            message=f'Stages 4-5 skipped: loading pre-trained model from {model_path}',
+            print_logs=print_logs,
+        )
+        model_dir = Path(model_path)
+        model_file = model_dir / 'model.nn.bin' if model_dir.is_dir() else model_dir
+        if not model_file.is_file():
+            raise FileNotFoundError(f'Model file does not exist: {model_file}')
+        trained_model = NeuralCategModel.load(str(model_file))
+        run_dir = model_dir if model_dir.is_dir() else model_dir.parent
+        tuned_thresholds = load_custom_thresholds(run_dir=run_dir) or None
+        threshold_report_df = None
+    else:
+        log_stage(
+            task=task,
+            message=f'Stage 4/6: Running mandatory {cv_cnf.get("folds", 5)}-fold cross-validation on train',
+            print_logs=print_logs,
+        )
+        cv = run_cv(
+            train_data=train_data,
+            feature_dim=feature_dim,
+            model_cnf=model_cnf,
+            hparam_cnf=hparam_cnf,
+            train_cnf=train_cnf,
+            eval_cnf=eval_cnf,
+            cv_cnf=cv_cnf,
+            optuna_cnf=optuna_cnf,
+            tuning_cnf=tuning_cnf,
+            objective_row=obj_row,
+            random_seed=random_seed,
+            print_logs=print_logs,
+            upload_artifacts=upload_artifacts,
+        )
+        if upload_artifacts and task is not None:
+            task.upload_artifact('cv_objective_metrics', artifact_object=dict(cv.best_trial_stats))
+        logger = get_task_logger(task=task, logger=logging.getLogger(__name__))
+        report_eval(
+            logger=logger,
+            title='Cross Validation Results',
+            row=cv.best_trial_stats,
+            iteration=0,
+        )
+        report_cv_std(
+            logger=logger,
+            row=cv.best_trial_stats,
+            title='Cross Validation Results',
+            iteration=0,
+        )
+
+        log_stage(
+            task=task,
+            message='Stage 5/6: Training final model on full train with fixed CV-derived epochs',
+            print_logs=print_logs,
+        )
+        trained_model = train_best(
+            train_data=train_data,
+            feature_dim=feature_dim,
+            best_model_cnf=asdict(cv.best_model_config),
+            train_cnf=asdict(cv.best_training_config),
+            random_seed=random_seed,
+            print_logs=print_logs,
+        )
+        tuned_thresholds = cv.tuned_thresholds
+        threshold_report_df = cv.threshold_report
 
     log_stage(
         task=task,
@@ -1255,8 +1276,8 @@ def run_training_pipeline(cnf: Mapping[str, Any]) -> None:
         config_name=config_name,
         config_mapping=cnf,
         feature_dim=feature_dim,
-        tuned_thresholds=cv.tuned_thresholds,
-        threshold_report_df=cv.threshold_report,
+        tuned_thresholds=tuned_thresholds,
+        threshold_report_df=threshold_report_df,
         upload_artifacts=upload_artifacts,
     )
     # Log on the pipeline controller from scalar_metrics (pickle-safe; includes F1_macro_relevant).

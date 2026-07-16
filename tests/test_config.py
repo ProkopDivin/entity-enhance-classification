@@ -4,10 +4,10 @@ from __future__ import annotations
 import pytest
 
 from iptc_entity_pipeline.config import (
-    ALL_ENTITY_LANGS,
     ArticleOnlyCnf,
     BaseCnf,
     BestArticleOnlyCnf,
+    BestArticleOnlyTunedCnf,
     ArticleOnlyGeluCnf,
     ArticleOnlyLeakyCnf,
     ArticleOnlyPriorCnf,
@@ -20,16 +20,9 @@ from iptc_entity_pipeline.config import (
     ModelCnf,
     PathsCnf,
     TrainingCnf,
-    WPEntitiesAllLangsCnf,
-    WPEntitiesRelTH5,
     WPEntitiesMentionWeightedMeanCnf,
-    WPEntitiesMentionWeightedSumCnf,
-    WPEntitiesNlCnf,
     WPEntitiesRelevanceWeightedMeanCnf,
     WPEntitiesRelevanceWeightedSumCnf,
-    WPEntitiesWeightedMeanCnf,
-    WPEntitiesEnNlCnf,
-    Wikipedia2VecEntitiesAllLangsCnf,
     WikidataDescriptionEntitiesCnf,
     WpEntitiesCnf,
     WpEntitiesGeluCnf,
@@ -56,24 +49,16 @@ def test_config_from_dict_filters_unknown_keys() -> None:
 @pytest.mark.parametrize('name,expected_cls', [
     ('debug', DebugCnf),
     ('wpentities', WpEntitiesCnf),
-    ('wpentities_weighted_mean', WPEntitiesWeightedMeanCnf),
     ('wpentities_relevance_weighted_sum', WPEntitiesRelevanceWeightedSumCnf),
-    ('wpentities_mention_weighted_sum', WPEntitiesMentionWeightedSumCnf),
     ('wpentities_relevance_weighted_mean', WPEntitiesRelevanceWeightedMeanCnf),
     ('wpentities_mention_weighted_mean', WPEntitiesMentionWeightedMeanCnf),
     ('article_only', ArticleOnlyCnf),
-    ('entity_only', EntityOnlyCnf),
-    ('wpentities_en_nl', WPEntitiesEnNlCnf),
-    ('wpentities_nl', WPEntitiesNlCnf),
-    ('wpentities_all_langs', WPEntitiesAllLangsCnf),
-    ('wpentities_rel_th_5', WPEntitiesRelTH5),
-    ('best_wpentities_tuned', BestWpEntitiesTunedCnf),
-    ('best_article_only', BestArticleOnlyCnf),
+    ('wp_entity_only', EntityOnlyCnf),
+    ('best_article_only_tuned', BestArticleOnlyTunedCnf),
     ('article_only_skip', ArticleOnlySkipCnf),
     ('article_only_leaky', ArticleOnlyLeakyCnf),
     ('wpentities_skip', WpEntitiesSkipCnf),
     ('wpentities_leaky', WpEntitiesLeakyCnf),
-    ('wikipedia2vec_entities_all_langs', Wikipedia2VecEntitiesAllLangsCnf),
     ('wikidata_description_entities', WikidataDescriptionEntitiesCnf),
     ('  Debug  ', DebugCnf),
 ])
@@ -90,22 +75,14 @@ def test_list_config_names() -> None:
     assert {
         'debug',
         'wpentities',
-        'wpentities_weighted_mean',
         'wpentities_relevance_weighted_sum',
-        'wpentities_mention_weighted_sum',
         'article_only',
-        'entity_only',
-        'wpentities_en_nl',
-        'wpentities_nl',
-        'wpentities_all_langs',
-        'wpentities_rel_th_5',
-        'best_wpentities_tuned',
-        'best_article_only',
+        'wp_entity_only',
+        'best_article_only_tuned',
         'article_only_skip',
         'article_only_leaky',
         'wpentities_skip',
         'wpentities_leaky',
-        'wikipedia2vec_entities_all_langs',
         'wikidata_description_entities',
     }.issubset(set(list_config_names()))
 
@@ -135,24 +112,18 @@ def test_config_variants() -> None:
     assert ArticleOnlyLeakyCnf().model.nn_type == 'leaky_mlp'
     assert WpEntitiesSkipCnf().model.nn_type == 'skip_mlp'
     assert WpEntitiesLeakyCnf().model.nn_type == 'leaky_mlp'
-    assert WPEntitiesWeightedMeanCnf().emb.entity_pooling == 'weighted_mean_relevance'
     assert WPEntitiesRelevanceWeightedMeanCnf().emb.entity_pooling == 'weighted_mean_relevance'
     assert WPEntitiesMentionWeightedMeanCnf().emb.entity_pooling == 'weighted_mean'
     assert WPEntitiesRelevanceWeightedSumCnf().emb.entity_pooling == 'weighted_sum_relevance'
-    assert WPEntitiesMentionWeightedSumCnf().emb.entity_pooling == 'weighted_sum'
     assert DebugCnf().train.epochs == TrainingCnf().epochs
     assert WpEntitiesCnf().hparam.learning_rates == (0.00037,)
     assert ArticleOnlyCnf().hparam.learning_rates == (0.00037,)
+    assert BestWpEntitiesTunedCnf().hparam.hidden_dims == (4096,)
     assert BaseCnf().model.bias_from_prior is False
     assert ArticleOnlyPriorCnf().model.bias_from_prior is True
     assert WpEntitiesPriorCnf().model.bias_from_prior is True
     assert ArticleOnlyPriorCnf().model.nn_type == 'mlp'
     assert WpEntitiesPriorCnf().model.nn_type == 'mlp'
-    from iptc_entity_pipeline.config import BestWpEntitiesAttention2Cnf, WPEntitiesAttention2HPOCnf
-
-    assert BestWpEntitiesAttention2Cnf().model.nn_type == 'entity_attention2_mlp'
-    assert BestWpEntitiesAttention2Cnf().emb.entity_pooling == 'no_pooling'
-    assert WPEntitiesAttention2HPOCnf().model.nn_type == 'entity_attention2_mlp'
     d = BaseCnf().to_clearml_mapping()
     assert isinstance(d, dict) and 'paths' in d and 'model' in d
 
@@ -180,28 +151,6 @@ def test_hyperparam_space_default_types_are_scalar_sequences() -> None:
     assert all(isinstance(value, float) for value in space.dropouts2)
 
 
-@pytest.mark.parametrize('name,expected_threshold', [
-    ('wpentities_rel_th_5', 5.0),
-])
-def test_relevance_threshold_configs_map_to_embedding_threshold(name: str, expected_threshold: float) -> None:
-    cfg = get_config(name)
-    assert cfg.emb.entity_relevance_threshold == expected_threshold
-
-
-@pytest.mark.parametrize('name', [
-    'wpentities_rel_th_5',
-])
-def test_relevance_threshold_configs_keep_single_language_tuple(name: str) -> None:
-    cfg = get_config(name)
-    assert cfg.emb.entity_langs == ('en',)
-
-
 def test_wikidata_description_entities_config_uses_description_embedding_dir() -> None:
     cfg = get_config('wikidata_description_entities')
     assert cfg.paths.entity_embeddings_dir.endswith('/data/entity_embeddings/WikidataDescription')
-
-
-def test_wikipedia2vec_entities_all_langs_config_uses_wikipedia2vec_dir_and_all_langs() -> None:
-    cfg = get_config('wikipedia2vec_entities_all_langs')
-    assert cfg.paths.entity_embeddings_dir.endswith('/data/entity_embeddings/wikipedia2vec')
-    assert cfg.emb.entity_langs == ALL_ENTITY_LANGS
