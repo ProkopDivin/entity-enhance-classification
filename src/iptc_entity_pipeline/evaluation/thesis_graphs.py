@@ -1,10 +1,11 @@
 '''
-Generate publication-quality thesis graphs from a comparison Excel workbook.
+Generate publication-quality thesis graphs from comparison result exports.
 
 Reads the evaluation comparison Excel produced by
 :mod:`iptc_entity_pipeline.evaluation.comparison` and generates bar charts,
 moving-average line plots, and IPTC topic-level comparisons suitable for
-direct inclusion in a LaTeX thesis document.
+direct inclusion in a LaTeX thesis document. The input may alternatively be a
+directory containing the exported comparison CSV files.
 '''
 
 from __future__ import annotations
@@ -118,12 +119,17 @@ def _save_fig(fig: object, output_dir: Path, name: str) -> tuple[Path, Path]:
 # ---------------------------------------------------------------------------
 
 def load_sheet(*, excel_path: Path, sheet: str) -> pd.DataFrame:
-    '''Load a single sheet from the comparison Excel workbook.
+    '''Load a comparison table from an Excel workbook or CSV export directory.
 
-    :param excel_path: path to the .xlsx file
-    :param sheet: worksheet name
+    :param excel_path: path to the .xlsx file or the directory with comparison CSV files
+    :param sheet: worksheet name or CSV file stem
     :return: DataFrame with the sheet contents
     '''
+    if excel_path.is_dir():
+        csv_path = excel_path / f'{sheet}.csv'
+        LOG.info(f'Loading CSV={csv_path}')
+        return pd.read_csv(csv_path)
+
     LOG.info(f'Loading sheet={sheet} from {excel_path}')
     return pd.read_excel(excel_path, sheet_name=sheet)
 
@@ -745,7 +751,7 @@ def _plot_entity_pie_triple(
     ]
     for ax, data, subtitle, wcol in groups:
         labels, values = _build_pie_data(data, weight_col=wcol)
-        colors = [_ENTITY_TYPE_COLORS.get(l, '#CCCCCC') for l in labels]
+        colors = [_ENTITY_TYPE_COLORS.get(label, '#CCCCCC') for label in labels]
         wedges, texts, autotexts = ax.pie(
             values,
             labels=labels,
@@ -757,7 +763,7 @@ def _plot_entity_pie_triple(
         )
         for t in autotexts:
             t.set_fontsize(7)
-        title_size = 12 
+        title_size = 12
         ax.set_title(subtitle, fontsize=title_size)
 
     fig.suptitle(title, fontsize=14, y=1.0)
@@ -787,7 +793,6 @@ def plot_entity_type_pies(
         title='Entity type distribution by impact direction (count)',
         fig_name='graph7a_entity_type_count',
         output_dir=output_dir,
-        
     )
     results.append(('graph7a_entity_type_count', pdf, png))
 
@@ -1173,7 +1178,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '-i', '--input', required=True, type=Path,
-        help='Path to the evaluation comparison Excel file (.xlsx).',
+        help='Path to an evaluation comparison Excel file (.xlsx) or its exported CSV directory.',
     )
     parser.add_argument(
         '-o', '--output-dir', required=True, type=Path,
