@@ -42,6 +42,7 @@ pip install --find-links=wheels -e .
 
 python3 -m iptc_entity_pipeline.run_pipeline --local --config debug
 ```
+
 - for Windows: `.\.venv\Scripts\activate`
 
 `--local` runs even when `clearml` is not installed.
@@ -76,10 +77,11 @@ evaluation.
 
 ### Run
 
-
 ```bash
 python3 -m iptc_entity_pipeline.run_pipeline --local --config debug_eval
 ```
+
+
 
 ### Pointing at your own saved model
 
@@ -88,7 +90,7 @@ The default `model_path` in `DebugEvalCnf` is
 either:
 
 1. **Edit the config** in `src/iptc_entity_pipeline/config/debug.py` and change
-   the `model_path` value, or
+  the `model_path` value, or
 2. **Create a new eval config** that overrides `model_path`:
 
 ```python
@@ -96,6 +98,8 @@ either:
 class MyEvalCnf(DebugCnf):
     model_path: str | None = 'models/<your_run_folder>'
 ```
+
+
 
 ### What path changes when inputs change
 
@@ -114,8 +118,6 @@ themselves (train CSV, test CSV, embeddings dirs) are baked into the config and
 do **not** automatically update when `model_path` points to a different run --
 make sure the eval config uses the **same input paths** as the training run that
 produced the saved model.
-
-
 
 ## Installation
 
@@ -161,6 +163,7 @@ set up ClearML:
 
 For remote queue execution with a ClearML agent, see the
 [ClearML Agent docs](https://clear.ml/docs/latest/docs/clearml_agent/).
+
 
 # Making your own input
 
@@ -400,9 +403,93 @@ python -m entity_embeddings \
 
 Run `python -m entity_embeddings --help` for the full list of backends, variants, and tasks. All generators emit the same `{QID}_{lang}_{chunk}.npy` + `.json` layout consumed by the pipeline.
 
-##### Getting Wikipedia text representation for entities
+### 4 Getting Wikipedia text representation for entities (Intros and articles)
 
 To generate Wikipedia article text representations for entities, we created this
 [project](https://github.com/ProkopDivin/extractWikiArticles). 
 
 Warning: This project requires at least 250 GB of free disk space to avoid running out during decompression. It processes part of the Wikipedia dump; using the public API would be too slow and impractical, for our number of entities.
+
+
+## Code overview
+
+### Entry points
+
+| Script | Invocation | Purpose |
+| ------ | ---------- | ------- |
+| `run_pipeline.py` | `python3 -m iptc_entity_pipeline.run_pipeline --config <name> [--local]` | Main entry point. Runs the full 6-stage training/evaluation pipeline via ClearML (or locally with `--local`). |
+| `evaluation/comparison.py` | `python3 -m iptc_entity_pipeline.evaluation.comparison` | Compares two saved runs and produces Excel with per-class/corpus metrics and significance tests. |
+
+
+### Pipeline stages
+
+The main pipeline (`run_pipeline.py` &rarr; `pipeline.py`) executes these stages sequentially:
+
+```
+Stage 1: load_data           — Load train/test CSVs, attach entity annotations
+Stage 2: prepare_embeddings  — Pre-compute/cache article embeddings (.npy per article)
+Stage 3: build_dataset       — Combine article + pooled entity vectors into model input
+Stage 4: run_cv              — Optuna HPO with k-fold cross-validation (skipped if model_path is set)
+Stage 5: train_best          — Retrain final model on full training set with best hyperparams
+Stage 6: eval_final          — Evaluate on test set, save artifacts, run comparison vs base
+```
+
+When `model_path` is set in the config, stages 4 and 5 are skipped and the pre-trained
+model is loaded and evaluated directly.
+
+### Key modules
+
+| Module | Role |
+| ------ | ---- |
+| `pipeline.py` | ClearML pipeline orchestration; all `@PipelineDecorator.component` steps |
+| `data_loading.py` | Loads corpora CSVs, parses entities into `LinkedEntity` dataclass |
+| `article_embeddings.py` | `ArticleEmbeddingProvider` — caches/computes article `.npy` vectors |
+| `entity_embeddings.py` | `EntityEmbeddingStore` — lazy-loads entity `.npy` files with multi-language fallback |
+| `feature_builder.py` | `FeatureBuilder` — concatenates article + pooled entity vectors per document |
+| `pooling.py` | Entity pooling strategies (mean, weighted mean, relevance-weighted, attention/no-pooling) |
+| `dataset_builder.py` | Builds `EmbeddingDataset` / `RaggedEmbeddingDataset` (PyTorch datasets) |
+| `cross_validation.py` | Full CV + HPO loop; returns best config, thresholds, per-fold metrics |
+| `training.py` | Wraps legacy `trainClassificationModel` from the geneea library |
+| `threshold_tuning.py` | Per-class decision threshold sweep on dev folds |
+| `model_io.py` | Save/load model artifacts (`model.nn.bin`, thresholds, evaluation tables) |
+| `legacy_reuse.py` | Model factory and training/eval functions ported from original IPTC pipeline |
+| `clearml_compat.py` | Optional ClearML integration; local bypass when using `--local` |
+| `evaluation/evaluate.py` | Core evaluation: scores &rarr; thresholds &rarr; per-corpus/per-class metric tables |
+| `evaluation/comparison.py` | Two-run comparison with McNemar tests and article-level diffs |
+| `evaluation/reporting.py` | ClearML scalar/chart/table logging helpers |
+
+### Config system
+
+Configs are frozen dataclasses inheriting from `BaseCnf` (`config/base.py`), organized
+into nested concern-specific dataclasses:
+
+| Dataclass | Controls |
+| --------- | -------- |
+| `PathsCnf` | Corpus CSV paths, embedding dirs, removed category IDs |
+| `EmbeddingCnf` | Article/entity embedding settings, pooling method, language mode |
+| `ModelCnf` | MLP architecture (hidden dims, attention params) |
+| `TrainingCnf` | Epochs, batch size, optimizer, early stopping |
+| `HyperparamSpace` | Optuna search grid |
+| `CvCnf` | Fold count |
+| `ThresholdTuningCnf` | Per-class F-beta threshold sweep |
+| `EvaluationCnf` | Threshold defaults, base run for comparison |
+| `AssemblyCnf` | Dual-model ensemble setup |
+
+The registry (`config/registry.py`) maps ~80 config names to frozen instances.
+`run_pipeline.py --config <name>` selects the experiment variant. Config families live in
+separate modules: `debug.py`, `article_only.py`, `wpentities.py`, `sources.py`,
+`language.py`.
+
+### Saved artifacts
+
+Each pipeline run writes results to `results/saved_models/<config>_<timestamp>/`:
+
+```
+model.nn.bin                 — trained model weights
+pipeline_parameters.json     — full config snapshot
+predictions.pkl              — raw score matrix on test set
+eval_corpus.pkl              — gold-labeled test corpus
+custom_thresholds.json       — per-class tuned thresholds
+threshold_report.csv         — threshold tuning details
+final_evaluation_tables.xlsx — per-corpus and per-class metric tables
+```
