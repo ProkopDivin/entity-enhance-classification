@@ -1,0 +1,80 @@
+{
+  "seed": 43,
+  "mapping_source": "/home/prokop/Git/entity-enhance-classification/data/gold-chrono-per-dataset/wdId_mapping.tsv",
+  "entities_source": "/home/prokop/Git/entity-enhance-classification/data/gold-chrono-per-dataset/all-corpora-train-entities.csv",
+  "selected_mapping_rows": [
+    {
+      "gkb_id": "G110989308",
+      "wikidata_ids": [
+        "Q110989308"
+      ],
+      "wdid_count": 1
+    },
+    {
+      "gkb_id": "G2328646",
+      "wikidata_ids": [
+        "Q2328646"
+      ],
+      "wdid_count": 1
+    },
+    {
+      "gkb_id": "G98219720",
+      "wikidata_ids": [
+        "Q98219720"
+      ],
+      "wdid_count": 1
+    },
+    {
+      "gkb_id": "G15964180",
+      "wikidata_ids": [
+        "Q15964180"
+      ],
+      "wdid_count": 1
+    },
+    {
+      "gkb_id": "G752762",
+      "wikidata_ids": [
+        "Q3306663",
+        "Q6820684",
+        "Q752762"
+      ],
+      "wdid_count": 3
+    },
+    {
+      "gkb_id": "G47499",
+      "wikidata_ids": [
+        "Q10901070",
+        "Q47499"
+      ],
+      "wdid_count": 2
+    },
+    {
+      "gkb_id": "G1490400",
+      "wikidata_ids": [
+        "Q1490400",
+        "Q2067115"
+      ],
+      "wdid_count": 2
+    },
+    {
+      "gkb_id": "G736742",
+      "wikidata_ids": [
+        "Q736742",
+        "Q874319"
+      ],
+      "wdid_count": 2
+    }
+  ],
+  "matched_articles_seen": 73,
+  "entities_sample_size": 8,
+  "entity_article_ids": [
+    "en_dw_2914",
+    "fr_rts_10433",
+    "en_bbc_52641",
+    "en_cnn_10577",
+    "en_cnn_12723",
+    "nl_noordhollandsdagblad_13341",
+    "en_cnn_12251",
+    "en_cnn_17244"
+  ]
+}
