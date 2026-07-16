@@ -1,0 +1,1279 @@
+testEmbeddingPath: /home/prokop/Git/entity-enhance-classification/results/saved_models/debug_20260706_215424/test_embeddings.tsv
+embedSvcModelId: paraphrase-multilingual-MiniLM-L12-v2-300-0.3
+embedDim: 1408
+nnModelPath: /home/prokop/Git/entity-enhance-classification/results/saved_models/debug_20260706_215424/model.nn.bin
+threshold: 0.5
+thresholdByTopic:
+  arts+ - arts, culture, entertainment and media (01000000): 0.5
+  law+ - crime, law and justice (02000000): 0.5
+  disaster+ - disaster, accident and emergency incident (03000000): 0.5
+  economy+ - economy, business and finance (04000000): 0.5
+  education (05000000): 0.5
+  environment (06000000): 0.5
+  health (07000000): 0.5
+  human interest (08000000): 0.5
+  labor (09000000): 0.5
+  lifestyle+ - lifestyle and leisure (10000000): 0.5
+  politics and government (11000000): 0.5
+  religion - religion (12000000): 0.5
+  sci-tech - science and technology (13000000): 0.5
+  society (14000000): 0.5
+  sport (15000000): 0.5
+  conflict+ - conflict, war and peace (16000000): 0.5
+  weather (17000000): 0.5
+  arts+ > arts and entertainment (20000002): 0.5
+  arts+ >> cartoon (20000004): 0.5
+  arts+ >> movies (20000005): 0.5
+  arts+ >>> film festival (20000006): 0.5
+  arts+ >> dance (20000007): 0.5
+  arts+ >>> ballet (20000008): 0.5
+  arts+ >>> modern dance (20000009): 0.5
+  arts+ >> fashion (20000011): 0.5
+  arts+ >> literature (20000013): 0.5
+  arts+ >>> fiction (20000015): 0.5
+  arts+ >> music (20000018): 0.5
+  arts+ >>> musical instrument (20000019): 0.5
+  arts+ >>> musical performance (20000020): 0.5
+  arts+ >>> musical genre (20000021): 0.5
+  arts+ >>>> classical music (20000022): 0.5
+  arts+ >>>> jazz music (20000025): 0.5
+  arts+ >>>> popular music (20000026): 0.5
+  arts+ >>>> rock and roll music (20000027): 0.5
+  arts+ >> theater (20000029): 0.5
+  arts+ >> visual arts (20000031): 0.5
+  arts+ >>> architecture (20000032): 0.5
+  arts+ >>> painting (20000035): 0.5
+  arts+ >>> photography (20000036): 0.5
+  arts+ > culture (20000038): 0.5
+  arts+ >> customs and tradition (20000040): 0.5
+  arts+ >> festive event (culture) (20000041): 0.5
+  arts+ >> language (20000042): 0.5
+  arts+ >> library and museum (20000043): 0.5
+  arts+ >> monument and heritage site (20000044): 0.5
+  arts+ > mass media (20000045): 0.5
+  arts+ >> news media (20000046): 0.5
+  arts+ >> newspaper (20000047): 0.5
+  arts+ >> online media outlet (20000048): 0.5
+  arts+ >> radio (20000050): 0.5
+  arts+ >> television (20000051): 0.5
+  conflict+ > act of terror (20000053): 0.5
+  conflict+ >> terrorist bombings (20000055): 0.5
+  conflict+ > armed conflict (20000056): 0.5
+  conflict+ >> international military intervention (20000058): 0.5
+  conflict+ >> peacekeeping force (20000059): 0.5
+  conflict+ >> war (20000062): 0.5
+  conflict+ >>> civil war (20000063): 0.5
+  conflict+ > civil unrest (20000065): 0.5
+  conflict+ >> demonstration (20000066): 0.5
+  conflict+ >> revolution (20000068): 0.5
+  conflict+ >> riot (20000069): 0.5
+  conflict+ > coup d'etat (20000070): 0.5
+  conflict+ > massacre (20000071): 0.5
+  law+ >> genocide (20000072): 0.5
+  conflict+ > peace process (20000073): 0.5
+  conflict+ >> peace talks (20000076): 0.5
+  conflict+ >> prisoners of war (20000080): 0.5
+  law+ > crime (20000082): 0.5
+  law+ >> arson (20000083): 0.5
+  law+ >> assault (20000084): 0.5
+  law+ >>> sex crime (20000085): 0.5
+  law+ >> cyber crime (20000086): 0.5
+  law+ >> corporate crime (20000087): 0.5
+  law+ >> corruption (20000093): 0.5
+  law+ >>> bribery (20000094): 0.5
+  law+ >> drug related crimes (20000095): 0.5
+  law+ >>> drug trafficking (20000096): 0.5
+  law+ >> fraud (20000097): 0.5
+  law+ >> homicide (20000099): 0.5
+  law+ >> kidnapping (20000100): 0.5
+  law+ >> organized crime (20000101): 0.5
+  law+ >>> gang activity (20000102): 0.5
+  law+ >> terrorism (20000103): 0.5
+  law+ >> robbery and theft (20000104): 0.5
+  law+ >> war crime (20000105): 0.5
+  law+ > judiciary (20000106): 0.5
+  law+ >> court (20000107): 0.5
+  law+ >>> appeal (court) (20000108): 0.5
+  law+ >>> judge (20000110): 0.5
+  law+ >>> trial (court) (20000111): 0.5
+  law+ >> out of court procedures (20000116): 0.5
+  law+ >> prosecution and prosecutors (20000118): 0.5
+  society >> civil rights (20000120): 0.5
+  law+ > law (20000121): 0.5
+  law+ >> civil law (20000122): 0.5
+  law+ >>> regulations (20000124): 0.5
+  law+ >> criminal law (20000125): 0.5
+  law+ >> international law (20000126): 0.5
+  law+ >>> extradition (20000127): 0.5
+  law+ >>> international court and tribunal (20000128): 0.5
+  law+ > law enforcement (20000129): 0.5
+  law+ >> arrest (20000130): 0.5
+  law+ >> investigation (criminal) (20000131): 0.5
+  law+ >>> missing person (20000132): 0.5
+  law+ >> police (20000133): 0.5
+  law+ >>>> sentencing (criminal) (20000134): 0.5
+  law+ >>>>> fine (penalty) (20000136): 0.5
+  law+ >>>>> prison (20000137): 0.5
+  disaster+ > accident and emergency incident (20000139): 0.5
+  disaster+ >> explosion accident and incident (20000140): 0.5
+  disaster+ >> industrial accident and incident (20000141): 0.5
+  disaster+ >>> nuclear accident and incident (20000142): 0.5
+  disaster+ >> transportation accident and incident (20000143): 0.5
+  disaster+ >>> maritime accident and incident (20000145): 0.5
+  disaster+ >>> railway accident and incident (20000146): 0.5
+  disaster+ >>> road accident and incident (20000147): 0.5
+  disaster+ > disaster (20000148): 0.5
+  disaster+ >> famine (20000149): 0.5
+  disaster+ >> fire (20000150): 0.5
+  disaster+ >> natural disaster (20000151): 0.5
+  disaster+ >>> drought (20000152): 0.5
+  disaster+ >>> earthquake (20000153): 0.5
+  disaster+ >>> flood (20000154): 0.5
+  disaster+ >>> landslide (20000155): 0.5
+  disaster+ >>>> avalanche (20000156): 0.5
+  disaster+ >>> meteorological disaster (20000157): 0.5
+  disaster+ >>>> windstorms (20000158): 0.5
+  disaster+ >>> volcanic eruption (20000159): 0.5
+  disaster+ > emergency response (20000168): 0.5
+  economy+ > business information (20000170): 0.5
+  economy+ >>> bankruptcy (20000174): 0.5
+  economy+ >>> corporate earnings (20000178): 0.5
+  economy+ >> business financing (20000183): 0.5
+  economy+ >>> shareholder activity (20000185): 0.5
+  economy+ >> human resources (20000188): 0.5
+  economy+ >>> layoffs and downsizing (20000189): 0.5
+  economy+ >>> executive officer (20000190): 0.5
+  economy+ >> business strategy and marketing (20000192): 0.5
+  economy+ >> business governance (20000199): 0.5
+  economy+ >>> merger or acquisition (20000204): 0.5
+  economy+ > products and services (20000209): 0.5
+  economy+ >> agriculture (20000210): 0.5
+  economy+ >> chemicals (20000217): 0.5
+  economy+ >>> biotechnology business (20000218): 0.5
+  economy+ >>> pharmaceutical (20000223): 0.5
+  economy+ >> computing and information technology (20000225): 0.5
+  economy+ >>> computer and telecommunications hardware (20000226): 0.5
+  economy+ >>> software and applications (20000231): 0.5
+  economy+ >>> telecommunication service (20000233): 0.5
+  economy+ >>> wireless technology (20000234): 0.5
+  economy+ >> construction and property (20000235): 0.5
+  arts+ >>> restoration (20000242): 0.5
+  economy+ >> consumer goods (20000243): 0.5
+  economy+ >>> clothing (20000245): 0.5
+  economy+ >>>> online shopping (20000247): 0.5
+  economy+ >>> retail (20000252): 0.5
+  economy+ >>>> specialty store (20000253): 0.5
+  economy+ >> energy and resource (20000256): 0.5
+  economy+ >>> renewable energy (20000257): 0.5
+  economy+ >>> coal (20000258): 0.5
+  economy+ >>> electricity (20000260): 0.5
+  economy+ >>>> natural gas (20000263): 0.5
+  economy+ >>> nuclear power (20000265): 0.5
+  economy+ >>>> gasoline (20000268): 0.5
+  economy+ >>> waste management (20000269): 0.5
+  economy+ >>> water supply (20000270): 0.5
+  economy+ >>> banking (20000274): 0.5
+  economy+ >>> insurance (20000279): 0.5
+  economy+ >>> market trend (20000284): 0.5
+  economy+ >>> personal finance and investment (20000287): 0.5
+  economy+ >>> rental service (20000290): 0.5
+  economy+ >>> shipping and postal service (20000291): 0.5
+  economy+ >> manufacturing and engineering (20000294): 0.5
+  economy+ >>> aerospace (20000295): 0.5
+  economy+ >>> automotive (20000296): 0.5
+  economy+ >>> defense equipment (20000297): 0.5
+  economy+ >> media and entertainment industry (20000304): 0.5
+  economy+ >>> advertising (20000305): 0.5
+  economy+ >>> books and publishing (20000306): 0.5
+  economy+ >>> film industry (20000307): 0.5
+  economy+ >>> music industry (20000308): 0.5
+  economy+ >>> radio industry (20000313): 0.5
+  economy+ >>> satellite and cable service (20000314): 0.5
+  economy+ >>> television industry (20000315): 0.5
+  economy+ >> metal and mineral mining and refining (20000316): 0.5
+  economy+ >>> building material (20000317): 0.5
+  economy+ >>> beverage and grocery (20000324): 0.5
+  economy+ >>> tobacco and nicotine (20000330): 0.5
+  economy+ >> tourism and leisure industry (20000331): 0.5
+  economy+ >>> casinos and gambling (20000332): 0.5
+  economy+ >>> hotel and accommodation (20000333): 0.5
+  economy+ >>> recreational and sporting goods (20000334): 0.5
+  economy+ >>> restaurant and catering (20000335): 0.5
+  economy+ >>> tour operator (20000336): 0.5
+  economy+ >> transport (20000337): 0.5
+  economy+ >>> air transport (20000338): 0.5
+  economy+ >>> railway transport (20000340): 0.5
+  economy+ >>> road transport (20000341): 0.5
+  economy+ >>> waterway and maritime transport (20000343): 0.5
+  economy+ > economy (20000344): 0.5
+  politics and government >> economic policy (20000345): 0.5
+  economy+ >> economic trends and indicators (20000346): 0.5
+  economy+ > business enterprise (20000349): 0.5
+  economy+ >> central bank (20000350): 0.5
+  economy+ >>> consumer confidence (20000352): 0.5
+  economy+ >> currency (20000355): 0.5
+  economy+ >>> deflation (20000356): 0.5
+  economy+ >>> economic growth (20000357): 0.5
+  economy+ >>> gross domestic product (20000359): 0.5
+  economy+ >>> employment statistics (20000365): 0.5
+  economy+ >>> exporting (20000366): 0.5
+  economy+ >>> government debt (20000368): 0.5
+  economy+ >>> importing (20000369): 0.5
+  economy+ >>> inflation (20000370): 0.5
+  economy+ >>> interest rates (20000371): 0.5
+  economy+ >> international trade (20000373): 0.5
+  economy+ >>> trade agreements (20000374): 0.5
+  economy+ >>> trade dispute (20000376): 0.5
+  economy+ >>> trade policy (20000377): 0.5
+  economy+ >> monetary policy (20000379): 0.5
+  economy+ >>> mortgages (20000380): 0.5
+  economy+ >> mutual funds (20000381): 0.5
+  economy+ > market and exchange (20000385): 0.5
+  economy+ >> commodities market (20000386): 0.5
+  economy+ >>> energy market (20000387): 0.5
+  economy+ >> debt market (20000390): 0.5
+  economy+ >> foreign exchange market (20000391): 0.5
+  economy+ >> loan market (20000392): 0.5
+  economy+ >>> stocks and securities (20000396): 0.5
+  education > religious education (20000399): 0.5
+  education > school (20000400): 0.5
+  education >> primary education (20000401): 0.5
+  education >> college and university (20000405): 0.5
+  education > educational testing and examinations (20000413): 0.5
+  education > students (20000415): 0.5
+  education > teachers (20000416): 0.5
+  environment > climate change (20000418): 0.5
+  environment > conservation (20000420): 0.5
+  environment >> nature preserve (20000422): 0.5
+  politics and government >> environmental policy (20000423): 0.5
+  environment > environmental pollution (20000424): 0.5
+  environment >> air pollution (20000425): 0.5
+  environment >> waste material (20000428): 0.5
+  environment >> water pollution (20000429): 0.5
+  environment > natural resource (20000430): 0.5
+  environment >> forest (20000433): 0.5
+  environment >> mountain (20000434): 0.5
+  environment >> ocean (20000438): 0.5
+  environment >> river (20000439): 0.5
+  environment >> wetland (20000440): 0.5
+  environment > nature (20000441): 0.5
+  environment >> ecosystem (20000442): 0.5
+  environment >> invasive species (20000444): 0.5
+  health > disease and condition (20000446): 0.5
+  health >> cancer (20000447): 0.5
+  health >> communicable disease (20000448): 0.5
+  health >>> epidemic and pandemic (20000449): 0.5
+  health >>> viral disease (20000451): 0.5
+  health >>>> HIV and AIDS (20000452): 0.5
+  health >> heart disease (20000454): 0.5
+  health >> injury (20000456): 0.5
+  health >> medical condition (20000457): 0.5
+  health >> mental health (20000458): 0.5
+  health >>> obesity (20000460): 0.5
+  health > health facility (20000461): 0.5
+  health >> hospital (20000462): 0.5
+  health > health organization (20000463): 0.5
+  health > health treatment and procedure (20000464): 0.5
+  health >> non-prescription drug (20000467): 0.5
+  health >> prescription drugs (20000468): 0.5
+  health >> medical test (20000469): 0.5
+  health >> vaccine (20000477): 0.5
+  health >> therapy (20000478): 0.5
+  politics and government >> healthcare policy (20000479): 0.5
+  health > government health care (20000480): 0.5
+  health > health insurance (20000483): 0.5
+  health > medical profession (20000485): 0.5
+  health >> medical specialization (20000487): 0.5
+  health >>> pediatrics (20000490): 0.5
+  health >> medical staff (20000492): 0.5
+  environment >>> animal disease (20000494): 0.5
+  human interest > award and prize (20000498): 0.5
+  human interest > record and achievement (20000499): 0.5
+  environment >> animal (20000500): 0.5
+  human interest > ceremony (20000501): 0.5
+  human interest > high society (20000504): 0.5
+  human interest > celebrity (20000505): 0.5
+  human interest >> royalty (20000506): 0.5
+  environment >> flowers and plants (20000507): 0.5
+  labor > employment (20000509): 0.5
+  labor >> employee (20000512): 0.5
+  labor >> employer (20000513): 0.5
+  labor >> employment training (20000514): 0.5
+  labor >> wages and benefits (20000518): 0.5
+  labor > employment legislation (20000521): 0.5
+  labor >> workplace health and safety (20000522): 0.5
+  labor > labor market (20000523): 0.5
+  labor > labor relations (20000524): 0.5
+  labor >> collective agreements (20000525): 0.5
+  labor >> labor dispute (20000529): 0.5
+  labor >>> labor strike (20000530): 0.5
+  labor > retirement (20000531): 0.5
+  labor >> pension (20000532): 0.5
+  labor > unemployment (20000533): 0.5
+  labor > unions (20000536): 0.5
+  lifestyle+ > leisure (20000538): 0.5
+  lifestyle+ >> game (20000540): 0.5
+  lifestyle+ >>> board game (20000541): 0.5
+  lifestyle+ >>> video game (20000548): 0.5
+  lifestyle+ >> gaming and lottery (20000549): 0.5
+  lifestyle+ >> hobby (20000550): 0.5
+  lifestyle+ >> vacation (20000551): 0.5
+  lifestyle+ >>> public holiday (20000552): 0.5
+  lifestyle+ >> leisure venue (20000553): 0.5
+  lifestyle+ >>> amusement park (20000554): 0.5
+  lifestyle+ >>> bar (20000555): 0.5
+  lifestyle+ >>> cafe (20000556): 0.5
+  lifestyle+ >>> restaurant (20000558): 0.5
+  lifestyle+ >> outdoor recreational activities (20000560): 0.5
+  lifestyle+ >>> fishing (20000561): 0.5
+  lifestyle+ >>> hunting (20000562): 0.5
+  lifestyle+ >> travel and tourism (20000563): 0.5
+  lifestyle+ > lifestyle (20000565): 0.5
+  lifestyle+ >>> automobile enthusiasm (20000566): 0.5
+  lifestyle+ >>> food and drink enthusiasm (20000568): 0.5
+  lifestyle+ >> house and home (20000570): 0.5
+  politics and government > election (20000574): 0.5
+  politics and government >> citizens' initiative and recall (20000575): 0.5
+  politics and government >> electoral system (20000576): 0.5
+  politics and government >> local elections (20000578): 0.5
+  politics and government >> national elections (20000579): 0.5
+  politics and government >> political candidates (20000582): 0.5
+  politics and government >> referendum (20000584): 0.5
+  politics and government >> state elections (20000585): 0.5
+  politics and government >> voting (20000586): 0.5
+  society > fundamental rights (20000587): 0.5
+  society >> censorship and freedom of speech (20000588): 0.5
+  society >> freedom of the press (20000591): 0.5
+  society >> human rights (20000592): 0.5
+  politics and government > government (20000593): 0.5
+  politics and government >> government employee (20000595): 0.5
+  politics and government >> public officials (20000596): 0.5
+  politics and government >> constitution (law) (20000597): 0.5
+  politics and government >> national security (20000598): 0.5
+  politics and government >>> armed forces (20000599): 0.5
+  politics and government >>> military weaponry and equipment (20000602): 0.5
+  politics and government >>> espionage and intelligence (20000605): 0.5
+  politics and government >> executive (government) (20000606): 0.5
+  politics and government >> government budget (20000607): 0.5
+  politics and government >> head of state (20000610): 0.5
+  politics and government >> local government (20000612): 0.5
+  politics and government >> minister or secretary (government) (20000613): 0.5
+  politics and government >> national government (20000614): 0.5
+  politics and government >> legislative body (20000615): 0.5
+  politics and government >>> lower house (legislature) (20000616): 0.5
+  politics and government >>> upper house (legislature) (20000617): 0.5
+  politics and government >> regional government (20000618): 0.5
+  politics and government >> taxation policy (20000620): 0.5
+  politics and government > government policy (20000621): 0.5
+  politics and government >>> privatization (20000624): 0.5
+  politics and government >>> state-owned enterprise (20000625): 0.5
+  politics and government >> data protection policy (20000627): 0.5
+  politics and government >> housing and urban planning policy (20000628): 0.5
+  politics and government >> pension and welfare policy (20000630): 0.5
+  politics and government >> personal weapon control policy (20000632): 0.5
+  politics and government >> immigration policy (20000634): 0.5
+  politics and government >> nuclear policy (20000635): 0.5
+  politics and government >> regulation of industry (20000636): 0.5
+  politics and government >>> food and drink regulations (20000637): 0.5
+  politics and government > international relations (20000638): 0.5
+  politics and government >> diplomacy (20000639): 0.5
+  politics and government >>> summit meeting (20000640): 0.5
+  politics and government >>> treaty (20000641): 0.5
+  politics and government >> economic sanction (20000642): 0.5
+  politics and government >> foreign aid (20000643): 0.5
+  politics and government >> international organization (20000644): 0.5
+  politics and government >> refugees and internally displaced people (20000645): 0.5
+  politics and government > non-governmental organisation (NGO) (20000646): 0.5
+  politics and government >> political system (20000653): 0.5
+  politics and government >>> democracy (20000654): 0.5
+  politics and government >>> dictatorship (20000655): 0.5
+  religion > belief systems (20000657): 0.5
+  religion >> Christianity (20000659): 0.5
+  religion >> cult (20000674): 0.5
+  religion >> Hinduism (20000676): 0.5
+  religion >> Islam (20000677): 0.5
+  religion >> Judaism (20000679): 0.5
+  religion >> Unificationism (20000686): 0.5
+  religion > religious conflict (20000688): 0.5
+  religion > religious festival and holiday (20000690): 0.5
+  religion > religious facilities (20000697): 0.5
+  religion >> church (20000698): 0.5
+  religion > religious leader (20000703): 0.5
+  religion >> pope (20000704): 0.5
+  sci-tech > biomedical science (20000710): 0.5
+  sci-tech > mathematics (20000715): 0.5
+  sci-tech > natural science (20000717): 0.5
+  sci-tech >> astronomy (20000718): 0.5
+  sci-tech >> biology (20000719): 0.5
+  sci-tech >>> botany (20000720): 0.5
+  sci-tech >>> zoology (20000724): 0.5
+  sci-tech >> chemistry (20000725): 0.5
+  sci-tech >> cosmology (20000726): 0.5
+  sci-tech >> geology (20000727): 0.5
+  sci-tech >> marine science (20000729): 0.5
+  sci-tech >> physics (20000731): 0.5
+  sci-tech >>> nuclear physics (20000733): 0.5
+  sci-tech >>>> particle physics (20000734): 0.5
+  sci-tech > scientific research (20000735): 0.5
+  sci-tech >> scientific innovation (20000736): 0.5
+  sci-tech >> medical research (20000737): 0.5
+  sci-tech >> scientific exploration (20000738): 0.5
+  sci-tech >>> space exploration (20000739): 0.5
+  sci-tech >> scientific publication (20000740): 0.5
+  sci-tech > social sciences (20000742): 0.5
+  sci-tech >> anthropology (20000743): 0.5
+  sci-tech >> archeology (20000744): 0.5
+  sci-tech >> history (20000747): 0.5
+  sci-tech >> psychology (20000753): 0.5
+  sci-tech >> sociology (20000754): 0.5
+  sci-tech > technology and engineering (20000756): 0.5
+  sci-tech >> aerospace engineering (20000757): 0.5
+  sci-tech >> agricultural technology (20000759): 0.5
+  sci-tech >> identification technology (20000762): 0.5
+  sci-tech >> information technology and computer science (20000763): 0.5
+  society > communities (20000768): 0.5
+  society >> social networking (20000769): 0.5
+  society > demographics (20000770): 0.5
+  society > immigration (20000771): 0.5
+  society > emigration (20000772): 0.5
+  society >> illegal immigration (20000773): 0.5
+  society > discrimination (20000775): 0.5
+  society >> racism (20000777): 0.5
+  society >> religious discrimination (20000778): 0.5
+  society >> sexism (20000779): 0.5
+  society > family (20000780): 0.5
+  society >> Dating and Relationships (20000782): 0.5
+  society >> divorce (20000783): 0.5
+  society >> family planning (20000784): 0.5
+  society >>> abortion (20000785): 0.5
+  society >> marriage (20000786): 0.5
+  society >> parenting (20000787): 0.5
+  society > demographic group (20000788): 0.5
+  society >> children (20000790): 0.5
+  society >> disabilities (20000791): 0.5
+  society >> LGBTQ (20000792): 0.5
+  society >> gender (20000793): 0.5
+  society >> infants (20000794): 0.5
+  society >> national or ethnic minority (20000795): 0.5
+  society >> senior citizens (20000797): 0.5
+  society >> teenagers (20000798): 0.5
+  society > social condition (20000799): 0.5
+  society >> homelessness (20000800): 0.5
+  society >> poverty (20000801): 0.5
+  society > social problem (20000802): 0.5
+  society >> abusive behavior (20000803): 0.5
+  society >> addiction (20000804): 0.5
+  society > values (20000808): 0.5
+  society >> death and dying (20000810): 0.5
+  society >>> suicide (20000813): 0.5
+  society >> ethics (20000814): 0.5
+  society >> pornography (20000815): 0.5
+  society >> sexual behavior (20000816): 0.5
+  society > welfare (20000817): 0.5
+  society >> charity (20000818): 0.5
+  society >> social services (20000820): 0.5
+  sport > competition discipline (20000822): 0.5
+  sport >> track and field (20000827): 0.5
+  sport >>> decathlon (20000829): 0.5
+  sport >>> middle distance run (20000838): 0.5
+  sport >>> sprint run (20000844): 0.5
+  sport >> baseball (20000849): 0.5
+  sport >> basketball (20000851): 0.5
+  sport >> biathlon (20000852): 0.5
+  sport >> bobsleigh (20000854): 0.5
+  sport >> boxing (20000856): 0.5
+  sport >> curling (20000890): 0.5
+  sport >> cycling (20000892): 0.5
+  sport >>> mountain biking (20000903): 0.5
+  sport >> competitive dancing (20000911): 0.5
+  sport >> darts (20000912): 0.5
+  sport >> equestrian (20000923): 0.5
+  sport >> fencing (20000929): 0.5
+  sport >> field hockey (20000933): 0.5
+  sport >> fist ball (20000936): 0.5
+  sport >> Gaelic football (20000939): 0.5
+  sport >> golf (20000940): 0.5
+  sport >>> mini golf (20000941): 0.5
+  sport >> gymnastics (20000942): 0.5
+  sport >> handball (team) (20000958): 0.5
+  sport >> horse racing (20000960): 0.5
+  sport >> ice hockey (20000965): 0.5
+  sport >>> judo (20000969): 0.5
+  sport >> luge (20000987): 0.5
+  sport >> marathon (20000988): 0.5
+  sport >> motor car racing (20000991): 0.5
+  sport >> motorcycling (20000998): 0.5
+  sport >> pool (20001015): 0.5
+  sport >>> rugby league (20001035): 0.5
+  sport >> sailing (20001038): 0.5
+  sport >> skeleton (20001055): 0.5
+  sport >> skiing (20001056): 0.5
+  sport >>> alpine skiing (20001057): 0.5
+  sport >>> ski jumping (20001061): 0.5
+  sport >> snooker (20001063): 0.5
+  sport >> snowboarding (20001064): 0.5
+  sport >> soccer (20001065): 0.5
+  sport >> speed skating (20001067): 0.5
+  sport >> swimming (20001071): 0.5
+  sport >> table tennis (20001083): 0.5
+  sport >> tennis (20001085): 0.5
+  sport >> weightlifting and powerlifting (20001093): 0.5
+  sport > disciplinary action in sport (20001103): 0.5
+  sport > drug use in sport (20001104): 0.5
+  sport > sport event (20001108): 0.5
+  sport > sport industry (20001124): 0.5
+  sport > sport organization (20001125): 0.5
+  sport > sport venue (20001126): 0.5
+  weather > weather forecast (20001128): 0.5
+  weather > weather phenomena (20001129): 0.5
+  arts+ >>> musical (20001133): 0.5
+  arts+ >> art exhibition (20001135): 0.5
+  economy+ >>> trade show or expo (20001136): 0.5
+  lifestyle+ >> party (20001143): 0.5
+  politics and government >>>> military service (20001145): 0.5
+  sport > sports transaction (20001148): 0.5
+  sport >>> cross-country skiing (20001149): 0.5
+  sport >>> Nordic combined (20001150): 0.5
+  sport >> short track speed skating (20001151): 0.5
+  sport >> martial arts (20001157): 0.5
+  sport >> rugby (20001176): 0.5
+  sport >> Olympic Games (20001177): 0.5
+  sport >> Paralympic Games (20001178): 0.5
+  arts+ >> series (20001179): 0.5
+  arts+ >> festival (20001181): 0.5
+  arts+ >> social media (20001182): 0.5
+  sport >> eSports (20001183): 0.5
+  arts+ >>>> hip hop (20001184): 0.5
+  arts+ >>> stand-up comedy (20001190): 0.5
+  arts+ >>> influencers (20001192): 0.5
+  society >> sexual misconduct (20001193): 0.5
+  law+ >>> tax evasion (20001195): 0.5
+  law+ >> reckless driving (20001196): 0.5
+  law+ >> administrative law (20001197): 0.5
+  disaster+ >>> wildfire (20001202): 0.5
+  economy+ >>>> solar power (20001209): 0.5
+  economy+ >>>> hydroelectric power (20001210): 0.5
+  economy+ >>>> wind power (20001211): 0.5
+  health >> surgery (20001228): 0.5
+  health >> healthcare clinic (20001229): 0.5
+  sport >>> mixed martial arts (20001231): 0.5
+  society >> elderly care (20001232): 0.5
+  human interest >> funeral and memorial service (20001235): 0.5
+  human interest >> wedding (20001236): 0.5
+  human interest > anniversary (20001237): 0.5
+  human interest > birthday (20001238): 0.5
+  economy+ >>> oil and gas (20001243): 0.5
+  economy+ >> utilities (20001244): 0.5
+  economy+ >>> infrastructure projects (20001245): 0.5
+  arts+ >>> hairstyles (20001249): 0.5
+  lifestyle+ >>>> cooking and baking (20001253): 0.5
+  lifestyle+ >>>> beer, wine and spirits (20001254): 0.5
+  politics and government >> political party convention (20001259): 0.5
+  politics and government >> political committee (20001260): 0.5
+  politics and government >> head of government (20001261): 0.5
+  politics and government >> public inquiry (20001262): 0.5
+  politics and government >> infrastructure policy (20001264): 0.5
+  politics and government >> local government policy (20001265): 0.5
+  politics and government >> political debates (20001266): 0.5
+  society >>> contraception (20001274): 0.5
+  labor >> volunteering (20001277): 0.5
+  economy+ >>> cryptocurrency (20001279): 0.5
+  disaster+ >>>> hurricane (20001280): 0.5
+  law+ >> human smuggling and trafficking (20001283): 0.5
+  society >> bullying (20001284): 0.5
+  law+ >>> supreme and high court (20001287): 0.5
+  society >> indigenous people (20001288): 0.5
+  economy+ >> sales channel (20001289): 0.5
+  economy+ >>> streaming service (20001293): 0.5
+  sci-tech >>> artificial intelligence (20001298): 0.5
+  law+ >> surveillance (20001299): 0.5
+  society >> privacy (20001300): 0.5
+  sport > sport achievement (20001301): 0.5
+  sport >> sports record (20001302): 0.5
+  sport >> sports medal and trophy (20001303): 0.5
+  politics and government >> political leadership (20001312): 0.5
+  law+ >> shootings (20001313): 0.5
+  politics and government >> border dispute (20001316): 0.5
+  society >> child care (20001317): 0.5
+  arts+ >> disinformation and misinformation (20001319): 0.5
+  law+ >> torture (20001320): 0.5
+  disaster+ >> drowning (20001321): 0.5
+  sport > sports coaching (20001323): 0.5
+  sport > sports management and ownership (20001324): 0.5
+  society >> women's rights (20001326): 0.5
+  society >> women (20001327): 0.5
+  society >> men (20001328): 0.5
+  sport >> road cycling (20001333): 0.5
+  sport >> track cycling (20001334): 0.5
+  politics and government >> education policy (20001338): 0.5
+  sport >> regular competition (20001341): 0.5
+  sport >> playoff championship (20001342): 0.5
+  sport >> final game (20001343): 0.5
+  religion >>> Catholicism (20001344): 0.5
+  economy+ >> healthcare industry (20001354): 0.5
+  health >>> depression (20001356): 0.5
+  health >>> anxiety and stress (20001357): 0.5
+  health > public health (20001358): 0.5
+  society >> pregnancy and childbirth (20001359): 0.5
+  conflict+ > cyber warfare (20001361): 0.5
+  economy+ >> business reporting and performance (20001365): 0.5
+  economy+ >> business restructuring (20001366): 0.5
+  'economy+ >>> commercial real estate: (20001367)': 0.5
+  economy+ >>> residential real estate (20001368): 0.5
+  economy+ >> financial service (20001370): 0.5
+  economy+ >> business service (20001371): 0.5
+  economy+ >>> news industry (20001372): 0.5
+  environment > sustainability (20001374): 0.5
+  economy+ >>> corporate bond (20001376): 0.5
+  conflict+ > war victims (20001377): 0.5
+  sport >>> breaking (breakdance) (20001379): 0.5
+  politics and government >> special election (20001380): 0.5
+  politics and government >> coalition building (20001382): 0.5
+  politics and government >> zoning policy (20001383): 0.5
+  politics and government >> political party (20001384): 0.5
+  politics and government >> political movement and association (20001385): 0.5
+  politics and government >>> communism (20001386): 0.5
+  politics and government >>> theocracy (20001388): 0.5
+  politics and government >>> absolute monarchy (20001389): 0.5
+  sport >>> ski mountaineering (20001390): 0.5
+  lifestyle+ >> vegetarianism and veganism (20001391): 0.5
+  lifestyle+ >>> park and playground (20001392): 0.5
+  sport >>> futsal (20001393): 0.5
+  economy+ >>> pesticide and herbicide (20001395): 0.5
+selectedTopics:
+- arts+ - arts, culture, entertainment and media (01000000)
+- law+ - crime, law and justice (02000000)
+- disaster+ - disaster, accident and emergency incident (03000000)
+- economy+ - economy, business and finance (04000000)
+- education (05000000)
+- environment (06000000)
+- health (07000000)
+- human interest (08000000)
+- labor (09000000)
+- lifestyle+ - lifestyle and leisure (10000000)
+- politics and government (11000000)
+- religion - religion (12000000)
+- sci-tech - science and technology (13000000)
+- society (14000000)
+- sport (15000000)
+- conflict+ - conflict, war and peace (16000000)
+- weather (17000000)
+- arts+ > arts and entertainment (20000002)
+- arts+ >> cartoon (20000004)
+- arts+ >> movies (20000005)
+- arts+ >>> film festival (20000006)
+- arts+ >> dance (20000007)
+- arts+ >>> ballet (20000008)
+- arts+ >>> modern dance (20000009)
+- arts+ >> fashion (20000011)
+- arts+ >> literature (20000013)
+- arts+ >>> fiction (20000015)
+- arts+ >> music (20000018)
+- arts+ >>> musical instrument (20000019)
+- arts+ >>> musical performance (20000020)
+- arts+ >>> musical genre (20000021)
+- arts+ >>>> classical music (20000022)
+- arts+ >>>> jazz music (20000025)
+- arts+ >>>> popular music (20000026)
+- arts+ >>>> rock and roll music (20000027)
+- arts+ >> theater (20000029)
+- arts+ >> visual arts (20000031)
+- arts+ >>> architecture (20000032)
+- arts+ >>> painting (20000035)
+- arts+ >>> photography (20000036)
+- arts+ > culture (20000038)
+- arts+ >> customs and tradition (20000040)
+- arts+ >> festive event (culture) (20000041)
+- arts+ >> language (20000042)
+- arts+ >> library and museum (20000043)
+- arts+ >> monument and heritage site (20000044)
+- arts+ > mass media (20000045)
+- arts+ >> news media (20000046)
+- arts+ >> newspaper (20000047)
+- arts+ >> online media outlet (20000048)
+- arts+ >> radio (20000050)
+- arts+ >> television (20000051)
+- conflict+ > act of terror (20000053)
+- conflict+ >> terrorist bombings (20000055)
+- conflict+ > armed conflict (20000056)
+- conflict+ >> international military intervention (20000058)
+- conflict+ >> peacekeeping force (20000059)
+- conflict+ >> war (20000062)
+- conflict+ >>> civil war (20000063)
+- conflict+ > civil unrest (20000065)
+- conflict+ >> demonstration (20000066)
+- conflict+ >> revolution (20000068)
+- conflict+ >> riot (20000069)
+- conflict+ > coup d'etat (20000070)
+- conflict+ > massacre (20000071)
+- law+ >> genocide (20000072)
+- conflict+ > peace process (20000073)
+- conflict+ >> peace talks (20000076)
+- conflict+ >> prisoners of war (20000080)
+- law+ > crime (20000082)
+- law+ >> arson (20000083)
+- law+ >> assault (20000084)
+- law+ >>> sex crime (20000085)
+- law+ >> cyber crime (20000086)
+- law+ >> corporate crime (20000087)
+- law+ >> corruption (20000093)
+- law+ >>> bribery (20000094)
+- law+ >> drug related crimes (20000095)
+- law+ >>> drug trafficking (20000096)
+- law+ >> fraud (20000097)
+- law+ >> homicide (20000099)
+- law+ >> kidnapping (20000100)
+- law+ >> organized crime (20000101)
+- law+ >>> gang activity (20000102)
+- law+ >> terrorism (20000103)
+- law+ >> robbery and theft (20000104)
+- law+ >> war crime (20000105)
+- law+ > judiciary (20000106)
+- law+ >> court (20000107)
+- law+ >>> appeal (court) (20000108)
+- law+ >>> judge (20000110)
+- law+ >>> trial (court) (20000111)
+- law+ >> out of court procedures (20000116)
+- law+ >> prosecution and prosecutors (20000118)
+- society >> civil rights (20000120)
+- law+ > law (20000121)
+- law+ >> civil law (20000122)
+- law+ >>> regulations (20000124)
+- law+ >> criminal law (20000125)
+- law+ >> international law (20000126)
+- law+ >>> extradition (20000127)
+- law+ >>> international court and tribunal (20000128)
+- law+ > law enforcement (20000129)
+- law+ >> arrest (20000130)
+- law+ >> investigation (criminal) (20000131)
+- law+ >>> missing person (20000132)
+- law+ >> police (20000133)
+- law+ >>>> sentencing (criminal) (20000134)
+- law+ >>>>> fine (penalty) (20000136)
+- law+ >>>>> prison (20000137)
+- disaster+ > accident and emergency incident (20000139)
+- disaster+ >> explosion accident and incident (20000140)
+- disaster+ >> industrial accident and incident (20000141)
+- disaster+ >>> nuclear accident and incident (20000142)
+- disaster+ >> transportation accident and incident (20000143)
+- disaster+ >>> maritime accident and incident (20000145)
+- disaster+ >>> railway accident and incident (20000146)
+- disaster+ >>> road accident and incident (20000147)
+- disaster+ > disaster (20000148)
+- disaster+ >> famine (20000149)
+- disaster+ >> fire (20000150)
+- disaster+ >> natural disaster (20000151)
+- disaster+ >>> drought (20000152)
+- disaster+ >>> earthquake (20000153)
+- disaster+ >>> flood (20000154)
+- disaster+ >>> landslide (20000155)
+- disaster+ >>>> avalanche (20000156)
+- disaster+ >>> meteorological disaster (20000157)
+- disaster+ >>>> windstorms (20000158)
+- disaster+ >>> volcanic eruption (20000159)
+- disaster+ > emergency response (20000168)
+- economy+ > business information (20000170)
+- economy+ >>> bankruptcy (20000174)
+- economy+ >>> corporate earnings (20000178)
+- economy+ >> business financing (20000183)
+- economy+ >>> shareholder activity (20000185)
+- economy+ >> human resources (20000188)
+- economy+ >>> layoffs and downsizing (20000189)
+- economy+ >>> executive officer (20000190)
+- economy+ >> business strategy and marketing (20000192)
+- economy+ >> business governance (20000199)
+- economy+ >>> merger or acquisition (20000204)
+- economy+ > products and services (20000209)
+- economy+ >> agriculture (20000210)
+- economy+ >> chemicals (20000217)
+- economy+ >>> biotechnology business (20000218)
+- economy+ >>> pharmaceutical (20000223)
+- economy+ >> computing and information technology (20000225)
+- economy+ >>> computer and telecommunications hardware (20000226)
+- economy+ >>> software and applications (20000231)
+- economy+ >>> telecommunication service (20000233)
+- economy+ >>> wireless technology (20000234)
+- economy+ >> construction and property (20000235)
+- arts+ >>> restoration (20000242)
+- economy+ >> consumer goods (20000243)
+- economy+ >>> clothing (20000245)
+- economy+ >>>> online shopping (20000247)
+- economy+ >>> retail (20000252)
+- economy+ >>>> specialty store (20000253)
+- economy+ >> energy and resource (20000256)
+- economy+ >>> renewable energy (20000257)
+- economy+ >>> coal (20000258)
+- economy+ >>> electricity (20000260)
+- economy+ >>>> natural gas (20000263)
+- economy+ >>> nuclear power (20000265)
+- economy+ >>>> gasoline (20000268)
+- economy+ >>> waste management (20000269)
+- economy+ >>> water supply (20000270)
+- economy+ >>> banking (20000274)
+- economy+ >>> insurance (20000279)
+- economy+ >>> market trend (20000284)
+- economy+ >>> personal finance and investment (20000287)
+- economy+ >>> rental service (20000290)
+- economy+ >>> shipping and postal service (20000291)
+- economy+ >> manufacturing and engineering (20000294)
+- economy+ >>> aerospace (20000295)
+- economy+ >>> automotive (20000296)
+- economy+ >>> defense equipment (20000297)
+- economy+ >> media and entertainment industry (20000304)
+- economy+ >>> advertising (20000305)
+- economy+ >>> books and publishing (20000306)
+- economy+ >>> film industry (20000307)
+- economy+ >>> music industry (20000308)
+- economy+ >>> radio industry (20000313)
+- economy+ >>> satellite and cable service (20000314)
+- economy+ >>> television industry (20000315)
+- economy+ >> metal and mineral mining and refining (20000316)
+- economy+ >>> building material (20000317)
+- economy+ >>> beverage and grocery (20000324)
+- economy+ >>> tobacco and nicotine (20000330)
+- economy+ >> tourism and leisure industry (20000331)
+- economy+ >>> casinos and gambling (20000332)
+- economy+ >>> hotel and accommodation (20000333)
+- economy+ >>> recreational and sporting goods (20000334)
+- economy+ >>> restaurant and catering (20000335)
+- economy+ >>> tour operator (20000336)
+- economy+ >> transport (20000337)
+- economy+ >>> air transport (20000338)
+- economy+ >>> railway transport (20000340)
+- economy+ >>> road transport (20000341)
+- economy+ >>> waterway and maritime transport (20000343)
+- economy+ > economy (20000344)
+- politics and government >> economic policy (20000345)
+- economy+ >> economic trends and indicators (20000346)
+- economy+ > business enterprise (20000349)
+- economy+ >> central bank (20000350)
+- economy+ >>> consumer confidence (20000352)
+- economy+ >> currency (20000355)
+- economy+ >>> deflation (20000356)
+- economy+ >>> economic growth (20000357)
+- economy+ >>> gross domestic product (20000359)
+- economy+ >>> employment statistics (20000365)
+- economy+ >>> exporting (20000366)
+- economy+ >>> government debt (20000368)
+- economy+ >>> importing (20000369)
+- economy+ >>> inflation (20000370)
+- economy+ >>> interest rates (20000371)
+- economy+ >> international trade (20000373)
+- economy+ >>> trade agreements (20000374)
+- economy+ >>> trade dispute (20000376)
+- economy+ >>> trade policy (20000377)
+- economy+ >> monetary policy (20000379)
+- economy+ >>> mortgages (20000380)
+- economy+ >> mutual funds (20000381)
+- economy+ > market and exchange (20000385)
+- economy+ >> commodities market (20000386)
+- economy+ >>> energy market (20000387)
+- economy+ >> debt market (20000390)
+- economy+ >> foreign exchange market (20000391)
+- economy+ >> loan market (20000392)
+- economy+ >>> stocks and securities (20000396)
+- education > religious education (20000399)
+- education > school (20000400)
+- education >> primary education (20000401)
+- education >> college and university (20000405)
+- education > educational testing and examinations (20000413)
+- education > students (20000415)
+- education > teachers (20000416)
+- environment > climate change (20000418)
+- environment > conservation (20000420)
+- environment >> nature preserve (20000422)
+- politics and government >> environmental policy (20000423)
+- environment > environmental pollution (20000424)
+- environment >> air pollution (20000425)
+- environment >> waste material (20000428)
+- environment >> water pollution (20000429)
+- environment > natural resource (20000430)
+- environment >> forest (20000433)
+- environment >> mountain (20000434)
+- environment >> ocean (20000438)
+- environment >> river (20000439)
+- environment >> wetland (20000440)
+- environment > nature (20000441)
+- environment >> ecosystem (20000442)
+- environment >> invasive species (20000444)
+- health > disease and condition (20000446)
+- health >> cancer (20000447)
+- health >> communicable disease (20000448)
+- health >>> epidemic and pandemic (20000449)
+- health >>> viral disease (20000451)
+- health >>>> HIV and AIDS (20000452)
+- health >> heart disease (20000454)
+- health >> injury (20000456)
+- health >> medical condition (20000457)
+- health >> mental health (20000458)
+- health >>> obesity (20000460)
+- health > health facility (20000461)
+- health >> hospital (20000462)
+- health > health organization (20000463)
+- health > health treatment and procedure (20000464)
+- health >> non-prescription drug (20000467)
+- health >> prescription drugs (20000468)
+- health >> medical test (20000469)
+- health >> vaccine (20000477)
+- health >> therapy (20000478)
+- politics and government >> healthcare policy (20000479)
+- health > government health care (20000480)
+- health > health insurance (20000483)
+- health > medical profession (20000485)
+- health >> medical specialization (20000487)
+- health >>> pediatrics (20000490)
+- health >> medical staff (20000492)
+- environment >>> animal disease (20000494)
+- human interest > award and prize (20000498)
+- human interest > record and achievement (20000499)
+- environment >> animal (20000500)
+- human interest > ceremony (20000501)
+- human interest > high society (20000504)
+- human interest > celebrity (20000505)
+- human interest >> royalty (20000506)
+- environment >> flowers and plants (20000507)
+- labor > employment (20000509)
+- labor >> employee (20000512)
+- labor >> employer (20000513)
+- labor >> employment training (20000514)
+- labor >> wages and benefits (20000518)
+- labor > employment legislation (20000521)
+- labor >> workplace health and safety (20000522)
+- labor > labor market (20000523)
+- labor > labor relations (20000524)
+- labor >> collective agreements (20000525)
+- labor >> labor dispute (20000529)
+- labor >>> labor strike (20000530)
+- labor > retirement (20000531)
+- labor >> pension (20000532)
+- labor > unemployment (20000533)
+- labor > unions (20000536)
+- lifestyle+ > leisure (20000538)
+- lifestyle+ >> game (20000540)
+- lifestyle+ >>> board game (20000541)
+- lifestyle+ >>> video game (20000548)
+- lifestyle+ >> gaming and lottery (20000549)
+- lifestyle+ >> hobby (20000550)
+- lifestyle+ >> vacation (20000551)
+- lifestyle+ >>> public holiday (20000552)
+- lifestyle+ >> leisure venue (20000553)
+- lifestyle+ >>> amusement park (20000554)
+- lifestyle+ >>> bar (20000555)
+- lifestyle+ >>> cafe (20000556)
+- lifestyle+ >>> restaurant (20000558)
+- lifestyle+ >> outdoor recreational activities (20000560)
+- lifestyle+ >>> fishing (20000561)
+- lifestyle+ >>> hunting (20000562)
+- lifestyle+ >> travel and tourism (20000563)
+- lifestyle+ > lifestyle (20000565)
+- lifestyle+ >>> automobile enthusiasm (20000566)
+- lifestyle+ >>> food and drink enthusiasm (20000568)
+- lifestyle+ >> house and home (20000570)
+- politics and government > election (20000574)
+- politics and government >> citizens' initiative and recall (20000575)
+- politics and government >> electoral system (20000576)
+- politics and government >> local elections (20000578)
+- politics and government >> national elections (20000579)
+- politics and government >> political candidates (20000582)
+- politics and government >> referendum (20000584)
+- politics and government >> state elections (20000585)
+- politics and government >> voting (20000586)
+- society > fundamental rights (20000587)
+- society >> censorship and freedom of speech (20000588)
+- society >> freedom of the press (20000591)
+- society >> human rights (20000592)
+- politics and government > government (20000593)
+- politics and government >> government employee (20000595)
+- politics and government >> public officials (20000596)
+- politics and government >> constitution (law) (20000597)
+- politics and government >> national security (20000598)
+- politics and government >>> armed forces (20000599)
+- politics and government >>> military weaponry and equipment (20000602)
+- politics and government >>> espionage and intelligence (20000605)
+- politics and government >> executive (government) (20000606)
+- politics and government >> government budget (20000607)
+- politics and government >> head of state (20000610)
+- politics and government >> local government (20000612)
+- politics and government >> minister or secretary (government) (20000613)
+- politics and government >> national government (20000614)
+- politics and government >> legislative body (20000615)
+- politics and government >>> lower house (legislature) (20000616)
+- politics and government >>> upper house (legislature) (20000617)
+- politics and government >> regional government (20000618)
+- politics and government >> taxation policy (20000620)
+- politics and government > government policy (20000621)
+- politics and government >>> privatization (20000624)
+- politics and government >>> state-owned enterprise (20000625)
+- politics and government >> data protection policy (20000627)
+- politics and government >> housing and urban planning policy (20000628)
+- politics and government >> pension and welfare policy (20000630)
+- politics and government >> personal weapon control policy (20000632)
+- politics and government >> immigration policy (20000634)
+- politics and government >> nuclear policy (20000635)
+- politics and government >> regulation of industry (20000636)
+- politics and government >>> food and drink regulations (20000637)
+- politics and government > international relations (20000638)
+- politics and government >> diplomacy (20000639)
+- politics and government >>> summit meeting (20000640)
+- politics and government >>> treaty (20000641)
+- politics and government >> economic sanction (20000642)
+- politics and government >> foreign aid (20000643)
+- politics and government >> international organization (20000644)
+- politics and government >> refugees and internally displaced people (20000645)
+- politics and government > non-governmental organisation (NGO) (20000646)
+- politics and government >> political system (20000653)
+- politics and government >>> democracy (20000654)
+- politics and government >>> dictatorship (20000655)
+- religion > belief systems (20000657)
+- religion >> Christianity (20000659)
+- religion >> cult (20000674)
+- religion >> Hinduism (20000676)
+- religion >> Islam (20000677)
+- religion >> Judaism (20000679)
+- religion >> Unificationism (20000686)
+- religion > religious conflict (20000688)
+- religion > religious festival and holiday (20000690)
+- religion > religious facilities (20000697)
+- religion >> church (20000698)
+- religion > religious leader (20000703)
+- religion >> pope (20000704)
+- sci-tech > biomedical science (20000710)
+- sci-tech > mathematics (20000715)
+- sci-tech > natural science (20000717)
+- sci-tech >> astronomy (20000718)
+- sci-tech >> biology (20000719)
+- sci-tech >>> botany (20000720)
+- sci-tech >>> zoology (20000724)
+- sci-tech >> chemistry (20000725)
+- sci-tech >> cosmology (20000726)
+- sci-tech >> geology (20000727)
+- sci-tech >> marine science (20000729)
+- sci-tech >> physics (20000731)
+- sci-tech >>> nuclear physics (20000733)
+- sci-tech >>>> particle physics (20000734)
+- sci-tech > scientific research (20000735)
+- sci-tech >> scientific innovation (20000736)
+- sci-tech >> medical research (20000737)
+- sci-tech >> scientific exploration (20000738)
+- sci-tech >>> space exploration (20000739)
+- sci-tech >> scientific publication (20000740)
+- sci-tech > social sciences (20000742)
+- sci-tech >> anthropology (20000743)
+- sci-tech >> archeology (20000744)
+- sci-tech >> history (20000747)
+- sci-tech >> psychology (20000753)
+- sci-tech >> sociology (20000754)
+- sci-tech > technology and engineering (20000756)
+- sci-tech >> aerospace engineering (20000757)
+- sci-tech >> agricultural technology (20000759)
+- sci-tech >> identification technology (20000762)
+- sci-tech >> information technology and computer science (20000763)
+- society > communities (20000768)
+- society >> social networking (20000769)
+- society > demographics (20000770)
+- society > immigration (20000771)
+- society > emigration (20000772)
+- society >> illegal immigration (20000773)
+- society > discrimination (20000775)
+- society >> racism (20000777)
+- society >> religious discrimination (20000778)
+- society >> sexism (20000779)
+- society > family (20000780)
+- society >> Dating and Relationships (20000782)
+- society >> divorce (20000783)
+- society >> family planning (20000784)
+- society >>> abortion (20000785)
+- society >> marriage (20000786)
+- society >> parenting (20000787)
+- society > demographic group (20000788)
+- society >> children (20000790)
+- society >> disabilities (20000791)
+- society >> LGBTQ (20000792)
+- society >> gender (20000793)
+- society >> infants (20000794)
+- society >> national or ethnic minority (20000795)
+- society >> senior citizens (20000797)
+- society >> teenagers (20000798)
+- society > social condition (20000799)
+- society >> homelessness (20000800)
+- society >> poverty (20000801)
+- society > social problem (20000802)
+- society >> abusive behavior (20000803)
+- society >> addiction (20000804)
+- society > values (20000808)
+- society >> death and dying (20000810)
+- society >>> suicide (20000813)
+- society >> ethics (20000814)
+- society >> pornography (20000815)
+- society >> sexual behavior (20000816)
+- society > welfare (20000817)
+- society >> charity (20000818)
+- society >> social services (20000820)
+- sport > competition discipline (20000822)
+- sport >> track and field (20000827)
+- sport >>> decathlon (20000829)
+- sport >>> middle distance run (20000838)
+- sport >>> sprint run (20000844)
+- sport >> baseball (20000849)
+- sport >> basketball (20000851)
+- sport >> biathlon (20000852)
+- sport >> bobsleigh (20000854)
+- sport >> boxing (20000856)
+- sport >> curling (20000890)
+- sport >> cycling (20000892)
+- sport >>> mountain biking (20000903)
+- sport >> competitive dancing (20000911)
+- sport >> darts (20000912)
+- sport >> equestrian (20000923)
+- sport >> fencing (20000929)
+- sport >> field hockey (20000933)
+- sport >> fist ball (20000936)
+- sport >> Gaelic football (20000939)
+- sport >> golf (20000940)
+- sport >>> mini golf (20000941)
+- sport >> gymnastics (20000942)
+- sport >> handball (team) (20000958)
+- sport >> horse racing (20000960)
+- sport >> ice hockey (20000965)
+- sport >>> judo (20000969)
+- sport >> luge (20000987)
+- sport >> marathon (20000988)
+- sport >> motor car racing (20000991)
+- sport >> motorcycling (20000998)
+- sport >> pool (20001015)
+- sport >>> rugby league (20001035)
+- sport >> sailing (20001038)
+- sport >> skeleton (20001055)
+- sport >> skiing (20001056)
+- sport >>> alpine skiing (20001057)
+- sport >>> ski jumping (20001061)
+- sport >> snooker (20001063)
+- sport >> snowboarding (20001064)
+- sport >> soccer (20001065)
+- sport >> speed skating (20001067)
+- sport >> swimming (20001071)
+- sport >> table tennis (20001083)
+- sport >> tennis (20001085)
+- sport >> weightlifting and powerlifting (20001093)
+- sport > disciplinary action in sport (20001103)
+- sport > drug use in sport (20001104)
+- sport > sport event (20001108)
+- sport > sport industry (20001124)
+- sport > sport organization (20001125)
+- sport > sport venue (20001126)
+- weather > weather forecast (20001128)
+- weather > weather phenomena (20001129)
+- arts+ >>> musical (20001133)
+- arts+ >> art exhibition (20001135)
+- economy+ >>> trade show or expo (20001136)
+- lifestyle+ >> party (20001143)
+- politics and government >>>> military service (20001145)
+- sport > sports transaction (20001148)
+- sport >>> cross-country skiing (20001149)
+- sport >>> Nordic combined (20001150)
+- sport >> short track speed skating (20001151)
+- sport >> martial arts (20001157)
+- sport >> rugby (20001176)
+- sport >> Olympic Games (20001177)
+- sport >> Paralympic Games (20001178)
+- arts+ >> series (20001179)
+- arts+ >> festival (20001181)
+- arts+ >> social media (20001182)
+- sport >> eSports (20001183)
+- arts+ >>>> hip hop (20001184)
+- arts+ >>> stand-up comedy (20001190)
+- arts+ >>> influencers (20001192)
+- society >> sexual misconduct (20001193)
+- law+ >>> tax evasion (20001195)
+- law+ >> reckless driving (20001196)
+- law+ >> administrative law (20001197)
+- disaster+ >>> wildfire (20001202)
+- economy+ >>>> solar power (20001209)
+- economy+ >>>> hydroelectric power (20001210)
+- economy+ >>>> wind power (20001211)
+- health >> surgery (20001228)
+- health >> healthcare clinic (20001229)
+- sport >>> mixed martial arts (20001231)
+- society >> elderly care (20001232)
+- human interest >> funeral and memorial service (20001235)
+- human interest >> wedding (20001236)
+- human interest > anniversary (20001237)
+- human interest > birthday (20001238)
+- economy+ >>> oil and gas (20001243)
+- economy+ >> utilities (20001244)
+- economy+ >>> infrastructure projects (20001245)
+- arts+ >>> hairstyles (20001249)
+- lifestyle+ >>>> cooking and baking (20001253)
+- lifestyle+ >>>> beer, wine and spirits (20001254)
+- politics and government >> political party convention (20001259)
+- politics and government >> political committee (20001260)
+- politics and government >> head of government (20001261)
+- politics and government >> public inquiry (20001262)
+- politics and government >> infrastructure policy (20001264)
+- politics and government >> local government policy (20001265)
+- politics and government >> political debates (20001266)
+- society >>> contraception (20001274)
+- labor >> volunteering (20001277)
+- economy+ >>> cryptocurrency (20001279)
+- disaster+ >>>> hurricane (20001280)
+- law+ >> human smuggling and trafficking (20001283)
+- society >> bullying (20001284)
+- law+ >>> supreme and high court (20001287)
+- society >> indigenous people (20001288)
+- economy+ >> sales channel (20001289)
+- economy+ >>> streaming service (20001293)
+- sci-tech >>> artificial intelligence (20001298)
+- law+ >> surveillance (20001299)
+- society >> privacy (20001300)
+- sport > sport achievement (20001301)
+- sport >> sports record (20001302)
+- sport >> sports medal and trophy (20001303)
+- politics and government >> political leadership (20001312)
+- law+ >> shootings (20001313)
+- politics and government >> border dispute (20001316)
+- society >> child care (20001317)
+- arts+ >> disinformation and misinformation (20001319)
+- law+ >> torture (20001320)
+- disaster+ >> drowning (20001321)
+- sport > sports coaching (20001323)
+- sport > sports management and ownership (20001324)
+- society >> women's rights (20001326)
+- society >> women (20001327)
+- society >> men (20001328)
+- sport >> road cycling (20001333)
+- sport >> track cycling (20001334)
+- politics and government >> education policy (20001338)
+- sport >> regular competition (20001341)
+- sport >> playoff championship (20001342)
+- sport >> final game (20001343)
+- religion >>> Catholicism (20001344)
+- economy+ >> healthcare industry (20001354)
+- health >>> depression (20001356)
+- health >>> anxiety and stress (20001357)
+- health > public health (20001358)
+- society >> pregnancy and childbirth (20001359)
+- conflict+ > cyber warfare (20001361)
+- economy+ >> business reporting and performance (20001365)
+- economy+ >> business restructuring (20001366)
+- 'economy+ >>> commercial real estate: (20001367)'
+- economy+ >>> residential real estate (20001368)
+- economy+ >> financial service (20001370)
+- economy+ >> business service (20001371)
+- economy+ >>> news industry (20001372)
+- environment > sustainability (20001374)
+- economy+ >>> corporate bond (20001376)
+- conflict+ > war victims (20001377)
+- sport >>> breaking (breakdance) (20001379)
+- politics and government >> special election (20001380)
+- politics and government >> coalition building (20001382)
+- politics and government >> zoning policy (20001383)
+- politics and government >> political party (20001384)
+- politics and government >> political movement and association (20001385)
+- politics and government >>> communism (20001386)
+- politics and government >>> theocracy (20001388)
+- politics and government >>> absolute monarchy (20001389)
+- sport >>> ski mountaineering (20001390)
+- lifestyle+ >> vegetarianism and veganism (20001391)
+- lifestyle+ >>> park and playground (20001392)
+- sport >>> futsal (20001393)
+- economy+ >>> pesticide and herbicide (20001395)
