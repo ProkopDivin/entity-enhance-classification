@@ -52,7 +52,7 @@ class DebugCnf(BaseCnf):
 @dataclass(frozen=True)
 class DebugEvalCnf(DebugCnf):
     """Debug configuration that loads a pre-trained model and skips CV/training."""
-    model_path: str | None = 'results/saved_models/debug_20260716_123908'
+    model_path: str | None = 'models/debug_20260706_215424'
 
 
 @dataclass(frozen=True)

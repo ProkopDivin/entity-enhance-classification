@@ -62,6 +62,61 @@ python3 -m iptc_entity_pipeline.run_pipeline --config debug
 
 
 
+## Evaluate a saved model (skip training)
+
+Use the `debug_eval` like config to run **only the evaluation stage** on a previously
+trained model. This skips cross-validation and training entirely.
+
+### How it works
+
+`DebugEvalCnf` inherits from `DebugCnf` and sets `model_path` to point at an
+existing saved-model directory. When `model_path` is set the pipeline loads the
+model weights and thresholds from that directory and jumps straight to test-set
+evaluation.
+
+### Run
+
+
+```bash
+python3 -m iptc_entity_pipeline.run_pipeline --local --config debug_eval
+```
+
+### Pointing at your own saved model
+
+The default `model_path` in `DebugEvalCnf` is
+`models/debug_20260706_215424`. To evaluate a different checkpoint,
+either:
+
+1. **Edit the config** in `src/iptc_entity_pipeline/config/debug.py` and change
+   the `model_path` value, or
+2. **Create a new eval config** that overrides `model_path`:
+
+```python
+@dataclass(frozen=True)
+class MyEvalCnf(DebugCnf):
+    model_path: str | None = 'models/<your_run_folder>'
+```
+
+### What path changes when inputs change
+
+When you change **any input path** in the config (corpus CSVs, entity embeddings
+dir, article embeddings dir, etc.) and run the full pipeline, the output
+saved-model directory name changes because it is derived from the config name
+and a timestamp:
+
+```
+results/saved_models/<config_name>_<YYYYMMDD_HHMMSS>/
+```
+
+So after running with different inputs you will get a new folder, and the
+`model_path` in your eval config must be updated to match. The input paths
+themselves (train CSV, test CSV, embeddings dirs) are baked into the config and
+do **not** automatically update when `model_path` points to a different run --
+make sure the eval config uses the **same input paths** as the training run that
+produced the saved model.
+
+
+
 ## Installation
 
 ```bash
