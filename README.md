@@ -36,12 +36,13 @@ From the repository root:
 ```bash
 cd entity-enhance-classification/
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate 
 pip install --upgrade pip
 pip install --find-links=wheels -e .
 
 python3 -m iptc_entity_pipeline.run_pipeline --local --config debug
 ```
+- for Windows: `.\.venv\Scripts\activate`
 
 `--local` runs even when `clearml` is not installed.
 Non-local mode still requires ClearML:
