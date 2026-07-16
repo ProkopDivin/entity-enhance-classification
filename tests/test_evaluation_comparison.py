@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import iptc_entity_pipeline.evaluation.comparison as ec
+import iptc_entity_pipeline.evaluation.significance as sig
 from iptc_entity_pipeline.evaluation.comparison import (
     average_precision,
     benjamini_hochberg,
@@ -141,7 +142,7 @@ def test_mcnemar_p_value_uses_exact_test_below_25(monkeypatch: pytest.MonkeyPatc
         captured['correction'] = correction
         return _FakeResult()
 
-    monkeypatch.setattr(ec, 'mcnemar', fake_mcnemar)
+    monkeypatch.setattr(sig, 'mcnemar', fake_mcnemar)
 
     result = mcnemar_p_value(n10=15, n01=5)
 
@@ -162,7 +163,7 @@ def test_mcnemar_p_value_uses_asymptotic_test_at_25_boundary(monkeypatch: pytest
         captured['exact'] = exact
         return _FakeResult()
 
-    monkeypatch.setattr(ec, 'mcnemar', fake_mcnemar)
+    monkeypatch.setattr(sig, 'mcnemar', fake_mcnemar)
 
     result = mcnemar_p_value(n10=20, n01=5)
 
@@ -172,7 +173,7 @@ def test_mcnemar_p_value_uses_asymptotic_test_at_25_boundary(monkeypatch: pytest
 
 def test_mcnemar_p_value_symmetric_in_n10_n01(monkeypatch: pytest.MonkeyPatch) -> None:
     """Swapping ``n10`` and ``n01`` must give the same p-value (McNemar is two-sided)."""
-    monkeypatch.setattr(ec, 'mcnemar', lambda table, *, exact, correction: type(
+    monkeypatch.setattr(sig, 'mcnemar', lambda table, *, exact, correction: type(
         '_R', (), {'pvalue': float(table[0][1] + table[1][0])},
     )())
 

@@ -7,10 +7,11 @@ import pandas as pd
 import pytest
 
 import iptc_entity_pipeline.evaluation.comparison as ec
+import iptc_entity_pipeline.evaluation.run_loading as rl
 
 
 def test_build_article_records_parses_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ec, 'norm_cat_ids', lambda *, cat_ids: ['01000000'])
+    monkeypatch.setattr(rl, 'norm_cat_ids', lambda *, cat_ids: ['01000000'])
 
     eval_corpus = [
         SimpleNamespace(
@@ -56,7 +57,7 @@ def test_build_article_records_parses_entities(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_build_article_records_handles_missing_entities(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ec, 'norm_cat_ids', lambda *, cat_ids: [])
+    monkeypatch.setattr(rl, 'norm_cat_ids', lambda *, cat_ids: [])
 
     eval_corpus = [SimpleNamespace(id='doc-2', cats=[], metadata={'corpusName': 'cs_test'})]
     pred_scores = [[('02000000', 0.4)]]
@@ -73,7 +74,7 @@ def test_build_article_records_handles_missing_entities(monkeypatch: pytest.Monk
 def test_build_article_records_extracts_fields_from_linked_entity_raw_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ec, 'norm_cat_ids', lambda *, cat_ids: [])
+    monkeypatch.setattr(rl, 'norm_cat_ids', lambda *, cat_ids: [])
 
     linked_entity = SimpleNamespace(
         gkb_id='gkb:2',
